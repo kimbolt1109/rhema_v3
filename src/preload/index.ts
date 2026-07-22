@@ -35,6 +35,7 @@ import type { IpcRendererEvent } from 'electron'
 
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
+import type { GoLiveState } from '@shared/golive'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
@@ -177,6 +178,38 @@ const api: VergerApi = {
       ipcRenderer.invoke(IpcChannel.youtubeCreateBroadcast, options),
     onStatus: (callback: (status: YouTubeStatus) => void): Unsubscribe =>
       subscribe<YouTubeStatus>(IpcEvent.youtubeStatus, callback)
+  },
+
+  /**
+   * GO LIVE / END orchestration (BLUEPRINT.md §5, Part B).
+   *
+   * Four methods, and the important thing about them is what the renderer *cannot* express:
+   *
+   *  - **`start()` takes no argument.** There is no options object, so there is no
+   *    `{ record: false }` to pass. Standing Rule 3 — whenever streaming starts, OBS local
+   *    recording starts too, because the internet wobbles and a service is un-repeatable —
+   *    is enforced here by the absence of a parameter, not by a default value some future
+   *    caller could override. Widening this signature would mean editing `@shared/ipc` first.
+   *  - **There is no `stopRecording`, no `stopStream`, no per-step verb.** The renderer can ask
+   *    to go live and ask to end, and that is the whole surface. It cannot half-tear-down a
+   *    service, and it cannot react to a failed step by stopping the parts that are working.
+   *
+   * `start()` and `end()` resolve with a `GoLiveState`, not with a boolean, and `onState`
+   * pushes the same whole snapshot on every change — including per-step progress while the
+   * sequence runs and the `partial` phase (OBS streaming and recording, YouTube not
+   * transitioned) that is the most likely real failure. A control window that reloads
+   * mid-service recovers with one `getState()`, exactly as the overlay and camera panels do.
+   *
+   * Nothing here rejects. A go-live that fails resolves with `Err(...)` *and* leaves OBS
+   * streaming and recording — the app must never wedge the broadcast as a reaction to its own
+   * error, so there is no path from a failed promise here to a stopped output.
+   */
+  goLive: {
+    getState: (): Promise<Result<GoLiveState>> => ipcRenderer.invoke(IpcChannel.goLiveGetState),
+    start: (): Promise<Result<GoLiveState>> => ipcRenderer.invoke(IpcChannel.goLiveStart),
+    end: (): Promise<Result<GoLiveState>> => ipcRenderer.invoke(IpcChannel.goLiveEnd),
+    onState: (callback: (state: GoLiveState) => void): Unsubscribe =>
+      subscribe<GoLiveState>(IpcEvent.goLiveState, callback)
   },
 
   config: {

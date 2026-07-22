@@ -20,6 +20,7 @@ import type { LogRecord } from './log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
 import type { CameraConfig, CameraSlot, CameraState } from './camera'
 import type { OverlayCommand, OverlayState } from './overlay'
+import type { GoLiveState } from './golive'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
 
@@ -67,6 +68,9 @@ export const IpcChannel = {
   youtubeSignOut: 'verger:youtube:sign-out',
   youtubeSetTemplate: 'verger:youtube:set-template',
   youtubeCreateBroadcast: 'verger:youtube:create-broadcast',
+  goLiveGetState: 'verger:golive:get-state',
+  goLiveStart: 'verger:golive:start',
+  goLiveEnd: 'verger:golive:end',
 } as const
 
 /** Union of every request channel string. */
@@ -85,6 +89,7 @@ export const IpcEvent = {
   overlayServerInfo: 'verger:overlay:server-info',
   cameraState: 'verger:camera:state',
   youtubeStatus: 'verger:youtube:status',
+  goLiveState: 'verger:golive:state',
 } as const
 
 /** Union of every event channel string. */
@@ -131,6 +136,9 @@ export interface IpcRequest {
   [IpcChannel.youtubeSignOut]: void
   [IpcChannel.youtubeSetTemplate]: BroadcastTemplate
   [IpcChannel.youtubeCreateBroadcast]: { scheduledStartTime?: string }
+  [IpcChannel.goLiveGetState]: void
+  [IpcChannel.goLiveStart]: void
+  [IpcChannel.goLiveEnd]: void
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -155,6 +163,9 @@ export interface IpcResponse {
   [IpcChannel.youtubeSignOut]: Result<YouTubeStatus>
   [IpcChannel.youtubeSetTemplate]: Result<YouTubeStatus>
   [IpcChannel.youtubeCreateBroadcast]: Result<Broadcast>
+  [IpcChannel.goLiveGetState]: Result<GoLiveState>
+  [IpcChannel.goLiveStart]: Result<GoLiveState>
+  [IpcChannel.goLiveEnd]: Result<GoLiveState>
 }
 
 /** The payload pushed on each event channel. */
@@ -166,6 +177,7 @@ export interface IpcEventPayload {
   [IpcEvent.overlayServerInfo]: OverlayServerInfo
   [IpcEvent.cameraState]: CameraState
   [IpcEvent.youtubeStatus]: YouTubeStatus
+  [IpcEvent.goLiveState]: GoLiveState
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -221,6 +233,14 @@ export interface VergerApi {
     /** Creates the weekly broadcast and binds the persistent stream. */
     createBroadcast(options: { scheduledStartTime?: string }): Promise<Result<Broadcast>>
     onStatus(callback: (status: YouTubeStatus) => void): Unsubscribe
+  }
+  readonly goLive: {
+    getState(): Promise<Result<GoLiveState>>
+    /** Runs the full GO LIVE sequence. Recording always starts with the stream. */
+    start(): Promise<Result<GoLiveState>>
+    /** Ends the broadcast, stops the stream and stops the recording. */
+    end(): Promise<Result<GoLiveState>>
+    onState(callback: (state: GoLiveState) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

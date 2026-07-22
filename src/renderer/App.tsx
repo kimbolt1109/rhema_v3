@@ -28,11 +28,12 @@
  * tree still produces a readable screen rather than a black window.
  */
 
-import { Cast, Disc, Layers, Mic, Radio } from 'lucide-react'
+import { Cast, Disc, Layers, Mic, Radio, RadioTower } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import type { GoLivePhase } from '@shared/golive'
 import type { AppVersions } from '@shared/ipc'
 import type { ObsConnectionState } from '@shared/obs'
 import type { YouTubeAuthState } from '@shared/youtube'
@@ -41,8 +42,10 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { CameraPanel } from './screens/CameraPanel'
 import { CameraSettings } from './screens/CameraSettings'
 import { ConnectionScreen } from './screens/ConnectionScreen'
+import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
+import { isRecordingMissing, useGoLiveStore } from './store/goLiveStore'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
 import { useYouTubeStore } from './store/youtubeStore'
@@ -54,16 +57,19 @@ const SECTIONS = [
   // last because it is a soundcheck task, not a service one.
   { id: 'camera', labelKey: 'app.section.camera' },
   { id: 'overlay', labelKey: 'app.section.overlay' },
-  // Go Live is a *setup* surface in Phase 4 — the GO LIVE button itself arrives in Phase 5 — so it
-  // sits after the two live surfaces and before the soundcheck one.
+  // Phase 5 splits what Phase 4 called "Go Live" in two: the GO LIVE / END *controls* sit here,
+  // with the two other live surfaces, and the weekly template and OAuth *settings* move one tab
+  // to the right. A screen that both configures a broadcast and starts one invites the operator to
+  // press the big button while they are still editing a title.
   { id: 'goLive', labelKey: 'app.section.goLive' },
+  { id: 'goLiveSettings', labelKey: 'app.section.goLiveSettings' },
   { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
 
 /** Where a subsystem light gets its state from. */
-type SubsystemSource = 'obs' | 'overlay' | 'youtube' | 'pending'
+type SubsystemSource = 'obs' | 'overlay' | 'youtube' | 'goLive' | 'recording' | 'pending'
 
 /** One light in the subsystem strip. */
 interface SubsystemDescriptor {
@@ -78,7 +84,11 @@ const SUBSYSTEMS: readonly SubsystemDescriptor[] = [
   { id: 'overlay', labelKey: 'app.subsystem.overlay', icon: Layers, source: 'overlay' },
   { id: 'asr', labelKey: 'app.subsystem.asr', icon: Mic, source: 'pending' },
   { id: 'youtube', labelKey: 'app.subsystem.youtube', icon: Cast, source: 'youtube' },
-  { id: 'recording', labelKey: 'app.subsystem.recording', icon: Disc, source: 'pending' },
+  // Live and Recording are two lights, not one. Standing Rule 3 makes them start together, which
+  // is exactly why the strip must be able to show them disagreeing: "streaming, not recording" is
+  // the failure the operator most needs to notice, and it is invisible in a combined light.
+  { id: 'live', labelKey: 'app.subsystem.live', icon: RadioTower, source: 'goLive' },
+  { id: 'recording', labelKey: 'app.subsystem.recording', icon: Disc, source: 'recording' },
 ]
 
 /** Same three-channel rule as the big light: colour is never the only signal. */
@@ -162,6 +172,23 @@ const YOUTUBE_TONES: Record<YouTubeAuthState, string> = {
   'auth-error': 'text-panic',
 }
 
+/**
+ * Tints for the LIVE light.
+ *
+ * `partial` is panic-coloured and *not* folded in with `live`: OBS is pushing but the broadcast is
+ * not public, and a green light over that state would be the single most expensive lie the strip
+ * could tell. `failed` is panic for the obvious reason; `idle` is muted, because not being live is
+ * a resting state, not a fault.
+ */
+const GO_LIVE_TONES: Record<GoLivePhase, string> = {
+  idle: 'text-text-muted',
+  starting: 'text-accent-2',
+  live: 'text-live',
+  partial: 'text-panic',
+  ending: 'text-accent-2',
+  failed: 'text-panic',
+}
+
 function SubsystemStrip(): React.JSX.Element {
   const { t } = useTranslation()
   const obsState = useObsStore((state) => state.status.state)
@@ -169,6 +196,9 @@ function SubsystemStrip(): React.JSX.Element {
   const overlayHydrated = useOverlayStore((state) => state.hydrated)
   const youtubeState = useYouTubeStore((state) => state.status.auth.state)
   const youtubeHydrated = useYouTubeStore((state) => state.hydrated)
+  const goLivePhase = useGoLiveStore((state) => state.state.phase)
+  const goLiveObs = useGoLiveStore((state) => state.state.obs)
+  const goLiveHydrated = useGoLiveStore((state) => state.hydrated)
 
   const overlayLight = ((): LightState => {
     if (!overlayHydrated) {
@@ -196,6 +226,47 @@ function SubsystemStrip(): React.JSX.Element {
     }
   })()
 
+  const goLiveLight = ((): LightState => {
+    if (!goLiveHydrated) {
+      return { key: 'unknown', text: t('goLive.subsystem.unknown'), tone: 'text-text-muted' }
+    }
+    return {
+      key: goLivePhase,
+      text: t(`goLive.subsystem.${goLivePhase}`),
+      tone: GO_LIVE_TONES[goLivePhase],
+    }
+  })()
+
+  const recordingLight = ((): LightState => {
+    if (!goLiveHydrated) {
+      return { key: 'unknown', text: t('goLive.subsystem.unknown'), tone: 'text-text-muted' }
+    }
+    // Streaming with no recording is the Standing Rule 3 failure. It gets its own words and the
+    // panic colour, rather than reading as an unremarkable "not recording".
+    if (isRecordingMissing(goLiveObs)) {
+      return {
+        key: 'missing',
+        text: t('goLive.subsystem.recordingMissing'),
+        tone: 'text-panic',
+      }
+    }
+    if (goLiveObs.recording && goLiveObs.recordingPaused) {
+      return {
+        key: 'paused',
+        text: t('goLive.subsystem.recordingPaused'),
+        tone: 'text-accent-2',
+      }
+    }
+    if (goLiveObs.recording) {
+      return { key: 'recording', text: t('goLive.subsystem.recording'), tone: 'text-live' }
+    }
+    return {
+      key: 'not-recording',
+      text: t('goLive.subsystem.notRecording'),
+      tone: 'text-text-muted',
+    }
+  })()
+
   const lightFor = (source: SubsystemSource): LightState => {
     switch (source) {
       case 'obs':
@@ -204,6 +275,10 @@ function SubsystemStrip(): React.JSX.Element {
         return overlayLight
       case 'youtube':
         return youtubeLight
+      case 'goLive':
+        return goLiveLight
+      case 'recording':
+        return recordingLight
       case 'pending':
         return { key: 'pending', text: t('app.phasePending'), tone: 'text-text-muted' }
     }
@@ -342,6 +417,25 @@ function useYouTubeSubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/**
+ * Keep the GO LIVE store live for the whole session.
+ *
+ * This one matters more than the other two: the LIVE and RECORDING lights have to keep reporting
+ * while the operator is on the Cameras tab, which is where they will spend the service. It also
+ * means the crash re-attach is detected at launch rather than the first time somebody happens to
+ * open the Go Live tab.
+ */
+function useGoLiveSubsystem(): void {
+  const hydrate = useGoLiveStore((state) => state.hydrate)
+  const subscribe = useGoLiveStore((state) => state.subscribe)
+
+  useEffect(() => {
+    const unsubscribe = subscribe()
+    void hydrate()
+    return unsubscribe
+  }, [hydrate, subscribe])
+}
+
 /** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
 function SectionView({ section }: { section: SectionId }): React.JSX.Element {
   switch (section) {
@@ -352,6 +446,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
     case 'overlay':
       return <OverlayPanel />
     case 'goLive':
+      return <GoLivePanel />
+    case 'goLiveSettings':
       return <GoLiveSettings />
     case 'cameraSetup':
       return <CameraSettings />
@@ -386,6 +482,7 @@ export function App(): React.JSX.Element {
   useDocumentLanguage()
   useOverlaySubsystem()
   useYouTubeSubsystem()
+  useGoLiveSubsystem()
 
   const [section, setSection] = useState<SectionId>('connection')
 

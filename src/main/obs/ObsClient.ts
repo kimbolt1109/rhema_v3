@@ -7,11 +7,13 @@
  *  - **The client reads freely and writes only from an allowlist.** Every `Get*` request is
  *    permitted; every other request is refused by a hard structural guard
  *    ({@link isAllowedRequest}) unless it appears, by name, in {@link ALLOWED_WRITE_REQUESTS} —
- *    currently the three requests a camera button needs and nothing else. So a future edit
- *    cannot quietly turn this into something that imposes state on OBS: it would have to add a
- *    line to that list and justify it. `StartStream`, `StopRecord`, `SetSceneItemEnabled` and
+ *    currently the three requests a camera button needs (Phase 3) and the four output requests
+ *    GO LIVE / END need (Phase 5), and nothing else. So a future edit cannot quietly turn this
+ *    into something that imposes state on OBS: it would have to add a line to that list and
+ *    justify it. `SetSceneItemEnabled`, `RemoveScene`, `SetProfileParameter`, `CreateInput` and
  *    every other mutating request stay refused. On connect the client still asks OBS only what
- *    version it is and what scenes it has — the connect routine writes nothing at all.
+ *    version it is and what scenes it has — the connect routine writes nothing at all: no
+ *    `Set*`, no `Start*`, no `Stop*`.
  *  - **Nothing throws.** Every public method returns a {@link Result}; every callback and every
  *    socket interaction is wrapped. A crash in here must never take the booth UI down, and an
  *    exception can never cross the IPC boundary (see `src/shared/result.ts`).
@@ -146,6 +148,9 @@ export class ObsClient {
 
   private socket: OBSWebSocketLike | null = null
   private detach: (() => void) | null = null
+
+  /** The socket currently bound, so a late `onObsEvent` can attach to it immediately. */
+  private attachedSocket: OBSWebSocketLike | null = null
   private retryHandle: ObsTimerHandle | null = null
 
   /**
@@ -160,6 +165,16 @@ export class ObsClient {
 
   private readonly statusSubscribers = new Set<(status: ObsStatus) => void>()
   private readonly sceneListSubscribers = new Set<(sceneList: ObsSceneList) => void>()
+
+  /**
+   * Raw obs-websocket event subscriptions, keyed by event name.
+   *
+   * Kept on the CLIENT rather than on the socket because the socket is replaced on every
+   * reconnect. A subscriber registered once must keep working across a disconnect — otherwise
+   * `StreamStateChanged` would go quiet exactly when OBS drops and comes back, which is the one
+   * moment the operator most needs to be told.
+   */
+  private readonly eventSubscribers = new Map<string, Set<(payload?: unknown) => void>>()
 
   constructor(options: ObsClientOptions) {
     this.createSocket = options.createSocket
@@ -200,6 +215,53 @@ export class ObsClient {
     this.sceneListSubscribers.add(callback)
     return () => {
       this.sceneListSubscribers.delete(callback)
+    }
+  }
+
+  /**
+   * Subscribe to a raw obs-websocket event by name.
+   *
+   * READ-ONLY: this observes what OBS announces and grants no ability to command it. The write
+   * guard ({@link isAllowedRequest}) is untouched and still gates every outgoing request.
+   *
+   * Used by `src/main/obs/outputs.ts` for `StreamStateChanged` / `RecordStateChanged` /
+   * `RecordFileChanged`, so the GO LIVE panel reflects a stream started, stopped or dropped
+   * **inside OBS** rather than only what Verger itself did — Standing Rule 2 again.
+   *
+   * The subscription lives on the client, so it survives reconnects: register once and keep
+   * receiving events across as many dropped sockets as the service throws at you.
+   */
+  onObsEvent(event: string, listener: (payload?: unknown) => void): Unsubscribe {
+    let listeners = this.eventSubscribers.get(event)
+    if (listeners === undefined) {
+      listeners = new Set()
+      this.eventSubscribers.set(event, listeners)
+      // A socket may already be attached; bind this newly-interesting event to it now.
+      this.bindExtraEvent(event)
+    }
+    listeners.add(listener)
+
+    return () => {
+      const current = this.eventSubscribers.get(event)
+      current?.delete(listener)
+    }
+  }
+
+  /**
+   * Deliver a raw OBS event to its subscribers.
+   *
+   * A throwing subscriber is caught and logged: one bad listener must not stop the others, and
+   * must never surface as an unhandled rejection in the main process mid-service.
+   */
+  private fanoutObsEvent(event: string, payload?: unknown): void {
+    const listeners = this.eventSubscribers.get(event)
+    if (listeners === undefined) return
+    for (const listener of [...listeners]) {
+      try {
+        listener(payload)
+      } catch (cause) {
+        this.log.warn('an OBS event subscriber threw', { event, cause })
+      }
     }
   }
 
@@ -505,7 +567,16 @@ export class ObsClient {
       ['SceneListChanged', onSceneListChanged]
     ]
 
-    for (const [event, listener] of bindings) {
+    // Every event any caller has subscribed to via `onObsEvent`, bound onto THIS socket. The
+    // set is rebuilt on each attach, which is what makes those subscriptions survive reconnects.
+    const extra: (readonly [string, ObsEventListener])[] = []
+    for (const event of this.eventSubscribers.keys()) {
+      extra.push([event, (payload?: unknown) => this.fanoutObsEvent(event, payload)])
+    }
+
+    const allBindings = [...bindings, ...extra]
+
+    for (const [event, listener] of allBindings) {
       try {
         socket.on(event, listener)
       } catch (cause) {
@@ -513,14 +584,33 @@ export class ObsClient {
       }
     }
 
+    this.attachedSocket = socket
+
     this.detach = () => {
-      for (const [event, listener] of bindings) {
+      this.attachedSocket = null
+      for (const [event, listener] of allBindings) {
         try {
           socket.off(event, listener)
         } catch {
           /* the socket is already gone — nothing to unbind */
         }
       }
+    }
+  }
+
+  /**
+   * Bind a newly-subscribed event onto the socket that is already attached, if any.
+   *
+   * Without this, calling `onObsEvent` after the client connected would receive nothing until
+   * the next reconnect — a silent, confusing gap.
+   */
+  private bindExtraEvent(event: string): void {
+    const socket = this.attachedSocket
+    if (socket === null) return
+    try {
+      socket.on(event, (payload?: unknown) => this.fanoutObsEvent(event, payload))
+    } catch (cause) {
+      this.log.warn('failed to subscribe to an OBS event', { event, cause })
     }
   }
 
@@ -777,16 +867,17 @@ export function isReadOnlyRequest(requestType: string): boolean {
 /**
  * The write side of the guard: the ONLY non-`Get*` requests Verger may ever send OBS.
  *
- * Standing Rule 2 still holds — Verger reads OBS's state and does not impose it. These three are
+ * Standing Rule 2 still holds — Verger reads OBS's state and does not impose it. These seven are
  * the narrow, enumerated exception, and every one of them fires only because the operator
- * physically pressed a camera button; nothing in Verger sends them on its own initiative.
+ * physically pressed a button (a camera, or GO LIVE / END); nothing in Verger sends them on its
+ * own initiative, and in particular no failure path anywhere in the app sends a `Stop*`.
  *
  * Adding an entry here is a deliberate act, reviewed on its own merits, and every entry names
- * the phase that needs it. What is NOT here is the point of the list: `StartStream`,
- * `StopStream`, `StartRecord`, `StopRecord`, `SetSceneItemEnabled`, `CreateInput`,
- * `SetVideoSettings` and the rest of the obs-websocket surface stay refused, so Verger can never
- * take the broadcast down or rearrange the operator's OBS — which is exactly the guarantee that
- * makes it safe to leave OBS running when this app crashes.
+ * the phase that needs it. What is NOT here is the point of the list: `SetSceneItemEnabled`,
+ * `RemoveScene`, `CreateInput`, `SetProfileParameter`, `SetVideoSettings`,
+ * `TriggerHotkeyByName` and the rest of the obs-websocket surface stay refused, so Verger can
+ * never rearrange the operator's OBS — which is exactly the guarantee that makes it safe to leave
+ * OBS running when this app crashes.
  */
 export const ALLOWED_WRITE_REQUESTS: readonly string[] = [
   // Phase 3 — camera switching. The CAM 1 / CAM 2 / WIDE / PULPIT buttons are this request.
@@ -795,7 +886,21 @@ export const ALLOWED_WRITE_REQUESTS: readonly string[] = [
   // OBS by NAME; Verger never defines or edits a transition.
   'SetCurrentSceneTransition',
   // Phase 3 — per-button transitions. The duration, in milliseconds, of the above.
-  'SetCurrentSceneTransitionDuration'
+  'SetCurrentSceneTransitionDuration',
+  // Phase 5 — GO LIVE. Pushes RTMP to YouTube's ingest. The one request that puts the service on
+  // air, sent only when the operator presses GO LIVE.
+  'StartStream',
+  // Phase 5 — END. Sent ONLY from the operator's held END confirmation; never as Verger's
+  // reaction to one of its own errors, which is what keeps a bug in this app from taking a live
+  // service off air.
+  'StopStream',
+  // Phase 5 — GO LIVE, Standing Rule 3. The always-on local recording is the backup for when the
+  // internet wobbles mid-service, and a service is un-repeatable. It starts with the stream,
+  // every time, and there is no setting that disables it.
+  'StartRecord',
+  // Phase 5 — END. Same operator-only rule as `StopStream`: the backup file is closed when the
+  // operator ends the service, and at no other moment.
+  'StopRecord'
 ]
 
 /**

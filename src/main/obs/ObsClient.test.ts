@@ -286,20 +286,24 @@ describe('ObsClient — connecting', () => {
     expect(harness.client.getCachedSceneList()).toEqual(published[0])
   })
 
-  it('issues NO Set* requests on connect — it reads OBS state, it never imposes it', async () => {
+  it('issues NO Set*/Start*/Stop* requests on connect — it reads OBS state, it never imposes it', async () => {
     const harness = createHarness()
 
     await harness.client.connect(CONFIG)
     const socket = harness.sockets[0]
     expect(socket).toBeDefined()
 
-    // Standing Rule 2, asserted on the wire.
+    // Standing Rule 2, asserted on the wire. Phase 5 widened the write allowlist with the four
+    // output requests, so connecting must be re-proven never to touch them: launching Verger
+    // while a service is running may not start a stream, start a recording, or stop either.
     expect(socket?.requests).toEqual(['GetVersion', 'GetSceneList'])
     expect(socket?.requests.filter((name) => name.startsWith('Set'))).toEqual([])
+    expect(socket?.requests.filter((name) => name.startsWith('Start'))).toEqual([])
+    expect(socket?.requests.filter((name) => name.startsWith('Stop'))).toEqual([])
     expect(socket?.requests.every((name) => name.startsWith('Get'))).toBe(true)
   })
 
-  it('still issues no Set* requests while observing scene changes', async () => {
+  it('still issues no Set*/Start*/Stop* requests while observing scene changes', async () => {
     const harness = createHarness()
     await harness.client.connect(CONFIG)
     const socket = harness.sockets[0]
@@ -309,6 +313,20 @@ describe('ObsClient — connecting', () => {
     await harness.client.getVersion()
 
     expect(socket?.requests.filter((name) => !name.startsWith('Get'))).toEqual([])
+  })
+
+  it('issues no output requests when a reconnect re-establishes the socket', async () => {
+    const harness = createHarness()
+    await harness.client.connect(CONFIG)
+
+    // OBS goes away mid-service and comes back. Standing Rule 2: the app RE-ATTACHES to whatever
+    // OBS is doing; it must not push a second stream or start a second recording on reconnect.
+    harness.sockets[0]?.emit('ConnectionClosed', new MockObsWebSocketError(1006, 'gone'))
+    await advance(DEFAULT_RECONNECT_POLICY.baseDelayMs * 4)
+
+    for (const socket of harness.sockets) {
+      expect(socket.requests.every((name) => name.startsWith('Get'))).toBe(true)
+    }
   })
 
   it('passes the password through, and omits it entirely when authentication is disabled', async () => {
@@ -789,24 +807,98 @@ describe('ObsClient — OBS events', () => {
   })
 })
 
+describe('ObsClient — raw OBS event subscriptions', () => {
+  it('delivers a subscribed OBS event to the subscriber', async () => {
+    const harness = createHarness()
+    await harness.client.connect(CONFIG)
+
+    const seen: unknown[] = []
+    harness.client.onObsEvent('StreamStateChanged', (payload) => {
+      seen.push(payload)
+    })
+
+    harness.sockets[0]?.emit('StreamStateChanged', { outputActive: true })
+
+    expect(seen).toEqual([{ outputActive: true }])
+  })
+
+  it('binds an event subscribed AFTER the connection is already up', async () => {
+    const harness = createHarness()
+    await harness.client.connect(CONFIG)
+
+    // Subscribing late must not wait for the next reconnect to start working.
+    const seen: unknown[] = []
+    harness.client.onObsEvent('RecordFileChanged', (payload) => {
+      seen.push(payload)
+    })
+
+    harness.sockets[0]?.emit('RecordFileChanged', { newOutputPath: 'C:/services/backup.mkv' })
+
+    expect(seen).toEqual([{ newOutputPath: 'C:/services/backup.mkv' }])
+  })
+
+  it('unsubscribing stops delivery, and one throwing subscriber does not starve the others', async () => {
+    const harness = createHarness()
+    await harness.client.connect(CONFIG)
+
+    const good: unknown[] = []
+    harness.client.onObsEvent('StreamStateChanged', () => {
+      throw new Error('a subscriber blew up mid-service')
+    })
+    const unsubscribe = harness.client.onObsEvent('StreamStateChanged', (payload) => {
+      good.push(payload)
+    })
+
+    harness.sockets[0]?.emit('StreamStateChanged', { outputActive: true })
+    expect(good).toHaveLength(1)
+
+    unsubscribe()
+    harness.sockets[0]?.emit('StreamStateChanged', { outputActive: false })
+    expect(good).toHaveLength(1)
+  })
+
+  it('subscribing to raw events grants no ability to WRITE to OBS', async () => {
+    // onObsEvent is observation only. The write guard is what gates commands, and it must be
+    // completely unaffected by having subscribed to something.
+    const harness = createHarness()
+    await harness.client.connect(CONFIG)
+    harness.client.onObsEvent('StreamStateChanged', () => {})
+
+    const refused = await harness.client.call('SetSceneItemEnabled', { sceneItemEnabled: false })
+
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) expect(refused.error.code).toBe(ErrorCode.INVALID_ARG)
+  })
+})
+
 describe('ObsClient — the write allowlist', () => {
-  /** Every non-`Get` request Phase 3's camera buttons legitimately need. */
+  /**
+   * Every non-`Get` request Verger legitimately needs: Phase 3's camera buttons and Phase 5's
+   * output control. Nothing may be added here without a matching entry in the source list, and
+   * the equality assertion below is what makes that true rather than aspirational.
+   */
   const ALLOWED = [
     'SetCurrentProgramScene',
     'SetCurrentSceneTransition',
-    'SetCurrentSceneTransitionDuration'
-  ] as const
-
-  /** A representative slice of what must stay refused: output control and OBS surgery. */
-  const REFUSED = [
-    'SetSceneItemEnabled',
+    'SetCurrentSceneTransitionDuration',
     'StartStream',
     'StopStream',
-    'StopRecord',
+    'StartRecord',
+    'StopRecord'
+  ] as const
+
+  /** A representative slice of what must stay refused: OBS surgery of every flavour. */
+  const REFUSED = [
+    'SetSceneItemEnabled',
+    'RemoveScene',
+    'SetProfileParameter',
     'CreateInput',
     'SetVideoSettings',
     'TriggerHotkeyByName',
-    'RemoveScene'
+    'SetCurrentSceneCollection',
+    'StartOutput',
+    'StopVirtualCam',
+    'PauseRecord'
   ] as const
 
   async function connected(): Promise<Harness> {
@@ -826,7 +918,12 @@ describe('ObsClient — the write allowlist', () => {
     const results = [
       await harness.client.call('SetCurrentProgramScene', { sceneName: 'Camera 2' }),
       await harness.client.call('SetCurrentSceneTransition', { transitionName: 'Fade' }),
-      await harness.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: 300 })
+      await harness.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: 300 }),
+      // Phase 5 — the four output requests GO LIVE / END need.
+      await harness.client.call('StartStream'),
+      await harness.client.call('StopStream'),
+      await harness.client.call('StartRecord'),
+      await harness.client.call('StopRecord')
     ]
 
     for (const result of results) expect(result.ok).toBe(true)
@@ -890,18 +987,39 @@ describe('ObsClient — the write allowlist', () => {
     expect(harness.client.getStatus().state).toBe('connected')
   })
 
-  it('exposes the allowlist as exactly those three names', async () => {
+  it('exposes the allowlist as exactly those seven names and no others', async () => {
     const { ALLOWED_WRITE_REQUESTS, isAllowedRequest, isReadOnlyRequest } = await import(
       '@main/obs/ObsClient'
     )
 
     expect([...ALLOWED_WRITE_REQUESTS]).toEqual([...ALLOWED])
+    expect(ALLOWED_WRITE_REQUESTS).toHaveLength(7)
     for (const name of ALLOWED) {
       expect(isAllowedRequest(name)).toBe(true)
       expect(isReadOnlyRequest(name)).toBe(false)
     }
     for (const name of REFUSED) expect(isAllowedRequest(name)).toBe(false)
     expect(isAllowedRequest('GetSceneTransitionList')).toBe(true)
+  })
+
+  it('refuses every OTHER Start*/Stop* — only the four output requests are allowlisted', async () => {
+    const { isAllowedRequest } = await import('@main/obs/ObsClient')
+
+    // Phase 5 widened the list by exactly four names. Everything adjacent stays out.
+    for (const name of [
+      'StartVirtualCam',
+      'StopVirtualCam',
+      'StartReplayBuffer',
+      'StopReplayBuffer',
+      'StartOutput',
+      'StopOutput',
+      'PauseRecord',
+      'ResumeRecord',
+      'ToggleStream',
+      'ToggleRecord'
+    ]) {
+      expect(isAllowedRequest(name)).toBe(false)
+    }
   })
 })
 

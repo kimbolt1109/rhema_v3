@@ -10,6 +10,7 @@
       "overlay": "Overlay",
       "asr": "Speech",
       "youtube": "YouTube",
+      "live": "Live",
       "recording": "Recording"
     },
     "phasePending": "Not built yet",
@@ -19,7 +20,8 @@
       "connection": "Connection",
       "camera": "Cameras",
       "overlay": "Overlay",
-      "goLive": "Go Live",
+      "goLive": "GO LIVE",
+      "goLiveSettings": "Go Live settings",
       "cameraSetup": "Camera setup"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
@@ -362,6 +364,135 @@
     "quota": {
       "title": "API quota",
       "body": "YouTube's Data API has a daily quota. Running a handful of services a day sits comfortably inside it, so this is not something you need to watch."
+    },
+    "lastError": "Last error"
+  },
+
+  "goLive": {
+    "title": "Go live",
+    "subtitle": "One button starts the stream, the local recording and the YouTube broadcast together. One held button ends all three. The local recording always runs — there is deliberately no setting to turn it off.",
+    "subsystem": {
+      "unknown": "Checking",
+      "idle": "Not live",
+      "starting": "Going live",
+      "live": "LIVE",
+      "partial": "Not public",
+      "ending": "Ending",
+      "failed": "Failed",
+      "recording": "Recording",
+      "recordingPaused": "Paused",
+      "notRecording": "Not recording",
+      "recordingMissing": "No backup"
+    },
+    "bridgeUnavailable": {
+      "title": "The privileged bridge did not load",
+      "body": "Verger cannot reach its own main process, so GO LIVE and END are unavailable. Anything OBS is already doing is unaffected: it keeps streaming and recording. Restart Verger, or drive OBS by hand in the meantime."
+    },
+    "button": {
+      "goLive": "GO LIVE",
+      "starting": "Going live…",
+      "hint": "Starts the stream and the local recording at the same moment, then makes the broadcast public once YouTube reports the ingest is healthy."
+    },
+    "disabled": {
+      "bridge": "GO LIVE is switched off because Verger cannot reach its own main process.",
+      "obs": "GO LIVE is switched off because Verger is not connected to OBS. Open the Connection screen and connect — nothing can be streamed or recorded until OBS answers.",
+      "starting": "GO LIVE is already running. The steps below show where it has got to.",
+      "live": "You are already live. Use END below to finish the service.",
+      "partial": "OBS is already streaming and recording. Pressing GO LIVE again would push a second stream, so use Retry below instead.",
+      "ending": "The service is being ended."
+    },
+    "indicator": {
+      "regionLabel": "Broadcast status",
+      "streamLabel": "Stream",
+      "recordLabel": "Local recording",
+      "live": "LIVE",
+      "notLive": "NOT LIVE",
+      "streamingNotPublic": "STREAMING — NOT PUBLIC",
+      "recording": "RECORDING",
+      "recordingPaused": "RECORDING PAUSED",
+      "notRecording": "NOT RECORDING",
+      "elapsedLabel": "Elapsed",
+      "elapsedUnknown": "Not running",
+      "announcement": "Stream: {{stream}}. Local recording: {{recording}}."
+    },
+    "reattached": {
+      "title": "Re-attached to a stream already in progress",
+      "body": "OBS was already streaming or recording when Verger started, so Verger adopted that service instead of beginning a second one. Nothing was restarted, and no second recording file was opened.",
+      "elapsedNote": "The elapsed time above comes from OBS, not from when you pressed GO LIVE — this copy of Verger was not running when the stream started."
+    },
+    "partial": {
+      "title": "Streaming and recording — but the broadcast is NOT public on YouTube",
+      "body": "OBS is pushing to YouTube's ingest and writing the local recording, so nothing is being lost. What did not happen is the last step: YouTube was never switched to live, so anyone opening the link sees a waiting screen instead of the service.",
+      "stillRunning": "Still running: the stream to YouTube's ingest, and the local recording on this machine.",
+      "notHappening": "Not happening: the broadcast is not public, so nobody watching can see the service yet.",
+      "retry": "Retry the YouTube transition",
+      "retryHint": "Retrying only finishes the missing steps. It never starts a second stream and never opens a second recording file.",
+      "manual": "If retrying keeps failing, switch the broadcast to live from YouTube Studio in a browser instead. Verger keeps streaming and recording either way — it will not interfere."
+    },
+    "failed": {
+      "title": "GO LIVE did not finish",
+      "body": "The step marked Failed below is where it stopped. Verger has not stopped anything in response: if OBS did start streaming or recording, it is still doing both.",
+      "retry": "Try GO LIVE again"
+    },
+    "steps": {
+      "title": "Sequence",
+      "listLabel": "GO LIVE steps",
+      "name": {
+        "broadcast": "Prepare the YouTube broadcast",
+        "stream": "Start streaming from OBS",
+        "record": "Start the local recording",
+        "health": "Wait for the ingest to be healthy",
+        "transition": "Make the broadcast public"
+      },
+      "state": {
+        "pending": "Waiting",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "skipped": "Skipped"
+      },
+      "announcement": "Step in progress: {{step}}.",
+      "recordNote": "The local recording step has no setting and cannot be turned off. If it fails, that is a failure of GO LIVE and it is reported here rather than quietly skipped."
+    },
+    "recordingMissing": {
+      "title": "The stream is running but nothing is being recorded",
+      "body": "OBS is pushing to YouTube and is NOT writing a local file, so this service has no backup. Verger has deliberately not stopped the stream over this. Press Start Recording in OBS's main window, and check the recording folder under Settings → Output."
+    },
+    "recordingFile": {
+      "title": "Recording file",
+      "pathLabel": "File",
+      "none": "OBS has not reported a path yet. It normally appears a second or two after the recording starts.",
+      "note": "This file is your backup. It keeps being written even if the internet drops, if YouTube refuses the broadcast, or if Verger itself crashes — OBS owns it, not Verger."
+    },
+    "health": {
+      "title": "Health",
+      "droppedLabel": "Dropped frames",
+      "dropped": "{{skipped}} of {{total}} ({{percent}}%)",
+      "droppedUnknown": "Not reported yet",
+      "reconnectingTitle": "OBS is reconnecting to YouTube",
+      "reconnectingBody": "The RTMP connection dropped and OBS is retrying it by itself. The local recording is unaffected and keeps running throughout.",
+      "bitrateNote": "A dropped-frame count that keeps climbing means the upload cannot keep up. Lower the video bitrate in OBS rather than letting frames pile up — the bitrate tiers are in docs/v2-notes/NETWORK_AND_HARDWARE.md."
+    },
+    "end": {
+      "title": "End the service",
+      "description": "Marks the YouTube broadcast finished, stops the stream, and stops the local recording. It sits well away from GO LIVE on purpose and only fires after a deliberate hold: ending a service by a mis-click cannot be undone, and the congregation watching at home saw it end.",
+      "label": "END the service",
+      "nothingToEnd": "Nothing is streaming or recording, so there is nothing to end."
+    },
+    "youtubeNotConfigured": {
+      "title": "YouTube is not set up — GO LIVE will stream and record, but publish nothing",
+      "body": "There is no GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in .env, so Verger has no YouTube account to talk to. GO LIVE still works, and it is worth being exact about what it will and will not do.",
+      "willLabel": "What GO LIVE will still do",
+      "will1": "Tell OBS to start streaming, to whatever destination OBS's own Stream settings point at.",
+      "will2": "Tell OBS to start the local recording, exactly as it always does — that never depends on YouTube.",
+      "willNotLabel": "What GO LIVE will not do",
+      "willNot1": "Create a broadcast on YouTube, or bind an ingest stream to one.",
+      "willNot2": "Make anything public. No watch link is produced and no viewer is notified.",
+      "where": "Set it up on the Go Live settings tab. The full checklist, including the CCLI Streaming Licence number, is in HUMAN_TASKS.md at the root of this project."
+    },
+    "quota": {
+      "title": "API quota",
+      "body": "YouTube's Data API has a daily quota. Going live and ending again costs a handful of units, so a few services a day sits comfortably inside it — this is not something you need to watch."
     },
     "lastError": "Last error"
   },

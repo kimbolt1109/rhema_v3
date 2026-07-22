@@ -17,6 +17,19 @@ import { defaultCameraConfig, findBinding, slotForScene } from '@shared/camera'
 import type { ConfigSummary } from '@shared/config'
 import { emptyConfiguredMap } from '@shared/config'
 import type {
+  GoLiveState,
+  GoLiveStep,
+  GoLiveStepStatus,
+  ObsOutputState,
+  StepState,
+} from '@shared/golive'
+import {
+  GO_LIVE_STEPS,
+  emptyObsOutputState,
+  idleGoLiveState,
+  shouldReattach,
+} from '@shared/golive'
+import type {
   AppVersions,
   IpcEventPayload,
   IpcEventValue,
@@ -107,6 +120,32 @@ export interface MockResponses {
    * mint a broadcast, and bind the persistent stream.
    */
   youtubeCreateBroadcast: Result<Broadcast> | null
+  /**
+   * What `goLive.getState` resolves with.
+   *
+   * Idle by default: nothing is streaming, nothing is recording, and no step has been attempted.
+   * A test that wants a service already in progress — the crash-re-attach case — says so with
+   * {@link mockReattachedGoLiveState}.
+   */
+  goLiveGetState: Result<GoLiveState>
+  /**
+   * What `goLive.start` resolves with.
+   *
+   * `null` — the default — means "behave like the real orchestrator": adopt an already-running
+   * OBS rather than starting a second stream ({@link shouldReattach}), otherwise run every step
+   * and **always** start the local recording alongside the stream. When YouTube is not signed in
+   * the two YouTube steps are `skipped` and OBS still streams and records, which is exactly what
+   * Standing Rule 3 demands and what this machine will actually do.
+   */
+  goLiveStart: Result<GoLiveState> | null
+  /**
+   * What `goLive.end` resolves with.
+   *
+   * `null` — the default — means "behave like the real orchestrator": stop the stream, stop the
+   * recording, fall back to `idle`, and keep the recording path so the operator can still find
+   * their backup afterwards.
+   */
+  goLiveEnd: Result<GoLiveState> | null
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -135,6 +174,11 @@ export interface MockCalls {
   readonly youtubeSetTemplate: BroadcastTemplate[]
   /** Every create-broadcast request, in order. */
   readonly youtubeCreateBroadcast: { scheduledStartTime?: string }[]
+  readonly goLiveGetState: number[]
+  /** Every GO LIVE press, in order. Length is how many times a stream was asked for. */
+  readonly goLiveStart: number[]
+  /** Every completed END hold, in order. A short press must never appear here. */
+  readonly goLiveEnd: number[]
 }
 
 export interface MockVergerApi {
@@ -372,6 +416,161 @@ export function mockSignedInYouTubeStatus(overrides: Partial<YouTubeStatus> = {}
   }
 }
 
+/**
+ * Where OBS is writing the local recording.
+ *
+ * Obviously a fixture, but shaped like a real OBS filename — the panel prints this verbatim and a
+ * regression that mangled the path would be invisible against a placeholder like "path".
+ */
+export const MOCK_RECORDING_PATH = 'C:\\Verger\\recordings\\2023-11-14 10-00-00.mkv'
+
+/** One hour of service, in milliseconds. The elapsed-time readout is built against this. */
+export const MOCK_ELAPSED_MS = 3_600_000
+
+/** Nothing running: the state OBS reports before GO LIVE is pressed. */
+export function mockObsOutputState(overrides: Partial<ObsOutputState> = {}): ObsOutputState {
+  return { ...emptyObsOutputState(), ...overrides }
+}
+
+/**
+ * OBS pushing *and* recording.
+ *
+ * Both flags together, never `streaming` alone, because Standing Rule 3 says the two always start
+ * together. A fixture with `streaming: true, recording: false` is a *fault* fixture and tests that
+ * want it must say so explicitly.
+ */
+export function mockStreamingObsOutputState(
+  overrides: Partial<ObsOutputState> = {},
+): ObsOutputState {
+  return mockObsOutputState({
+    streaming: true,
+    recording: true,
+    streamTimecodeMs: MOCK_ELAPSED_MS,
+    recordTimecodeMs: MOCK_ELAPSED_MS,
+    skippedFrames: 0,
+    totalFrames: 216_000,
+    recordingPath: MOCK_RECORDING_PATH,
+    ...overrides,
+  })
+}
+
+/** Build the five step statuses, naming only the ones that are not still `pending`. */
+export function mockGoLiveSteps(
+  states: Partial<Record<GoLiveStep, StepState>> = {},
+  messages: Partial<Record<GoLiveStep, string>> = {},
+): readonly GoLiveStepStatus[] {
+  return GO_LIVE_STEPS.map((step) => ({
+    step,
+    state: states[step] ?? 'pending',
+    message: messages[step] ?? null,
+    startedAt: null,
+    finishedAt: null,
+  }))
+}
+
+/** Mid-sequence: every step before `running` has finished, `running` is in flight. */
+export function mockStartingGoLiveState(running: GoLiveStep = 'stream'): GoLiveState {
+  const index = GO_LIVE_STEPS.indexOf(running)
+  const states: Partial<Record<GoLiveStep, StepState>> = {}
+  for (const [position, step] of GO_LIVE_STEPS.entries()) {
+    states[step] = position < index ? 'done' : position === index ? 'running' : 'pending'
+  }
+  return {
+    ...idleGoLiveState(),
+    phase: 'starting',
+    steps: mockGoLiveSteps(states),
+    obs: mockObsOutputState({
+      streaming: index > GO_LIVE_STEPS.indexOf('stream'),
+      recording: index > GO_LIVE_STEPS.indexOf('record'),
+    }),
+  }
+}
+
+/** Fully live: every step done, OBS streaming and recording, an hour on the clock. */
+export function mockLiveGoLiveState(overrides: Partial<GoLiveState> = {}): GoLiveState {
+  return {
+    ...idleGoLiveState(),
+    phase: 'live',
+    steps: mockGoLiveSteps({
+      broadcast: 'done',
+      stream: 'done',
+      record: 'done',
+      health: 'done',
+      transition: 'done',
+    }),
+    liveSince: MOCK_NOW - MOCK_ELAPSED_MS,
+    obs: mockStreamingObsOutputState(),
+    ...overrides,
+  }
+}
+
+/**
+ * The likeliest real failure: OBS is streaming and recording, YouTube never transitioned.
+ *
+ * Deliberately not collapsed into `live` or `failed`. The congregation's feed is going to disk and
+ * to YouTube's ingest, and it is not public — both halves of that are true at once.
+ */
+export function mockPartialGoLiveState(overrides: Partial<GoLiveState> = {}): GoLiveState {
+  return {
+    ...mockLiveGoLiveState(),
+    phase: 'partial',
+    steps: mockGoLiveSteps(
+      {
+        broadcast: 'done',
+        stream: 'done',
+        record: 'done',
+        health: 'done',
+        transition: 'failed',
+      },
+      { transition: 'YouTube refused the transition to live.' },
+    ),
+    lastError: 'YouTube refused the transition to live.',
+    ...overrides,
+  }
+}
+
+/**
+ * Verger relaunched into a service that was already running.
+ *
+ * `reattached: true`, and the two YouTube steps are `skipped` rather than `done`: this process
+ * never ran them, and claiming otherwise would tell the operator the broadcast is public when
+ * nothing here knows that.
+ */
+export function mockReattachedGoLiveState(overrides: Partial<GoLiveState> = {}): GoLiveState {
+  return {
+    ...idleGoLiveState(),
+    phase: 'live',
+    steps: mockGoLiveSteps(
+      {
+        broadcast: 'skipped',
+        stream: 'done',
+        record: 'done',
+        health: 'done',
+        transition: 'skipped',
+      },
+      { stream: 'Adopted a stream OBS was already running.' },
+    ),
+    liveSince: MOCK_NOW - MOCK_ELAPSED_MS,
+    obs: mockStreamingObsOutputState(),
+    reattached: true,
+    ...overrides,
+  }
+}
+
+/** A start that fell over before OBS began pushing. Nothing is streaming, nothing is recording. */
+export function mockFailedGoLiveState(overrides: Partial<GoLiveState> = {}): GoLiveState {
+  return {
+    ...idleGoLiveState(),
+    phase: 'failed',
+    steps: mockGoLiveSteps(
+      { broadcast: 'done', stream: 'failed' },
+      { stream: 'OBS refused StartStream.' },
+    ),
+    lastError: 'OBS refused StartStream.',
+    ...overrides,
+  }
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -394,6 +593,9 @@ function defaultResponses(): MockResponses {
     youtubeSignOut: null,
     youtubeSetTemplate: null,
     youtubeCreateBroadcast: null,
+    goLiveGetState: ok(idleGoLiveState()),
+    goLiveStart: null,
+    goLiveEnd: null,
   }
 }
 
@@ -430,6 +632,9 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     youtubeSignOut: [],
     youtubeSetTemplate: [],
     youtubeCreateBroadcast: [],
+    goLiveGetState: [],
+    goLiveStart: [],
+    goLiveEnd: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -453,6 +658,13 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let youtubeSnapshot: YouTubeStatus = responses.youtubeGetStatus.ok
     ? responses.youtubeGetStatus.value
     : mockNotConfiguredYouTubeStatus()
+
+  // GO LIVE is the one place the YouTube half and the OBS half genuinely meet, so this snapshot
+  // reads `youtubeSnapshot` — and nothing else does the reverse. It never touches `overlaySnapshot`
+  // or `cameraSnapshot`: going live must not move a camera or blank a lower third.
+  let goLiveSnapshot: GoLiveState = responses.goLiveGetState.ok
+    ? responses.goLiveGetState.value
+    : idleGoLiveState()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -635,6 +847,60 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
         return Promise.resolve(ok(broadcast))
       },
       onStatus: (callback) => on(IpcEvent.youtubeStatus, callback),
+    },
+    goLive: {
+      getState: () => {
+        calls.goLiveGetState.push(calls.goLiveGetState.length)
+        if (responses.goLiveGetState.ok) goLiveSnapshot = responses.goLiveGetState.value
+        return Promise.resolve(responses.goLiveGetState)
+      },
+      start: () => {
+        calls.goLiveStart.push(calls.goLiveStart.length)
+        const scripted = responses.goLiveStart
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        // Standing Rule 2. OBS already streaming or recording means the app crashed mid-service;
+        // starting again would push a second stream and open a second recording file.
+        if (shouldReattach(goLiveSnapshot.obs)) {
+          goLiveSnapshot = { ...goLiveSnapshot, phase: 'live', reattached: true }
+          return Promise.resolve(ok(goLiveSnapshot))
+        }
+
+        const youtubeUsable = youtubeSnapshot.auth.state === 'signed-in'
+        const youtubeStep: StepState = youtubeUsable ? 'done' : 'skipped'
+
+        goLiveSnapshot = {
+          phase: 'live',
+          steps: mockGoLiveSteps({
+            broadcast: youtubeStep,
+            stream: 'done',
+            // Standing Rule 3: never conditional, never behind a flag. There is no branch here in
+            // which the stream starts and this does not.
+            record: 'done',
+            health: 'done',
+            transition: youtubeStep,
+          }),
+          liveSince: MOCK_NOW,
+          obs: mockStreamingObsOutputState({ streamTimecodeMs: 0, recordTimecodeMs: 0 }),
+          lastError: null,
+          reattached: false,
+        }
+        return Promise.resolve(ok(goLiveSnapshot))
+      },
+      end: () => {
+        calls.goLiveEnd.push(calls.goLiveEnd.length)
+        const scripted = responses.goLiveEnd
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        goLiveSnapshot = {
+          ...idleGoLiveState(),
+          // The path survives the end of the service: it is the operator's backup and the first
+          // thing they go looking for once the congregation has left.
+          obs: mockObsOutputState({ recordingPath: goLiveSnapshot.obs.recordingPath }),
+        }
+        return Promise.resolve(ok(goLiveSnapshot))
+      },
+      onState: (callback) => on(IpcEvent.goLiveState, callback),
     },
     config: {
       get: () => {

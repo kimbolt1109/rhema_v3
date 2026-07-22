@@ -324,3 +324,75 @@ account page. Only the local delete is asserted.
 ### Remaining delta
 
 Phases 5-10.
+
+---
+
+## Cycle 5 — Phase 5: GO LIVE / END orchestration + always-on recording (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 784 tests / 29 files ·
+`electron-vite build` succeeds · app launches with 23 IPC channels and the overlay served.
+
+After this phase the many-clicks pain is gone: one button takes you live, one ends it.
+
+### Delta closed
+
+- **Output layer** (`src/main/obs/outputs.ts`) — reads OBS's real stream/record state
+  (timecodes, dropped frames, reconnecting flag, recording path) and exposes the
+  start/stop verbs, all Result-returning.
+- **`startStreamAndRecord()`** — the Standing Rule 3 primitive. It takes **zero arguments**, so
+  there is no flag, option or overload by which a stream could start without a backup. A test
+  asserts that signature.
+- **GoLiveService** — drives the five steps in order, publishing state after every transition so
+  the UI shows *which* step is running rather than a spinner.
+- **GO LIVE panel** — per-step progress, elapsed time, an independent recording indicator, the
+  recording file path, and END as a `HoldButton`.
+
+### The OBS write allowlist, widened a second time
+
+Phase 3 opened it to three camera requests. Phase 5 adds exactly four:
+`StartStream`, `StopStream`, `StartRecord`, `StopRecord` — seven in total. Everything else stays
+refused before reaching the socket, and the connect assertion was strengthened from "issues no
+`Set*`" to "issues no `Set*`, no `Start*`, no `Stop*`", with a further test proving a whole
+reconnect cycle issues only `Get*`. Launching Verger mid-service must never push a second stream.
+
+### Failure behaviour — the part that matters on a Sunday
+
+- A **transition failure** or a **health timeout** moves the phase to `partial`, and
+  `StopStream`/`StopRecord` are **never** called. OBS keeps streaming and recording; the operator
+  is told the broadcast is not public and offered a retry. `partial` exists precisely because
+  collapsing it into `live` or `failed` would lie in opposite directions.
+- A **StartRecord failure is loud** — the step fails and the operator is told the stream is not
+  being backed up — but the stream is **not** stopped. The service in the room matters more than
+  the backup.
+- **YouTube not configured** marks the broadcast and transition steps `skipped`, not failed:
+  GO LIVE still streams and records via OBS. That is this machine's actual state, so it is a
+  supported path rather than an error.
+- **END** stops the recording **last**, so a YouTube or network failure cannot cost the operator
+  the local file.
+
+### Defects found and fixed during verification
+
+- **The go-live service was never wired into `main/index.ts`**, so the crash re-attach never ran
+  at startup. Consequence: Verger crashes mid-service, the operator relaunches and presses GO
+  LIVE, and Verger — seeing nothing in progress — pushes a **second stream and a second
+  recording**. This is the third occurrence of the same class of bug (Phase 2's unstarted overlay
+  server, Phase 4's unrestored session): every unit test passed each time. `initialize()` is now
+  called at startup and adopts whatever OBS is already doing.
+- **`ObsClient` had no raw event hook**, so `subscribeOutputs` silently degraded to
+  refreshing only on reconnect — meaning a stream started, stopped or *dropped* inside OBS would
+  not reach the UI. Added a read-only `onObsEvent(event, listener)`. It is held on the **client,
+  not the socket**, so subscriptions survive reconnects — otherwise `StreamStateChanged` would go
+  quiet exactly when OBS drops and returns, the one moment it matters most. Five tests, including
+  one asserting that subscribing grants no write authority.
+
+### Not verified
+
+No OBS and no Google credentials on this machine. Nothing here has started a real stream or
+recording; the obs-websocket field names (`outputActive`, `outputTimecode`, `outputSkippedFrames`,
+`outputPath`) and the 500/501 "already running" status codes come from the protocol spec, not from
+a live handshake. **Phase 5 is the phase most in need of a real dry-run** — one unlisted broadcast,
+confirming the local recording file exists afterwards.
+
+### Remaining delta
+
+Phases 6-10.

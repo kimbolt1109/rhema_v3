@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CAMERA_SLOTS, findBinding, isBindingUsable, slotForScene } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
+import { GO_LIVE_STEPS, emptyObsOutputState, idleGoLiveState } from '@shared/golive'
+import type { GoLiveState, GoLiveStepStatus, StepState } from '@shared/golive'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type { IpcChannelValue } from '@shared/ipc'
 import type { OverlayServerInfo } from '@shared/ipc'
@@ -77,10 +79,26 @@ vi.mock('@main/youtube', () => ({
   }
 }))
 
+/**
+ * The go-live singleton, mocked to throw for the strongest reason of the four.
+ *
+ * The real one drives OBS's `StartStream`/`StartRecord` and YouTube's `liveBroadcasts.transition`.
+ * OBS Studio is not installed on this machine and there are no Google credentials, so making the
+ * singleton throw guarantees that nothing in this file can reach either — and lets a test below
+ * assert exactly what the three go-live channels answer when the orchestrator could not be built
+ * at all, which must be "OBS still works by hand", never a crash.
+ */
+vi.mock('@main/golive', () => ({
+  getGoLiveService: () => {
+    throw new Error('the go-live service singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
   type CameraServiceLike,
+  type GoLiveServiceLike,
   type IpcInvokeEventLike,
   type IpcMainLike,
   type ObsClientLike,
@@ -144,6 +162,29 @@ function createFakeWindow(url = 'file:///app/out/renderer/index.html'): FakeWind
 /** An invoke event that will pass sender validation for `window`. */
 function eventFrom(window: FakeWindow): IpcInvokeEventLike {
   return { senderFrame: window.frame, sender: window.contents }
+}
+
+interface LogLine {
+  readonly level: 'debug' | 'info' | 'warn' | 'error'
+  readonly msg: string
+  readonly data: Record<string, unknown> | undefined
+}
+
+/**
+ * A logger that keeps what it was told.
+ *
+ * Only used by the GO LIVE / END audit test. `child()` returns the same recorder so the
+ * `deps.logger.child('ipc')` inside `registerIpc` does not swallow the lines.
+ */
+function createRecordingLogger(lines: LogLine[]): Logger {
+  const logger: Logger = {
+    debug: (msg, data) => lines.push({ level: 'debug', msg, data }),
+    info: (msg, data) => lines.push({ level: 'info', msg, data }),
+    warn: (msg, data) => lines.push({ level: 'warn', msg, data }),
+    error: (msg, data) => lines.push({ level: 'error', msg, data }),
+    child: () => logger
+  }
+  return logger
 }
 
 function createSilentLogger(): Logger {
@@ -509,6 +550,152 @@ function createFakeYouTubeService(): FakeYouTubeService {
   return service
 }
 
+// ---------------------------------------------------------------------------
+// Go live fake (BLUEPRINT.md §5, Part B)
+//
+// In-memory, like the others, and for the same binding reason twice over: OBS Studio is not
+// installed on this machine, so nothing may issue a real `StartStream`, and there are no Google
+// credentials, so nothing may attempt a real transition.
+//
+// The fake enforces Standing Rule 3 on itself — every state it produces from `start()` has
+// `recording: true` alongside `streaming: true` — so a regression that let the IPC layer ask for
+// a stream without a recording would have to change this file to pass, rather than slip through.
+// ---------------------------------------------------------------------------
+
+function stepsAll(state: StepState): readonly GoLiveStepStatus[] {
+  return GO_LIVE_STEPS.map((step) => ({
+    step,
+    state,
+    message: null,
+    startedAt: 1_000,
+    finishedAt: state === 'done' ? 2_000 : null
+  }))
+}
+
+/** Everything worked: on air publicly, and going to disk. */
+const LIVE_GO_LIVE_STATE: GoLiveState = {
+  phase: 'live',
+  steps: stepsAll('done'),
+  liveSince: 1_500,
+  obs: {
+    ...emptyObsOutputState(),
+    streaming: true,
+    // Standing Rule 3. Never false in a state that has `streaming: true`.
+    recording: true,
+    streamTimecodeMs: 30_000,
+    recordTimecodeMs: 30_000,
+    recordingPath: 'D:/verger/recordings/2026-07-26 10-00-00.mkv'
+  },
+  lastError: null,
+  reattached: false
+}
+
+/**
+ * The honest description of the most likely real failure.
+ *
+ * OBS is streaming and recording; YouTube never transitioned. The service is on disk and at
+ * YouTube's ingest, but not public. This fixture exists because the IPC layer must carry it
+ * through untouched — collapsing it into `live` or `failed` would lie to the operator in
+ * opposite directions, and the test below asserts the handler does neither.
+ */
+const PARTIAL_GO_LIVE_STATE: GoLiveState = {
+  phase: 'partial',
+  steps: GO_LIVE_STEPS.map((step) =>
+    step === 'transition'
+      ? {
+          step,
+          state: 'failed' as StepState,
+          message: 'liveBroadcasts.transition was refused',
+          startedAt: 1_000,
+          finishedAt: 2_000
+        }
+      : { step, state: 'done' as StepState, message: null, startedAt: 1_000, finishedAt: 2_000 }
+  ),
+  liveSince: 1_500,
+  obs: { ...emptyObsOutputState(), streaming: true, recording: true },
+  lastError: 'the YouTube transition failed; OBS is still streaming and recording',
+  reattached: false
+}
+
+/** What a launch into an already-streaming OBS looks like (Standing Rule 2). */
+const REATTACHED_GO_LIVE_STATE: GoLiveState = {
+  ...LIVE_GO_LIVE_STATE,
+  reattached: true
+}
+
+/** After END: nothing running, and the steps reset. */
+const ENDED_GO_LIVE_STATE: GoLiveState = idleGoLiveState()
+
+interface FakeGoLiveService extends GoLiveServiceLike {
+  emitState(state: GoLiveState): void
+  /**
+   * The argument list each `start()` actually received.
+   *
+   * The load-bearing fixture of this phase: it must be `[[]]`, i.e. the IPC layer passed
+   * *nothing*. There is therefore no options object on this boundary that could ever have
+   * carried a "skip the recording" flag.
+   */
+  readonly startArgs: unknown[][]
+  readonly endArgs: unknown[][]
+  readonly stateUnsubscribed: () => number
+  /** The state `getState()` reports. Settable so a test can stage a re-attach. */
+  current: GoLiveState
+  failStartWith: Error | null
+  failGetStateWith: Error | null
+  /** Flip to make `start()` land in `partial` instead of `live`. */
+  transitionFails: boolean
+}
+
+function createFakeGoLiveService(): FakeGoLiveService {
+  let listener: ((state: GoLiveState) => void) | null = null
+  let unsubscribes = 0
+  const startArgs: unknown[][] = []
+  const endArgs: unknown[][] = []
+
+  const service: FakeGoLiveService = {
+    startArgs,
+    endArgs,
+    stateUnsubscribed: () => unsubscribes,
+    current: idleGoLiveState(),
+    failStartWith: null,
+    failGetStateWith: null,
+    transitionFails: false,
+
+    // A bare value rather than a Result, deliberately — `resolveCall` normalises both, and
+    // mixing the shapes across this fake's methods is what keeps that honest.
+    getState: () => {
+      if (service.failGetStateWith !== null) throw service.failGetStateWith
+      return service.current
+    },
+    start: (...args: unknown[]) => {
+      startArgs.push(args)
+      if (service.failStartWith !== null) throw service.failStartWith
+      service.current = service.transitionFails ? PARTIAL_GO_LIVE_STATE : LIVE_GO_LIVE_STATE
+      listener?.(service.current)
+      return ok(service.current)
+    },
+    end: (...args: unknown[]) => {
+      endArgs.push(args)
+      service.current = ENDED_GO_LIVE_STATE
+      listener?.(service.current)
+      return ok(service.current)
+    },
+    onState: (next) => {
+      listener = next
+      return () => {
+        unsubscribes += 1
+        listener = null
+      }
+    },
+
+    emitState: (state) => {
+      service.current = state
+      listener?.(state)
+    }
+  }
+  return service
+}
+
 /**
  * Anything that smells like a credential.
  *
@@ -573,6 +760,7 @@ interface Harness {
   readonly overlay: FakeOverlayServer
   readonly camera: FakeCameraService
   readonly youtube: FakeYouTubeService
+  readonly goLive: FakeGoLiveService
   readonly windows: FakeWindow[]
   readonly secrets: SecretsStoreLike & { readonly writes: Array<[string, string]> }
   readonly dispose: () => void
@@ -586,6 +774,7 @@ function setup(options: { windows?: number } = {}): Harness {
   const overlay = createFakeOverlayServer()
   const camera = createFakeCameraService()
   const youtube = createFakeYouTubeService()
+  const goLive = createFakeGoLiveService()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
     createFakeWindow()
   )
@@ -605,6 +794,7 @@ function setup(options: { windows?: number } = {}): Harness {
     overlay,
     camera,
     youtube,
+    goLive,
     config: CONFIG,
     logger: createSilentLogger(),
     ipcMain: ipc,
@@ -620,6 +810,7 @@ function setup(options: { windows?: number } = {}): Harness {
     overlay,
     camera,
     youtube,
+    goLive,
     windows,
     secrets,
     dispose,
@@ -659,6 +850,18 @@ describe('registerIpc', () => {
     // No channel registered twice — a duplicate `handle` would throw in real Electron.
     expect(harness.ipc.handleCalls).toHaveLength(IPC_CHANNEL_VALUES.length)
     expect(new Set(harness.ipc.handleCalls).size).toBe(IPC_CHANNEL_VALUES.length)
+
+    // Named explicitly as well as covered by the registry sweep above. The sweep passes
+    // vacuously if a channel is ever dropped from `IpcChannel`; these three are the ones that
+    // put a service on the public internet and take it off again, and a phase that shipped
+    // without them would fail silently at the button rather than at the build.
+    for (const channel of [
+      IpcChannel.goLiveGetState,
+      IpcChannel.goLiveStart,
+      IpcChannel.goLiveEnd
+    ]) {
+      expect(harness.ipc.handlers.has(channel)).toBe(true)
+    }
   })
 
   it('returns the value a handler produces', async () => {
@@ -859,7 +1062,7 @@ describe('registerIpc', () => {
     ).toBe('INVALID_ARG')
   })
 
-  it('dispose removes every handler and unsubscribes from all four subsystems', () => {
+  it('dispose removes every handler and unsubscribes from all five subsystems', () => {
     expect(harness.ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
 
     harness.dispose()
@@ -877,6 +1080,16 @@ describe('registerIpc', () => {
     // timer, so a listener surviving dispose would keep pushing at a dead bridge — and would
     // keep talking to Google — for the rest of the process.
     expect(harness.youtube.statusUnsubscribed()).toBe(1)
+    // And the go-live one. Its state subscription is backed by a health-poll loop that runs at
+    // its fastest precisely while a service is on air, so a listener surviving dispose would keep
+    // pushing at dead windows for the rest of the process.
+    expect(harness.goLive.stateUnsubscribed()).toBe(1)
+
+    // Disposal unsubscribed and did nothing else. It did not end the broadcast, and it did not
+    // stop the recording — a hot reload or a window close is not a reason to take a
+    // congregation's service off the air.
+    expect(harness.goLive.endArgs).toHaveLength(0)
+    expect(harness.obs.disconnectCalls()).toBe(0)
 
     // Idempotent — a second dispose must not double-unsubscribe or re-remove.
     harness.dispose()
@@ -885,6 +1098,7 @@ describe('registerIpc', () => {
     expect(harness.overlay.stateUnsubscribed()).toBe(1)
     expect(harness.camera.stateUnsubscribed()).toBe(1)
     expect(harness.youtube.statusUnsubscribed()).toBe(1)
+    expect(harness.goLive.stateUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -897,6 +1111,7 @@ describe('registerIpc', () => {
       availableTransitions: AVAILABLE_TRANSITIONS
     })
     harness.youtube.emitStatus(SIGNED_IN_STATUS)
+    harness.goLive.emitState(LIVE_GO_LIVE_STATE)
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -1783,6 +1998,391 @@ describe('registerIpc', () => {
 
       // Creating a broadcast is the single most side-effect-heavy verb in Part A, and it still
       // did not send an overlay command or move a camera.
+      expect(harness.overlay.sent).toEqual([SHOW_LOWER_THIRD])
+      expect(harness.camera.selected).toEqual(['cam2'])
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Go live (BLUEPRINT.md §5, Part B)
+  //
+  // Three channels, and between them they carry the three rules this phase exists to enforce:
+  // local recording always runs, the app never wedges the broadcast, and a crashed-and-restarted
+  // Verger re-attaches instead of starting a second stream. Every test here runs against the
+  // in-memory fake — OBS Studio is not installed and there are no Google credentials, so "works
+  // against injected mocks with zero network" is the only definition of working available.
+  // -------------------------------------------------------------------------
+
+  describe('go live channels', () => {
+    it('returns the current snapshot from goLiveGetState', async () => {
+      const result = (await harness.invoke(IpcChannel.goLiveGetState)) as Result<GoLiveState>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(idleGoLiveState())
+      expect(result.value.phase).toBe('idle')
+      // Five steps, all pending — the panel renders the checklist before anything has run.
+      expect(result.value.steps.map((step) => step.step)).toEqual([...GO_LIVE_STEPS])
+    })
+
+    /**
+     * Standing Rule 3, asserted twice over.
+     *
+     * First on the way *in*: `startArgs` proves the IPC layer called `start()` with no arguments
+     * at all, so there is no options object on this boundary that could ever have carried a
+     * "skip the recording" flag — the rule is enforced by an absence, and the absence is
+     * observable. Then on the way *out*: the resulting state has `recording: true` alongside
+     * `streaming: true`, because a stream without its local backup is the failure this rule
+     * exists to prevent. A service is un-repeatable.
+     */
+    it('goes live with the local recording running, and passes no options at all', async () => {
+      const result = (await harness.invoke(IpcChannel.goLiveStart)) as Result<GoLiveState>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(harness.goLive.startArgs).toEqual([[]])
+      expect(result.value.phase).toBe('live')
+      expect(result.value.obs.streaming).toBe(true)
+      expect(result.value.obs.recording).toBe(true)
+      // And the operator is told where the backup is going — a recording nobody can find is not
+      // a backup.
+      expect(result.value.obs.recordingPath).not.toBeNull()
+      expect(result.value.steps.every((step) => step.state === 'done')).toBe(true)
+    })
+
+    /**
+     * `partial` is the most likely real failure and it must survive the boundary intact.
+     *
+     * OBS is streaming and recording; YouTube did not transition. Collapsing that into `live`
+     * would tell the operator the congregation can see it when they cannot; collapsing it into
+     * `failed` would tell them the recording is lost when it is not. The IPC layer does neither
+     * — it carries the snapshot through untouched.
+     */
+    it('reports partial honestly rather than collapsing it into live or failed', async () => {
+      harness.goLive.transitionFails = true
+
+      const result = (await harness.invoke(IpcChannel.goLiveStart)) as Result<GoLiveState>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(PARTIAL_GO_LIVE_STATE)
+      expect(result.value.phase).toBe('partial')
+      // The whole point: the outputs are still running.
+      expect(result.value.obs.streaming).toBe(true)
+      expect(result.value.obs.recording).toBe(true)
+      expect(result.value.lastError).not.toBeNull()
+      // And the failure names the step that broke rather than the whole sequence.
+      const transition = result.value.steps.find((step) => step.step === 'transition')
+      expect(transition?.state).toBe('failed')
+      expect(result.value.steps.filter((step) => step.state === 'done')).toHaveLength(4)
+    })
+
+    /**
+     * The app must never wedge the broadcast.
+     *
+     * A `start` that throws becomes `Err(INTERNAL)` — and nothing else happens. No `end` is
+     * issued, no OBS disconnect is issued, and there is structurally no other verb this layer
+     * could have reached for: `GoLiveServiceLike` has no `stopStream` and no `stopRecord`. OBS
+     * keeps streaming and recording, the operator is told plainly, and they decide whether to
+     * retry or drive OBS by hand.
+     */
+    it('converts a throwing go-live service into Err(INTERNAL) and stops nothing', async () => {
+      harness.goLive.failStartWith = new Error('the OBS websocket dropped mid-sequence')
+
+      const settled = await harness
+        .invoke(IpcChannel.goLiveStart)
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      const error = expectErr(settled.value)
+      expect(error.code).toBe('INTERNAL')
+      expect(error.message).toBe('the OBS websocket dropped mid-sequence')
+
+      // The load-bearing assertions: the failure cascaded nowhere.
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+      expect(harness.overlay.sent).toHaveLength(0)
+      expect(harness.camera.selected).toHaveLength(0)
+    })
+
+    it('converts a throwing getState into Err(INTERNAL) instead of rejecting', async () => {
+      harness.goLive.failGetStateWith = new Error('the state poller exploded')
+
+      const settled = await harness
+        .invoke(IpcChannel.goLiveGetState)
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      expect(expectErr(settled.value).code).toBe('INTERNAL')
+    })
+
+    it('ends only when asked, and resolves with the resulting state', async () => {
+      const live = (await harness.invoke(IpcChannel.goLiveStart)) as Result<GoLiveState>
+      expect(live.ok).toBe(true)
+
+      const ended = (await harness.invoke(IpcChannel.goLiveEnd)) as Result<GoLiveState>
+      expect(ended.ok).toBe(true)
+      if (!ended.ok) return
+      expect(harness.goLive.endArgs).toEqual([[]])
+      expect(ended.value.phase).toBe('idle')
+      expect(ended.value.obs.streaming).toBe(false)
+      expect(ended.value.obs.recording).toBe(false)
+    })
+
+    /**
+     * Crash re-attach (Standing Rule 2 — OBS owns that state).
+     *
+     * The service adopts an OBS that is already streaming and reports `reattached: true`. The IPC
+     * layer's job is to carry that flag through, because the elapsed timer will not match when
+     * the operator pressed the button and the UI has to say so.
+     */
+    it('carries a re-attached state through with its reattached flag intact', async () => {
+      harness.goLive.current = REATTACHED_GO_LIVE_STATE
+
+      const result = (await harness.invoke(IpcChannel.goLiveGetState)) as Result<GoLiveState>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.reattached).toBe(true)
+      expect(result.value.phase).toBe('live')
+      expect(result.value.obs.streaming).toBe(true)
+      expect(result.value.obs.recording).toBe(true)
+    })
+
+    it('fans go-live state out to every window', () => {
+      const many = setup({ windows: 3 })
+
+      many.goLive.emitState(PARTIAL_GO_LIVE_STATE)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([
+          { channel: IpcEvent.goLiveState, payload: PARTIAL_GO_LIVE_STATE }
+        ])
+      }
+    })
+
+    it('fans the state change a go-live start produces out to every window', async () => {
+      const many = setup({ windows: 3 })
+
+      // Not a synthetic emit: pressing GO LIVE is what actually moves the state, and every
+      // window has to follow it without asking — including the ones that did not press it.
+      const result = (await (async (): Promise<unknown> => {
+        const handler = many.ipc.handlers.get(IpcChannel.goLiveStart)
+        if (handler === undefined) throw new Error('no goLiveStart handler')
+        const first = many.windows[0]
+        if (first === undefined) throw new Error('the harness needs a window')
+        return handler(eventFrom(first), undefined)
+      })()) as Result<GoLiveState>
+      expect(result.ok).toBe(true)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([
+          { channel: IpcEvent.goLiveState, payload: LIVE_GO_LIVE_STATE }
+        ])
+      }
+    })
+
+    it('refuses a payload on all three no-argument go-live channels', async () => {
+      for (const channel of [
+        IpcChannel.goLiveGetState,
+        IpcChannel.goLiveStart,
+        IpcChannel.goLiveEnd
+      ]) {
+        expect(expectErr(await harness.invoke(channel, { evil: true })).code).toBe('INVALID_ARG')
+      }
+
+      // The Standing Rule 3 assertion in its sharpest form: a renderer that tries to smuggle a
+      // "no recording please" flag alongside GO LIVE is refused at the boundary, and the service
+      // is never called at all.
+      expect(expectErr(await harness.invoke(IpcChannel.goLiveStart, { record: false })).code).toBe(
+        'INVALID_ARG'
+      )
+      expect(harness.goLive.startArgs).toHaveLength(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
+    })
+
+    it('rejects a go-live call whose sender is not one of our windows', async () => {
+      const stranger = createFakeWindow('https://evil.example/')
+      for (const channel of [IpcChannel.goLiveStart, IpcChannel.goLiveEnd]) {
+        expect(
+          expectErr(await harness.invoke(channel, undefined, eventFrom(stranger))).code
+        ).toBe('INVALID_ARG')
+      }
+      expect(harness.goLive.startArgs).toHaveLength(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
+    })
+
+    /**
+     * No orchestrator at all.
+     *
+     * `NOT_CONNECTED` with a detail that points the operator at OBS. Verger is a convenience over
+     * OBS, never a dependency of it — an operator whose GO LIVE button just refused must not be
+     * left believing the service cannot happen.
+     */
+    it('degrades to NOT_CONNECTED when there is no go-live service at all', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      for (const channel of [
+        IpcChannel.goLiveGetState,
+        IpcChannel.goLiveStart,
+        IpcChannel.goLiveEnd
+      ]) {
+        const error = expectErr(await call(channel))
+        expect(error.code).toBe('NOT_CONNECTED')
+        expect(error.detail).toContain('OBS')
+      }
+    })
+
+    it('survives a go-live singleton that cannot be constructed', async () => {
+      // `goLive` is omitted entirely, so `registerIpc` falls back to `getGoLiveService()` —
+      // which the module mock at the top of this file makes throw.
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      const handler = ipc.handlers.get(IpcChannel.goLiveStart)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      expect(expectErr(await handler(eventFrom(window), undefined)).code).toBe('NOT_CONNECTED')
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates a go-live service whose subscription returns nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: GoLiveServiceLike = {
+        getState: () => idleGoLiveState(),
+        start: () => LIVE_GO_LIVE_STATE,
+        end: () => ENDED_GO_LIVE_STATE,
+        onState: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    /**
+     * The audit trail.
+     *
+     * GO LIVE and END are the two most consequential operations in the app: one puts a
+     * congregation's service on the public internet, the other takes it off. When someone asks
+     * afterwards "when did we go live, and did anybody press END?", the rolling log has to
+     * answer — so both are logged at info level, with who asked and when, *before* the attempt.
+     * Logging after the fact would lose the press if the sequence hung or the process died.
+     */
+    it('logs GO LIVE and END at info level with who asked and when', async () => {
+      const lines: LogLine[] = []
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow('file:///app/out/renderer/index.html')
+      const goLive = createFakeGoLiveService()
+      const at = 1_764_000_000_000
+
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive,
+        config: CONFIG,
+        logger: createRecordingLogger(lines),
+        ipcMain: ipc,
+        getWindows: () => [window],
+        now: () => at
+      })
+
+      const call = async (channel: IpcChannelValue): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), undefined)
+      }
+
+      expect(((await call(IpcChannel.goLiveStart)) as Result<unknown>).ok).toBe(true)
+      expect(((await call(IpcChannel.goLiveEnd)) as Result<unknown>).ok).toBe(true)
+
+      const info = lines.filter((line) => line.level === 'info')
+      const started = info.find((line) => line.msg === 'GO LIVE requested')
+      const ended = info.find((line) => line.msg === 'END requested')
+
+      expect(started).toBeDefined()
+      expect(ended).toBeDefined()
+      for (const line of [started, ended]) {
+        expect(line?.data?.who).toBe('file:///app/out/renderer/index.html')
+        expect(line?.data?.at).toBe(new Date(at).toISOString())
+      }
+
+      // The outcome is logged too, and it names the phase — `partial` in particular is the line
+      // somebody will read a week later to find out why the stream was never public.
+      const finished = info.find((line) => line.msg === 'GO LIVE finished')
+      expect(finished?.data).toMatchObject({ phase: 'live', streaming: true, recording: true })
+
+      // Nothing credential-shaped, and no payload, made it into any line.
+      for (const line of lines) {
+        for (const name of collectKeys(line.data)) {
+          expect(name).not.toMatch(CREDENTIAL_KEY_PATTERN)
+        }
+      }
+    })
+
+    it('leaves the camera and the overlay untouched', async () => {
+      const shown = (await harness.invoke(
+        IpcChannel.overlaySend,
+        SHOW_LOWER_THIRD
+      )) as Result<OverlayState>
+      expect(shown.ok).toBe(true)
+
+      const selected = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'cam2'
+      })) as Result<CameraState>
+      expect(selected.ok).toBe(true)
+
+      expect(((await harness.invoke(IpcChannel.goLiveStart)) as Result<unknown>).ok).toBe(true)
+      expect(((await harness.invoke(IpcChannel.goLiveEnd)) as Result<unknown>).ok).toBe(true)
+
+      // Going live and ending are the two most side-effect-heavy verbs in the app, and neither
+      // manufactured an overlay command or moved a camera behind the operator's back.
       expect(harness.overlay.sent).toEqual([SHOW_LOWER_THIRD])
       expect(harness.camera.selected).toEqual(['cam2'])
     })

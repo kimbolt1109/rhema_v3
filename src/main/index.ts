@@ -28,6 +28,7 @@ import type { AppConfig } from '@main/config/env'
 import { createLogger } from '@main/logging/logger'
 import type { Logger } from '@main/logging/logger'
 import { registerIpc } from '@main/ipc/register'
+import { getGoLiveService } from '@main/golive'
 import { getObsClient } from '@main/obs'
 import { getOverlayServer } from '@main/overlay'
 import { getYouTubeService } from '@main/youtube'
@@ -192,7 +193,28 @@ function onReady(): void {
     }
   })
 
-  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay, youtube }))
+  // Re-attach to a service that is ALREADY RUNNING (Standing Rule 2, BLUEPRINT.md §9).
+  //
+  // If Verger crashed or was restarted mid-service, OBS kept streaming and recording. Launching
+  // without this check means the operator presses GO LIVE, Verger sees nothing in progress, and
+  // pushes a SECOND stream and starts a SECOND recording — the worst possible outcome during a
+  // live, un-repeatable event. `initialize()` reads OBS's real output state and adopts it,
+  // issuing no Start* of any kind.
+  //
+  // Fire-and-forget: OBS may not be connected yet, in which case this reports nothing in
+  // progress and the operator starts normally.
+  const goLive = getGoLiveService({ logger: log })
+  void goLive.initialize().then((result) => {
+    if (result.ok && result.value.reattached) {
+      log.warn('re-attached to a broadcast already in progress', {
+        phase: result.value.phase,
+        streaming: result.value.obs.streaming,
+        recording: result.value.obs.recording
+      })
+    }
+  })
+
+  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay, youtube, goLive }))
 
   mainWindow = createMainWindow({ logger: log })
 }
