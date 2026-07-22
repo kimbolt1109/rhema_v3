@@ -1,0 +1,127 @@
+/*
+ * Verger booth theme.
+ *
+ * ERGO-1 — THERE IS NO LIGHT MODE, AND THERE WILL NOT BE ONE.
+ * This is an ergonomic requirement, not a style preference: Verger is operated from a dark
+ * booth positioned beside a brightly lit stage. A light surface on the operator's screen
+ * destroys their dark adaptation and makes the stage — the thing they are actually watching —
+ * harder to read for the next several seconds. `:root` and `.dark` are therefore defined
+ * identically, `<html>` carries `class="dark"` permanently, and no runtime theme toggle exists.
+ * (See docs/v2-notes/STACK_AND_CONFIG.md §8 and SHORTCUTS_AND_A11Y.md §9.3, where the same rule
+ * is recorded as Blueprint PART 17.11 / ERGO-1.)
+ *
+ * Colours are raw RGB **channel triples**, with no `rgb()` wrapper, so that the Tailwind tokens
+ * in `tailwind.config.js` (`rgb(var(--color-x) / <alpha-value>)`) keep working with the
+ * `/opacity` modifier syntax. Changing a value here changes it everywhere; do not hard-code a
+ * hex anywhere in a component.
+ *
+ * ERGO-4: no pure white anywhere. Primary text is `#e5e7eb`, which measures 15.95:1 on the
+ * background — AAA, comfortably past the 7:1 floor ERGO-2 sets for primary text.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+.dark {
+  /* Backgrounds */
+  --color-bg: 10 10 15; /* #0a0a0f */
+  --color-surface: 18 18 26; /* #12121a */
+  --color-surface-2: 26 26 38; /* #1a1a26 */
+
+  /* Accent — indigo */
+  --color-accent: 99 102 241; /* #6366f1 */
+  --color-accent-hover: 79 70 229; /* #4f46e5 */
+  --color-accent-2: 129 140 248; /* #818cf8 */
+
+  /* Semantic */
+  --color-panic: 239 68 68; /* #ef4444 */
+  --color-live: 34 197 94; /* #22c55e */
+
+  /* Text — never pure white (ERGO-4) */
+  --color-text: 229 231 235; /* #e5e7eb */
+  --color-text-muted: 156 163 175; /* #9ca3af */
+
+  /* Chrome */
+  --color-ring: 99 102 241; /* #6366f1 */
+  --color-border: 36 36 51; /* #242433 */
+
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/*
+ * A console, not a document.
+ *
+ * `overflow: hidden` — the shell never scrolls as a page; individual panes opt into their own
+ * scroll region explicitly. A booth operator reaching for a control that has silently scrolled
+ * off-screen mid-service is a real failure mode.
+ * `user-select: none` — dragging across the UI while hunting for a button must not paint a text
+ * selection over the status readouts. Text that is genuinely worth copying (versions, error
+ * detail) re-enables selection locally with `.select-text`.
+ */
+body {
+  background-color: rgb(var(--color-bg));
+  color: rgb(var(--color-text));
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Custom scrollbar for the panes that do scroll. Thin, dark, and out of the way. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--color-border));
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--color-accent) / 0.55);
+}
+
+/*
+ * One focus ring, everywhere.
+ *
+ * v2 shipped with focus-visible styling "not yet standardized across custom buttons"
+ * (SHORTCUTS_AND_A11Y.md §9.5, left as an open item). Standardising it once here means no
+ * component can ship without a visible ring, which is what actually went wrong last time.
+ */
+:focus-visible {
+  outline: 2px solid rgb(var(--color-ring));
+  outline-offset: 2px;
+}
+
+/*
+ * prefers-reduced-motion: collapse, do not merely shorten.
+ *
+ * Non-negotiable accessibility requirement. Every animation in `tailwind.config.js` — including
+ * the connection light's pulse and the reconnect spinner — is reduced to a single, effectively
+ * instant frame. Nothing in Verger conveys information through motion alone, so removing motion
+ * removes no meaning.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

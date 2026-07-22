@@ -1,0 +1,57 @@
+# electron-builder configuration — Verger
+#
+# Phase 10 owns packaging in earnest. This file exists now so `npm run package`
+# is a valid, non-blocking command from day one.
+#
+# NOT SIGNED. No Windows Authenticode certificate is present in this repo, so
+# installers produced here will trip "unknown publisher" SmartScreen warnings.
+# Acquiring an EV code-signing cert is tracked in HUMAN_TASKS.md — do not add
+# signing credentials to this file.
+
+appId: com.verger.app
+productName: Verger
+copyright: Copyright © 2026 kimbolt1109
+
+directories:
+  output: release/${version}
+  # NOT electron-builder's default `build/` — .gitignore ignores `build/`, which would
+  # silently exclude the app icon and installer art from the repo. This directory holds
+  # committed packaging assets (icon.ico, installer sidebar) and is created in Phase 10.
+  buildResources: build-resources
+
+# electron-vite emits main -> out/main, preload -> out/preload, renderer -> out/renderer.
+# package.json "main" is ./out/main/index.js, so out/ plus the manifest is all the
+# app bundle needs; runtime dependencies are pulled in by electron-builder from
+# package.json "dependencies" automatically.
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/{.eslintrc,.editorconfig,.env,.env.*}'
+  - '!**/{test,tests,__tests__,coverage}/**'
+
+# Unpacked payloads (ffmpeg, a faster-whisper sidecar, Whisper model files) get
+# added here in Phases 7/10. Nothing needs it yet.
+extraResources: []
+
+asar: true
+npmRebuild: false
+forceCodeSigning: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Verger
+  # Operator settings, service plans and logs live in userData. Never wipe them
+  # on uninstall without an explicit choice.
+  deleteAppDataOnUninstall: false

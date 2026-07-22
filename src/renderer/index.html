@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  Verger renderer entry.
+
+  `class="dark"` is permanent. ERGO-1: Verger has no light mode — that is an ergonomic
+  requirement for a booth operator sitting in a dark room beside a lit stage, not a style
+  preference. There is no runtime theme toggle anywhere in the app.
+
+  The Content-Security-Policy below is the renderer's second line of defence, behind
+  `contextIsolation: true` / `sandbox: true` / `nodeIntegration: false` in
+  `src/main/window.ts`:
+    - default-src 'self'      — nothing loads from anywhere but the app bundle.
+    - script-src  'self'      — no inline script, no eval, no CDN. XSS in a rendered scene
+                                name cannot become code execution.
+    - style-src   'self' 'unsafe-inline'
+                              — required: Tailwind's dev injection and React's `style={}`
+                                props are inline styles. Styles cannot exfiltrate.
+    - connect-src 'self' ws://127.0.0.1:*
+                              — loopback WebSockets only (the Vite dev server's HMR socket,
+                                and later phases' local overlay server). Standing Rule 7:
+                                loopback-first, never a public host.
+    - img-src     'self' data:
+                              — bundled assets and inline data URIs (icons, generated
+                                thumbnails). No remote image beacons.
+-->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' data:"
+    />
+    <title>Verger</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

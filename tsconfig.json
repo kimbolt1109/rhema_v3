@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Editor-UX config only. The authoritative gates are tsconfig.node.json (`npm run typecheck:node`) and tsconfig.web.json (`npm run typecheck:web`) — this file exists so an editor opening any file in the repo gets sane strictness + path aliases. It is intentionally NOT a composite/solution root, because package.json runs `tsc --noEmit -p tsconfig.node.json` and composite+noEmit conflict.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.d.ts",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["node_modules", "out", "release", "dist", "vitest.setup.ts"]
+}

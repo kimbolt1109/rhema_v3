@@ -1,0 +1,125 @@
+{
+  "app": {
+    "name": "Verger",
+    "tagline": "Live service control",
+    "windowTitle": "Verger — live service control",
+    "subsystemsLabel": "Subsystem status",
+    "mainLabel": "Operator console",
+    "subsystem": {
+      "obs": "OBS",
+      "overlay": "Overlay",
+      "asr": "Speech",
+      "youtube": "YouTube",
+      "recording": "Recording"
+    },
+    "phasePending": "Not built yet",
+    "phasePendingDetail": "Arrives in a later phase.",
+    "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
+    "versionsUnknown": "Version information unavailable"
+  },
+
+  "status": {
+    "regionLabel": "OBS connection",
+    "announcement": "OBS: {{label}}. {{detail}}",
+    "state": {
+      "not-configured": "Not configured",
+      "idle": "Idle",
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "reconnecting": "Reconnecting",
+      "disconnected": "Disconnected",
+      "auth-failed": "Password rejected"
+    },
+    "detail": {
+      "not-configured": "No OBS address has been set, so Verger is not dialling.",
+      "idle": "Ready to connect. Nothing has been attempted yet.",
+      "connecting": "Opening the obs-websocket connection.",
+      "connected": "Reading OBS's live state. OBS remains in charge of the stream.",
+      "reconnecting": "OBS went away. Verger will keep trying until it comes back.",
+      "disconnected": "The connection dropped and no retry is scheduled.",
+      "auth-failed": "OBS refused the password. Automatic retries are stopped on purpose."
+    },
+    "attempt_one": "Attempt {{count}}",
+    "attempt_other": "Attempt {{count}}",
+    "retryIn": "Next try in {{seconds}}s",
+    "retryNow": "Retrying now…",
+    "since": "Since {{time}}",
+    "shortLabel": "{{subsystem}}: {{state}}"
+  },
+
+  "connection": {
+    "title": "OBS connection",
+    "subtitle": "Verger reads OBS's state. It never imposes one — if Verger stops, OBS keeps streaming.",
+    "formLabel": "OBS connection settings",
+    "urlLabel": "OBS WebSocket address",
+    "urlPlaceholder": "ws://127.0.0.1:4455",
+    "urlHint": "Loopback by default. Use the address shown in OBS under Tools → WebSocket Server Settings.",
+    "urlInvalid": "Must be a ws:// or wss:// address.",
+    "passwordLabel": "Password",
+    "passwordHint": "Leave blank if you turned authentication off in OBS.",
+    "notConfigured": {
+      "title": "OBS is not set up yet",
+      "body": "Install OBS Studio 30 or newer, open Tools → WebSocket Server Settings, enable the server, then copy the address and password into the fields below.",
+      "humanTasks": "The full setup checklist lives in HUMAN_TASKS.md at the root of this project."
+    },
+    "authFailed": {
+      "title": "OBS rejected the password",
+      "body": "Check the password under Tools → WebSocket Server Settings in OBS, then connect again.",
+      "noRetry": "Verger has deliberately stopped retrying. Repeating a rejected password can never succeed, and a scrolling \"reconnecting…\" indicator would hide the real problem from you mid-service."
+    },
+    "bridgeUnavailable": {
+      "title": "The privileged bridge did not load",
+      "body": "Verger cannot reach its own main process, so OBS control is unavailable. Restart the app; if this persists, the log file will say why."
+    },
+    "details": {
+      "title": "What OBS reports",
+      "obsVersion": "OBS Studio",
+      "websocketVersion": "obs-websocket",
+      "rpcVersion": "RPC version",
+      "currentScene": "Program scene",
+      "unknown": "Unknown"
+    },
+    "scenes": {
+      "title": "Scenes",
+      "empty": "OBS reports no scenes.",
+      "countLabel": "{{total}} scenes reported by OBS",
+      "program": "Program",
+      "preview": "Preview",
+      "readOnlyNote": "Read-only. Verger reflects OBS's scene list; switching scenes arrives in a later phase."
+    },
+    "lastError": "Last error"
+  },
+
+  "actions": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "connecting": "Connecting…",
+    "reload": "Reload",
+    "retry": "Try again",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "dismiss": "Dismiss"
+  },
+
+  "errors": {
+    "boundary": {
+      "title": "This screen stopped working",
+      "body": "Verger's control surface hit an unexpected error. OBS is unaffected — the stream and the local recording are still running.",
+      "detailsLabel": "Error detail",
+      "reloadHint": "Reloading restores the control surface and reconnects to whatever state OBS is in."
+    },
+    "code": {
+      "NOT_CONFIGURED": "Not configured",
+      "NOT_CONNECTED": "Not connected",
+      "OBS_ERROR": "OBS refused the request",
+      "TIMEOUT": "Timed out",
+      "INVALID_ARG": "Invalid input",
+      "RATE_LIMITED": "Rate limited",
+      "INTERNAL": "Internal error",
+      "NOT_FOUND": "Not found",
+      "IO_ERROR": "File error",
+      "CRYPTO_ERROR": "Secret storage error"
+    },
+    "unknown": "Something went wrong."
+  }
+}
