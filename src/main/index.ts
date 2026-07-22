@@ -30,7 +30,9 @@ import type { Logger } from '@main/logging/logger'
 import { registerIpc } from '@main/ipc/register'
 import { getObsClient } from '@main/obs'
 import { getOverlayServer } from '@main/overlay'
+import { getYouTubeService } from '@main/youtube'
 import { createMainWindow } from '@main/window'
+import { ErrorCode } from '@shared/result'
 
 let logger: Logger | null = null
 let disposeIpc: (() => void) | null = null
@@ -171,7 +173,26 @@ function onReady(): void {
     }
   })
 
-  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay }))
+  // Restore the Google session at startup, fire-and-forget.
+  //
+  // The OAuth service starts in `signed-out` even when a refresh token IS stored, because the
+  // constructor cannot await the secrets store. Without this call the Go Live screen would read
+  // "signed out" on every launch until something happened to touch the API — the operator would
+  // be told to sign in again every Sunday despite a perfectly good stored token.
+  //
+  // With an empty .env this short-circuits at `not-configured` and makes no network call, so it
+  // costs nothing on an unconfigured machine (Standing Rule 5).
+  const youtube = getYouTubeService({ logger: log })
+  void youtube.refresh().then((result) => {
+    if (!result.ok && result.error.code !== ErrorCode.NOT_CONFIGURED) {
+      log.warn('could not restore the YouTube session at startup', {
+        code: result.error.code,
+        detail: result.error.message
+      })
+    }
+  })
+
+  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay, youtube }))
 
   mainWindow = createMainWindow({ logger: log })
 }

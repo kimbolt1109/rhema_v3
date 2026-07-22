@@ -20,6 +20,7 @@ import type { LogRecord } from './log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
 import type { CameraConfig, CameraSlot, CameraState } from './camera'
 import type { OverlayCommand, OverlayState } from './overlay'
+import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
 
 /**
@@ -61,6 +62,11 @@ export const IpcChannel = {
   cameraSetConfig: 'verger:camera:set-config',
   cameraGetState: 'verger:camera:get-state',
   cameraSelect: 'verger:camera:select',
+  youtubeGetStatus: 'verger:youtube:get-status',
+  youtubeSignIn: 'verger:youtube:sign-in',
+  youtubeSignOut: 'verger:youtube:sign-out',
+  youtubeSetTemplate: 'verger:youtube:set-template',
+  youtubeCreateBroadcast: 'verger:youtube:create-broadcast',
 } as const
 
 /** Union of every request channel string. */
@@ -78,6 +84,7 @@ export const IpcEvent = {
   overlayState: 'verger:overlay:state',
   overlayServerInfo: 'verger:overlay:server-info',
   cameraState: 'verger:camera:state',
+  youtubeStatus: 'verger:youtube:status',
 } as const
 
 /** Union of every event channel string. */
@@ -119,6 +126,11 @@ export interface IpcRequest {
   [IpcChannel.cameraSetConfig]: CameraConfig
   [IpcChannel.cameraGetState]: void
   [IpcChannel.cameraSelect]: { slot: CameraSlot }
+  [IpcChannel.youtubeGetStatus]: void
+  [IpcChannel.youtubeSignIn]: void
+  [IpcChannel.youtubeSignOut]: void
+  [IpcChannel.youtubeSetTemplate]: BroadcastTemplate
+  [IpcChannel.youtubeCreateBroadcast]: { scheduledStartTime?: string }
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -138,6 +150,11 @@ export interface IpcResponse {
   [IpcChannel.cameraSetConfig]: Result<CameraConfig>
   [IpcChannel.cameraGetState]: Result<CameraState>
   [IpcChannel.cameraSelect]: Result<CameraState>
+  [IpcChannel.youtubeGetStatus]: Result<YouTubeStatus>
+  [IpcChannel.youtubeSignIn]: Result<YouTubeStatus>
+  [IpcChannel.youtubeSignOut]: Result<YouTubeStatus>
+  [IpcChannel.youtubeSetTemplate]: Result<YouTubeStatus>
+  [IpcChannel.youtubeCreateBroadcast]: Result<Broadcast>
 }
 
 /** The payload pushed on each event channel. */
@@ -148,6 +165,7 @@ export interface IpcEventPayload {
   [IpcEvent.overlayState]: OverlayState
   [IpcEvent.overlayServerInfo]: OverlayServerInfo
   [IpcEvent.cameraState]: CameraState
+  [IpcEvent.youtubeStatus]: YouTubeStatus
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -192,6 +210,17 @@ export interface VergerApi {
     select(slot: CameraSlot): Promise<Result<CameraState>>
     /** Subscribe to camera state changes, including scene switches made inside OBS. */
     onState(callback: (state: CameraState) => void): Unsubscribe
+  }
+  readonly youtube: {
+    getStatus(): Promise<Result<YouTubeStatus>>
+    /** Runs the loopback OAuth consent flow. Silent on later launches. */
+    signIn(): Promise<Result<YouTubeStatus>>
+    /** Forgets the stored refresh token. */
+    signOut(): Promise<Result<YouTubeStatus>>
+    setTemplate(template: BroadcastTemplate): Promise<Result<YouTubeStatus>>
+    /** Creates the weekly broadcast and binds the persistent stream. */
+    createBroadcast(options: { scheduledStartTime?: string }): Promise<Result<Broadcast>>
+    onStatus(callback: (status: YouTubeStatus) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

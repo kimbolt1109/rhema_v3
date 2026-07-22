@@ -36,6 +36,7 @@
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
     "express": "^5.2.1",
+    "googleapis": "^173.0.0",
     "i18next": "^26.3.6",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^1.25.0",

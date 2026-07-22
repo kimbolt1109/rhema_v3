@@ -47,6 +47,7 @@ import type { LogRecord } from '@shared/log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import type { Result } from '@shared/result'
+import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
 /** A listener that has already had the Electron event object removed. */
 type PayloadListener = (event: IpcRendererEvent, payload: unknown) => void
@@ -146,6 +147,36 @@ const api: VergerApi = {
       ipcRenderer.invoke(IpcChannel.cameraSelect, { slot }),
     onState: (callback: (state: CameraState) => void): Unsubscribe =>
       subscribe<CameraState>(IpcEvent.cameraState, callback)
+  },
+
+  /**
+   * The YouTube Live layer (BLUEPRINT.md §5).
+   *
+   * Two absences here are load-bearing, not oversights:
+   *
+   *  - **No stream key.** `YouTubeStatus` carries a `PersistentStream` whose type has no key
+   *    field at all, so there is no method here that could return one and no payload shape that
+   *    could smuggle one. The RTMP key is a credential that grants anyone the ability to
+   *    broadcast to the channel; it lives in OBS's own settings and never crosses this bridge.
+   *  - **No token.** `signIn()` resolves with a `YouTubeStatus`, not with a credential. The
+   *    OAuth refresh token is written to the main process's `safeStorage` store and is not
+   *    nameable from renderer code.
+   *
+   * `not-configured` (no Google client id/secret in `.env`) is a perfectly ordinary resolved
+   * value rather than a rejection: `getStatus()` succeeds, `auth.state` says `not-configured`,
+   * and the Go Live screen disables itself and explains why (Standing Rule 5).
+   */
+  youtube: {
+    getStatus: (): Promise<Result<YouTubeStatus>> =>
+      ipcRenderer.invoke(IpcChannel.youtubeGetStatus),
+    signIn: (): Promise<Result<YouTubeStatus>> => ipcRenderer.invoke(IpcChannel.youtubeSignIn),
+    signOut: (): Promise<Result<YouTubeStatus>> => ipcRenderer.invoke(IpcChannel.youtubeSignOut),
+    setTemplate: (template: BroadcastTemplate): Promise<Result<YouTubeStatus>> =>
+      ipcRenderer.invoke(IpcChannel.youtubeSetTemplate, template),
+    createBroadcast: (options: { scheduledStartTime?: string }): Promise<Result<Broadcast>> =>
+      ipcRenderer.invoke(IpcChannel.youtubeCreateBroadcast, options),
+    onStatus: (callback: (status: YouTubeStatus) => void): Unsubscribe =>
+      subscribe<YouTubeStatus>(IpcEvent.youtubeStatus, callback)
   },
 
   config: {

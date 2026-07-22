@@ -38,6 +38,28 @@ Types: `[SETUP]` `[ACCOUNT]` `[KEY]` `[LEGAL]` `[HARDWARE]` `[DECISION]` `[PURCH
   (3.11/3.12) for the ASR sidecar, or (c) rely on cloud Deepgram and treat local as
   best-effort. Phase 7 ships the pluggable interface regardless.
 
+- [ ] [ACCOUNT] [KEY] **Google Cloud project + OAuth client for YouTube Live** (Phases 4-5).
+  Blocks: every YouTube feature. Without it the Go Live screen shows "not configured", disables
+  its controls, and the rest of the app is unaffected — but nothing can go live.
+  Steps: create a Google Cloud project → enable **YouTube Data API v3** → OAuth consent screen
+  (External; add yourself as a test user while it is unverified) → Credentials → *Create OAuth
+  client ID* → application type **Desktop app** → copy the client ID and secret into `.env` as
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Then click *Sign in* on the Go Live screen once;
+  the refresh token is stored in Electron `safeStorage` and later go-lives are silent.
+  Note: the YouTube Data API has a daily quota and `liveBroadcasts.insert` is expensive; a few
+  services per day is comfortably within it.
+
+- [ ] [SETUP] **Set the persistent stream key in OBS** (Phase 5).
+  Verger reuses ONE persistent YouTube stream so the RTMP key never changes. Paste that key into
+  OBS once (Settings → Stream → Custom/YouTube) and never again. **Verger never sees or stores
+  the key** — it is deliberately absent from every type, log and IPC payload.
+
+- [ ] [LEGAL] **Record the CCLI streaming licence number.**
+  Blocks: nothing technically — the pre-flight check warns rather than blocks — but streaming
+  worship music without a current streaming licence is a real legal exposure. See
+  `docs/v2-notes/LEGAL_AND_CONTENT.md`. Record the number and confirm the licence covers
+  streaming, not only in-person reproduction.
+
 ---
 
 ## Notes

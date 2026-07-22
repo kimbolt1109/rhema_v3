@@ -19,6 +19,7 @@
       "connection": "연결",
       "camera": "카메라",
       "overlay": "오버레이",
+      "goLive": "송출",
       "cameraSetup": "카메라 설정"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
@@ -230,6 +231,138 @@
       },
       "noTransitions": "OBS가 보고한 전환 효과가 없어 \"OBS 설정 그대로 사용\"만 선택할 수 있습니다."
     }
+  },
+
+  "youtube": {
+    "title": "송출 설정",
+    "subtitle": "GO LIVE 버튼이 사용할 설정입니다. 이 화면에서는 아무것도 송출되지 않습니다. 방송을 만들어도 예약만 될 뿐이고, 실제 송출 시작은 별도의 단계입니다.",
+    "state": {
+      "not-configured": "미설정",
+      "signed-out": "로그아웃됨",
+      "authorizing": "구글 응답 대기 중",
+      "signed-in": "로그인됨",
+      "auth-error": "로그인 실패"
+    },
+    "subsystem": {
+      "unknown": "확인 중",
+      "not-configured": "미설정",
+      "signed-out": "로그아웃됨",
+      "authorizing": "로그인 중",
+      "signed-in": "준비됨",
+      "auth-error": "로그인 실패"
+    },
+    "notConfigured": {
+      "title": "유튜브가 아직 설정되지 않았습니다",
+      "body": "Verger는 공용 계정이 아니라 교회가 직접 만든 구글 OAuth 클라이언트로 유튜브에 접속합니다. .env에 GOOGLE_CLIENT_ID와 GOOGLE_CLIENT_SECRET이 없으면 로그인할 대상 자체가 없으므로, 이 화면의 모든 항목이 비활성 상태입니다.",
+      "stepsLabel": "설정 방법",
+      "step1": "console.cloud.google.com에서 구글 클라우드 프로젝트를 만듭니다.",
+      "step2": "해당 프로젝트에서 YouTube Data API v3을 사용 설정합니다.",
+      "step3": "API 및 서비스 → 사용자 인증 정보에서 애플리케이션 유형이 \"데스크톱 앱\"인 OAuth 클라이언트 ID를 만듭니다.",
+      "step4": "클라이언트 ID와 보안 비밀을 .env의 GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET에 넣고(키 이름은 .env.example에 이미 있습니다) Verger를 다시 시작합니다.",
+      "humanTasks": "CCLI 스트리밍 라이선스 번호와 OBS에 넣을 고정 스트림 키를 포함한 전체 절차는 프로젝트 최상위의 HUMAN_TASKS.md에 있습니다.",
+      "safe": "다른 기능에는 영향이 없습니다. OBS는 계속 송출·녹화하고 나머지 화면도 정상 동작하며, 유튜브 제어만 사용할 수 없습니다."
+    },
+    "bridgeUnavailable": {
+      "title": "내부 브리지를 불러오지 못했습니다",
+      "body": "Verger가 자체 메인 프로세스에 접근할 수 없어 유튜브 제어를 사용할 수 없습니다. 앱을 다시 시작하세요. 계속되면 로그 파일에 원인이 기록됩니다."
+    },
+    "account": {
+      "title": "구글 계정",
+      "stateLabel": "로그인 상태",
+      "connectedAsLabel": "연결된 채널",
+      "channelUnknown": "로그인은 되었지만 채널 이름을 아직 받지 못했습니다.",
+      "confirmChannel": "송출 전에 채널이 맞는지 꼭 확인하세요. 구글은 브라우저에 이미 로그인되어 있던 계정으로 연결하므로, 예배가 개인 채널에 올라가면 조용히 되돌릴 수 없습니다.",
+      "signIn": "구글 계정으로 로그인",
+      "signOut": "로그아웃",
+      "signingIn": "구글 응답을 기다리는 중…",
+      "signInHint": "브라우저가 한 번만 열립니다. Verger는 운영체제가 암호화한 갱신 토큰만 보관하므로 다음 주부터는 로그인 창이 뜨지 않습니다.",
+      "signedOutHint": "저장된 토큰을 삭제했습니다. 다시 로그인하기 전에는 아무것도 게시할 수 없습니다.",
+      "authError": "로그인 실패"
+    },
+    "preflight": {
+      "title": "사전 점검",
+      "listLabel": "사전 점검 문제 목록",
+      "allClear": "사전 점검 문제가 없습니다. 송출을 막는 항목이 없습니다.",
+      "severity": {
+        "error": "송출 차단",
+        "warning": "경고"
+      },
+      "blocksNote": "\"송출 차단\"으로 표시된 항목은 해결해야 GO LIVE 버튼이 동작합니다. 경고는 표시만 하고 판단은 운영자에게 맡깁니다.",
+      "ccliNote": "CCLI 스트리밍 라이선스 점검은 단순 알림이 아니라 법적 요건입니다. 찬양을 스트리밍하려면 일반 교회 저작권 라이선스와 별도로 스트리밍 라이선스가 필요하며, 필요한 출처 표기도 함께 송출되어야 합니다."
+    },
+    "template": {
+      "title": "주간 템플릿",
+      "formLabel": "방송 템플릿",
+      "titleLabel": "제목 템플릿",
+      "titleHint": "날짜가 들어갈 자리에 {date}라고 쓰면 방송을 만들 때 실제 날짜로 바뀝니다. 나머지는 입력한 그대로 사용됩니다.",
+      "previewLabel": "제목 미리보기",
+      "previewEmpty": "제목 템플릿을 입력하면 실제로 어떻게 표시될지 보여 줍니다.",
+      "descriptionLabel": "설명",
+      "descriptionHint": "유튜브 영상 아래에 표시됩니다. 예배 시간과 필요한 출처 표기를 여기에 적으세요.",
+      "privacyLabel": "공개 범위",
+      "privacyOption": {
+        "public": "공개 — 목록과 검색에 노출",
+        "unlisted": "일부 공개 — 링크를 아는 사람만",
+        "private": "비공개 — 이 계정만"
+      },
+      "privacyHint": "예배는 보통 일부 공개가 적당합니다. 링크를 받은 사람은 볼 수 있지만 목록이나 검색에는 나오지 않습니다.",
+      "scheduledLabel": "예약 시작 시각",
+      "scheduledHint": "현지 시각 기준입니다. 비워 두면 지금 시각으로 예약합니다.",
+      "thumbnailLabel": "썸네일 이미지",
+      "thumbnailHint": "이 컴퓨터에 있는 JPEG 또는 PNG 파일의 전체 경로입니다. 비워 두면 유튜브가 한 장면을 골라 씁니다.",
+      "timeZoneLabel": "시간대",
+      "timeZoneHint": "IANA 이름을 씁니다. 예: Asia/Seoul. {date}가 어느 날짜인지 판단하는 기준입니다.",
+      "save": "템플릿 저장",
+      "saved": "템플릿을 저장했습니다.",
+      "invalid": "이 템플릿은 저장할 수 없습니다. 제목은 반드시 있어야 하고 100자를 넘을 수 없습니다."
+    },
+    "publicWarning": {
+      "title": "이 방송은 전체 공개로 나갑니다",
+      "body": "전체 공개 방송은 시작하는 순간 목록과 검색에 노출되어 누구나 볼 수 있습니다. 실수로 공개한 예배는 되돌릴 수 없습니다. 이미 퍼진 뒤입니다. 정말 공개할 의도가 아니라면 일부 공개를 선택하세요."
+    },
+    "broadcast": {
+      "title": "이번 주 방송",
+      "none": "아직 만든 방송이 없습니다.",
+      "create": "방송 만들기",
+      "creating": "만드는 중…",
+      "createHint": "유튜브에 예약 방송을 만들고 고정 스트림을 연결합니다. 송출은 시작하지 않습니다. GO LIVE를 누르기 전에는 아무것도 나가지 않습니다.",
+      "titleLabel": "제목",
+      "privacyLabel": "공개 범위",
+      "scheduledLabel": "예약 시각",
+      "lifecycleLabel": "상태",
+      "watchUrlLabel": "시청 주소",
+      "boundLabel": "연결된 스트림",
+      "notBound": "아직 연결되지 않음",
+      "lifecycle": {
+        "created": "생성됨",
+        "ready": "준비됨",
+        "testing": "테스트 중",
+        "live": "송출 중",
+        "complete": "종료됨",
+        "revoked": "취소됨"
+      }
+    },
+    "stream": {
+      "title": "고정 스트림",
+      "none": "아직 고정 스트림이 없습니다. 첫 방송을 만들 때 하나 만들고, 이후에는 매주 그것을 다시 씁니다.",
+      "explain": "하나의 수신 스트림을 계속 재사용하므로 OBS 설정을 매주 다시 붙여넣을 필요가 없습니다. 매주 새로 만드는 것은 방송뿐입니다.",
+      "nameLabel": "이름",
+      "ingestLabel": "수신 주소",
+      "ingestUnknown": "보고되지 않음",
+      "healthLabel": "상태",
+      "health": {
+        "good": "양호",
+        "ok": "보통",
+        "bad": "불량",
+        "noData": "수신 없음 — OBS가 송출하고 있지 않습니다"
+      },
+      "keyNote": "송출 인증 정보는 이 화면에 일부러 표시하지 않으며 메인 프로세스 밖으로 나가지 않습니다. 그것만 있으면 누구나 이 채널로 방송할 수 있기 때문입니다. 해당 값은 OBS의 송출 설정에만 보관합니다."
+    },
+    "quota": {
+      "title": "API 할당량",
+      "body": "유튜브 데이터 API에는 일일 할당량이 있습니다. 하루에 예배 몇 번을 진행하는 정도는 여유롭게 들어가므로 신경 쓰지 않아도 됩니다."
+    },
+    "lastError": "마지막 오류"
   },
 
   "holdButton": {

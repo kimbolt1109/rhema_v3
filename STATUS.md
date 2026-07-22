@@ -256,3 +256,71 @@ here has moved a real program scene.
 ### Remaining delta
 
 Phases 4-10.
+
+---
+
+## Cycle 4 — Phase 4: Google OAuth + YouTube broadcast lifecycle (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 633 tests / 25 files ·
+`electron-vite build` succeeds · app launches with 20 IPC channels and overlay / camera /
+youtube all attached.
+
+Part A only: OAuth once, then create and bind a broadcast from a template. The GO LIVE
+orchestration is Phase 5 — nothing here starts a stream or a recording.
+
+### Delta closed
+
+- **YouTube contract** (`src/shared/youtube.ts`) — auth state, broadcast, persistent stream,
+  weekly template, and the pre-flight issue list.
+- **OAuthService** — installed-app loopback flow on an ephemeral 127.0.0.1 port, `access_type:
+  offline` + `prompt: consent` so a refresh token is actually issued, CSRF `state` verified, a
+  3-minute timeout, and the loopback server closed on *every* path including denial and
+  rejection. Only the refresh token is persisted, through Electron `safeStorage`.
+- **YouTubeService** — reuses ONE persistent stream (matched by title) and only creates one when
+  absent, so **the RTMP key never changes and OBS stays configured**. That is the whole point:
+  re-pasting a key into OBS every Sunday is the many-clicks pain this feature removes.
+- **preflight.ts** — pure, exhaustively tested. Blocks on not-signed-in and no-bound-stream;
+  warns on missing CCLI streaming-licence metadata (the legal gate from
+  `docs/v2-notes/LEGAL_AND_CONTENT.md`) and on `public` privacy, since publishing a service
+  publicly by accident is not recoverable.
+- **Go Live settings UI** — template editor with a live `{date}` preview, channel readout so the
+  operator can confirm the right channel, and a genuinely useful not-configured state.
+
+### Security decisions
+
+- **The RTMP stream key is a credential** and has no field in `PersistentStream`. It never
+  crosses IPC, never reaches a log, and stays in OBS's own settings. A test asserts the rendered
+  Go Live screen contains no stream-key field.
+- The OAuth refresh token goes to `safeStorage` only. A test scans every logger call — message
+  and fields, JSON-serialised — for the refresh token, the client secret and the auth code.
+- The consent success page is a constant string; no query parameter is ever echoed back, so the
+  authorisation code cannot leak into the browser page.
+
+### Defect found and fixed during verification
+
+- **The Google session was never restored at startup.** `OAuthService` deliberately begins in
+  `signed-out` because its constructor cannot await the secrets store — but nothing called
+  `restore()`. With a valid `.env` and a perfectly good stored refresh token, the Go Live screen
+  would have read "signed out" on every launch and asked the operator to re-authorise every
+  Sunday. `main/index.ts` now calls `youtube.refresh()` fire-and-forget at startup, which
+  restores auth and populates the channel and stream. With an empty `.env` it short-circuits at
+  `not-configured` and makes no network call.
+  This is the same class of bug as Phase 2's never-started overlay server: every unit test
+  passed, and only wiring the thing into the running app exposed it.
+
+### Not verified (and this is the significant one)
+
+**No Google credentials exist on this machine and none will.** Every OAuth and API path is
+exercised against injected mocks with zero network access. What has NOT been proven: that the
+real `google.auth.OAuth2` round-trip works, that a real broadcast is created and bound, or that
+YouTube accepts the request shapes. The types are machine-checked against the installed
+`googleapis` 173.0.0, and the concrete `OAuth2Client` is verified assignable to the seam — but
+the end-to-end flow is unproven until someone completes the `HUMAN_TASKS.md` entry.
+
+Also unverified: `signOut()` revokes at Google best-effort and fire-and-forget, so if revocation
+fails the token is forgotten locally but may remain live at Google until revoked from the
+account page. Only the local delete is asserted.
+
+### Remaining delta
+
+Phases 5-10.

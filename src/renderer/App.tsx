@@ -35,14 +35,17 @@ import { useTranslation } from 'react-i18next'
 
 import type { AppVersions } from '@shared/ipc'
 import type { ObsConnectionState } from '@shared/obs'
+import type { YouTubeAuthState } from '@shared/youtube'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { CameraPanel } from './screens/CameraPanel'
 import { CameraSettings } from './screens/CameraSettings'
 import { ConnectionScreen } from './screens/ConnectionScreen'
+import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
+import { useYouTubeStore } from './store/youtubeStore'
 
 /** The console sections a tab can select. */
 const SECTIONS = [
@@ -51,13 +54,16 @@ const SECTIONS = [
   // last because it is a soundcheck task, not a service one.
   { id: 'camera', labelKey: 'app.section.camera' },
   { id: 'overlay', labelKey: 'app.section.overlay' },
+  // Go Live is a *setup* surface in Phase 4 — the GO LIVE button itself arrives in Phase 5 — so it
+  // sits after the two live surfaces and before the soundcheck one.
+  { id: 'goLive', labelKey: 'app.section.goLive' },
   { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
 
 /** Where a subsystem light gets its state from. */
-type SubsystemSource = 'obs' | 'overlay' | 'pending'
+type SubsystemSource = 'obs' | 'overlay' | 'youtube' | 'pending'
 
 /** One light in the subsystem strip. */
 interface SubsystemDescriptor {
@@ -71,7 +77,7 @@ const SUBSYSTEMS: readonly SubsystemDescriptor[] = [
   { id: 'obs', labelKey: 'app.subsystem.obs', icon: Radio, source: 'obs' },
   { id: 'overlay', labelKey: 'app.subsystem.overlay', icon: Layers, source: 'overlay' },
   { id: 'asr', labelKey: 'app.subsystem.asr', icon: Mic, source: 'pending' },
-  { id: 'youtube', labelKey: 'app.subsystem.youtube', icon: Cast, source: 'pending' },
+  { id: 'youtube', labelKey: 'app.subsystem.youtube', icon: Cast, source: 'youtube' },
   { id: 'recording', labelKey: 'app.subsystem.recording', icon: Disc, source: 'pending' },
 ]
 
@@ -142,11 +148,27 @@ interface LightState {
   readonly tone: string
 }
 
+/**
+ * Tints for the YouTube light.
+ *
+ * `not-configured` is muted, not red: with no Google credentials the subsystem is *off*, which is
+ * a resting state (Standing Rule 5), not a fault. Only a failed sign-in earns the panic colour.
+ */
+const YOUTUBE_TONES: Record<YouTubeAuthState, string> = {
+  'not-configured': 'text-text-muted',
+  'signed-out': 'text-text-muted',
+  authorizing: 'text-accent-2',
+  'signed-in': 'text-live',
+  'auth-error': 'text-panic',
+}
+
 function SubsystemStrip(): React.JSX.Element {
   const { t } = useTranslation()
   const obsState = useObsStore((state) => state.status.state)
   const serverInfo = useOverlayStore((state) => state.serverInfo)
   const overlayHydrated = useOverlayStore((state) => state.hydrated)
+  const youtubeState = useYouTubeStore((state) => state.status.auth.state)
+  const youtubeHydrated = useYouTubeStore((state) => state.hydrated)
 
   const overlayLight = ((): LightState => {
     if (!overlayHydrated) {
@@ -163,12 +185,25 @@ function SubsystemStrip(): React.JSX.Element {
     return { key: 'attached', text: t('overlay.subsystem.attached'), tone: 'text-live' }
   })()
 
+  const youtubeLight = ((): LightState => {
+    if (!youtubeHydrated) {
+      return { key: 'unknown', text: t('youtube.subsystem.unknown'), tone: 'text-text-muted' }
+    }
+    return {
+      key: youtubeState,
+      text: t(`youtube.subsystem.${youtubeState}`),
+      tone: YOUTUBE_TONES[youtubeState],
+    }
+  })()
+
   const lightFor = (source: SubsystemSource): LightState => {
     switch (source) {
       case 'obs':
         return { key: obsState, text: t(STATE_LABEL_KEYS[obsState]), tone: STATE_TONES[obsState] }
       case 'overlay':
         return overlayLight
+      case 'youtube':
+        return youtubeLight
       case 'pending':
         return { key: 'pending', text: t('app.phasePending'), tone: 'text-text-muted' }
     }
@@ -292,6 +327,21 @@ function useOverlaySubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/**
+ * Keep the YouTube store live for the whole session, for the same reason as the overlay one: the
+ * strip has to keep saying "not configured" (or "ready") whatever screen the operator is on.
+ */
+function useYouTubeSubsystem(): void {
+  const hydrate = useYouTubeStore((state) => state.hydrate)
+  const subscribe = useYouTubeStore((state) => state.subscribe)
+
+  useEffect(() => {
+    const unsubscribe = subscribe()
+    void hydrate()
+    return unsubscribe
+  }, [hydrate, subscribe])
+}
+
 /** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
 function SectionView({ section }: { section: SectionId }): React.JSX.Element {
   switch (section) {
@@ -301,6 +351,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <CameraPanel />
     case 'overlay':
       return <OverlayPanel />
+    case 'goLive':
+      return <GoLiveSettings />
     case 'cameraSetup':
       return <CameraSettings />
   }
@@ -333,6 +385,7 @@ export function App(): React.JSX.Element {
   const { t } = useTranslation()
   useDocumentLanguage()
   useOverlaySubsystem()
+  useYouTubeSubsystem()
 
   const [section, setSection] = useState<SectionId>('connection')
 

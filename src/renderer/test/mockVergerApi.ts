@@ -33,6 +33,15 @@ import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
 import type { Result } from '@shared/result'
 import { ErrorCode, err, ok } from '@shared/result'
+import type {
+  Broadcast,
+  BroadcastTemplate,
+  PersistentStream,
+  PreflightIssue,
+  YouTubeChannel,
+  YouTubeStatus,
+} from '@shared/youtube'
+import { defaultBroadcastTemplate, expandTitleTemplate } from '@shared/youtube'
 
 /** Every response the fake can return, one per `VergerApi` method. */
 export interface MockResponses {
@@ -73,6 +82,31 @@ export interface MockResponses {
    * independence guarantee rather than merely not violating it by accident.
    */
   cameraSelect: Result<CameraState> | null
+  /**
+   * What `youtube.getStatus` resolves with.
+   *
+   * The default is **not-configured**, because that is the state this app is genuinely in on a
+   * machine with no `GOOGLE_CLIENT_ID`. A test that wants a signed-in channel says so explicitly.
+   */
+  youtubeGetStatus: Result<YouTubeStatus>
+  /**
+   * What `youtube.signIn` resolves with.
+   *
+   * `null` — the default — means "behave like the real service": refuse with `NOT_CONFIGURED`
+   * when there is no OAuth client, and otherwise settle into `signed-in` on {@link MOCK_YOUTUBE_CHANNEL}.
+   * Signing in with no client id genuinely cannot work, and the fake refuses it rather than
+   * pretending, so a UI regression that enables the button shows up as a failing assertion.
+   */
+  youtubeSignIn: Result<YouTubeStatus> | null
+  /** `null` — the default — means "behave like the real service": drop back to `signed-out`. */
+  youtubeSignOut: Result<YouTubeStatus> | null
+  /** `null` — the default — means "behave like the real service": adopt the supplied template. */
+  youtubeSetTemplate: Result<YouTubeStatus> | null
+  /**
+   * `null` — the default — means "behave like the real service": expand the stored template,
+   * mint a broadcast, and bind the persistent stream.
+   */
+  youtubeCreateBroadcast: Result<Broadcast> | null
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -94,6 +128,13 @@ export interface MockCalls {
   readonly cameraGetState: number[]
   /** Every camera switch the UI asked for, in order. The decoupling assertions read this. */
   readonly cameraSelect: CameraSlot[]
+  readonly youtubeGetStatus: number[]
+  readonly youtubeSignIn: number[]
+  readonly youtubeSignOut: number[]
+  /** Every template the UI saved, in order. */
+  readonly youtubeSetTemplate: BroadcastTemplate[]
+  /** Every create-broadcast request, in order. */
+  readonly youtubeCreateBroadcast: { scheduledStartTime?: string }[]
 }
 
 export interface MockVergerApi {
@@ -240,6 +281,97 @@ export function emptyCameraState(): CameraState {
   return { currentProgramScene: null, activeSlot: null, availableTransitions: [] }
 }
 
+/**
+ * The channel the fake signs into.
+ *
+ * Given a deliberately distinctive title: the "connected as …" readout exists so an operator with
+ * three Google accounts can catch the wrong one, and a fixture called "Test Channel" would let a
+ * regression that renders the wrong channel slip through unnoticed.
+ */
+export const MOCK_YOUTUBE_CHANNEL: YouTubeChannel = {
+  id: 'UC_mock_channel',
+  title: '은혜교회 · Grace Church',
+  customUrl: '@grace-church-mock',
+}
+
+/** A second channel, for the "you are about to broadcast to the wrong account" case. */
+export const MOCK_OTHER_YOUTUBE_CHANNEL: YouTubeChannel = {
+  id: 'UC_mock_personal',
+  title: 'Hong Gil-dong (personal)',
+  customUrl: null,
+}
+
+/** The persistent ingest stream. Note there is no key field, here or anywhere else. */
+export function mockPersistentStream(overrides: Partial<PersistentStream> = {}): PersistentStream {
+  return {
+    id: 'mock-persistent-stream',
+    title: 'Verger persistent stream',
+    ingestAddress: 'rtmp://a.rtmp.youtube.com/live2',
+    health: 'noData',
+    ...overrides,
+  }
+}
+
+/** A created-but-not-live broadcast, the state Phase 4 can reach. */
+export function mockBroadcast(overrides: Partial<Broadcast> = {}): Broadcast {
+  return {
+    id: 'mock-broadcast-id',
+    title: 'Sunday Service — 2023-11-14',
+    privacy: 'unlisted',
+    scheduledStartTime: '2023-11-14T01:00:00.000Z',
+    lifecycle: 'ready',
+    boundStreamId: 'mock-persistent-stream',
+    watchUrl: 'https://www.youtube.com/watch?v=mock-broadcast-id',
+    ...overrides,
+  }
+}
+
+/** The CCLI streaming-licence gate from `docs/v2-notes/LEGAL_AND_CONTENT.md`, as an error. */
+export const MOCK_PREFLIGHT_CCLI: PreflightIssue = {
+  code: 'ccli-streaming-licence',
+  message:
+    'No CCLI Streaming Licence number has been recorded. Streaming worship music requires one.',
+  severity: 'error',
+}
+
+/** A missing-metadata warning: shown, but the operator's call. */
+export const MOCK_PREFLIGHT_METADATA: PreflightIssue = {
+  code: 'song-copyright-metadata',
+  message: 'One song in the set list has no author or CCLI song number recorded.',
+  severity: 'warning',
+}
+
+/**
+ * The state this machine is actually in: no `GOOGLE_CLIENT_ID`, no `GOOGLE_CLIENT_SECRET`.
+ *
+ * It is the fake's default on purpose, so every screen test exercises the degraded path unless it
+ * deliberately opts out.
+ */
+export function mockNotConfiguredYouTubeStatus(
+  overrides: Partial<YouTubeStatus> = {},
+): YouTubeStatus {
+  return {
+    auth: { state: 'not-configured', channel: null, lastError: null },
+    broadcast: null,
+    stream: null,
+    template: defaultBroadcastTemplate(),
+    preflight: [],
+    ...overrides,
+  }
+}
+
+/** Signed in, with a persistent stream waiting and nothing broadcast yet. */
+export function mockSignedInYouTubeStatus(overrides: Partial<YouTubeStatus> = {}): YouTubeStatus {
+  return {
+    auth: { state: 'signed-in', channel: MOCK_YOUTUBE_CHANNEL, lastError: null },
+    broadcast: null,
+    stream: mockPersistentStream(),
+    template: defaultBroadcastTemplate(),
+    preflight: [],
+    ...overrides,
+  }
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -257,6 +389,11 @@ function defaultResponses(): MockResponses {
     cameraSetConfig: null,
     cameraGetState: ok(mockCameraState()),
     cameraSelect: null,
+    youtubeGetStatus: ok(mockNotConfiguredYouTubeStatus()),
+    youtubeSignIn: null,
+    youtubeSignOut: null,
+    youtubeSetTemplate: null,
+    youtubeCreateBroadcast: null,
   }
 }
 
@@ -288,6 +425,11 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     cameraSetConfig: [],
     cameraGetState: [],
     cameraSelect: [],
+    youtubeGetStatus: [],
+    youtubeSignIn: [],
+    youtubeSignOut: [],
+    youtubeSetTemplate: [],
+    youtubeCreateBroadcast: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -305,6 +447,12 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let cameraSnapshot: CameraState = responses.cameraGetState.ok
     ? responses.cameraGetState.value
     : emptyCameraState()
+
+  // And the YouTube half, a third deliberately separate variable. Signing in must not touch the
+  // overlay or the cameras, and switching a camera must not touch this.
+  let youtubeSnapshot: YouTubeStatus = responses.youtubeGetStatus.ok
+    ? responses.youtubeGetStatus.value
+    : mockNotConfiguredYouTubeStatus()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -414,6 +562,79 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
         return Promise.resolve(ok(cameraSnapshot))
       },
       onState: (callback) => on(IpcEvent.cameraState, callback),
+    },
+    youtube: {
+      getStatus: () => {
+        calls.youtubeGetStatus.push(calls.youtubeGetStatus.length)
+        if (responses.youtubeGetStatus.ok) youtubeSnapshot = responses.youtubeGetStatus.value
+        return Promise.resolve(responses.youtubeGetStatus)
+      },
+      signIn: () => {
+        calls.youtubeSignIn.push(calls.youtubeSignIn.length)
+        const scripted = responses.youtubeSignIn
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        if (youtubeSnapshot.auth.state === 'not-configured') {
+          // There is no OAuth client to consent against. The UI is supposed to make this
+          // unreachable by disabling the button; the fake refuses it anyway.
+          return Promise.resolve(
+            err(ErrorCode.NOT_CONFIGURED, 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set'),
+          )
+        }
+
+        youtubeSnapshot = {
+          ...youtubeSnapshot,
+          auth: { state: 'signed-in', channel: MOCK_YOUTUBE_CHANNEL, lastError: null },
+          stream: youtubeSnapshot.stream ?? mockPersistentStream(),
+        }
+        return Promise.resolve(ok(youtubeSnapshot))
+      },
+      signOut: () => {
+        calls.youtubeSignOut.push(calls.youtubeSignOut.length)
+        const scripted = responses.youtubeSignOut
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        youtubeSnapshot = {
+          ...youtubeSnapshot,
+          auth:
+            youtubeSnapshot.auth.state === 'not-configured'
+              ? youtubeSnapshot.auth
+              : { state: 'signed-out', channel: null, lastError: null },
+        }
+        return Promise.resolve(ok(youtubeSnapshot))
+      },
+      setTemplate: (template) => {
+        calls.youtubeSetTemplate.push(template)
+        const scripted = responses.youtubeSetTemplate
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        youtubeSnapshot = { ...youtubeSnapshot, template }
+        return Promise.resolve(ok(youtubeSnapshot))
+      },
+      createBroadcast: (options) => {
+        calls.youtubeCreateBroadcast.push(options)
+        const scripted = responses.youtubeCreateBroadcast
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        if (youtubeSnapshot.auth.state !== 'signed-in') {
+          return Promise.resolve(err(ErrorCode.NOT_CONFIGURED, 'not signed in to YouTube'))
+        }
+
+        const scheduledStartTime = options.scheduledStartTime ?? new Date(MOCK_NOW).toISOString()
+        const stream = youtubeSnapshot.stream ?? mockPersistentStream()
+        const broadcast = mockBroadcast({
+          title: expandTitleTemplate(
+            youtubeSnapshot.template.titleTemplate,
+            new Date(scheduledStartTime),
+          ),
+          privacy: youtubeSnapshot.template.privacy,
+          scheduledStartTime,
+          boundStreamId: stream.id,
+        })
+        youtubeSnapshot = { ...youtubeSnapshot, broadcast, stream }
+        return Promise.resolve(ok(broadcast))
+      },
+      onStatus: (callback) => on(IpcEvent.youtubeStatus, callback),
     },
     config: {
       get: () => {

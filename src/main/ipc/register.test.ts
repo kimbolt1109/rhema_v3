@@ -24,6 +24,8 @@ import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { err, ok } from '@shared/result'
 import type { Result } from '@shared/result'
+import { defaultBroadcastTemplate } from '@shared/youtube'
+import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
 vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp/verger-test' },
@@ -60,6 +62,21 @@ vi.mock('@main/camera', () => ({
   }
 }))
 
+/**
+ * The YouTube singleton is mocked for a stronger reason than the other two.
+ *
+ * There are no Google credentials on this machine and there never will be, and **no test in this
+ * repo may make a network call**. The real `getYouTubeService()` would construct an OAuth client
+ * and a `googleapis` handle; making it throw here guarantees that neither is ever built during
+ * these tests, and lets one test below assert what the five youtube channels answer when the
+ * subsystem could not be constructed at all — which is also exactly what a fresh checkout does.
+ */
+vi.mock('@main/youtube', () => ({
+  getYouTubeService: () => {
+    throw new Error('the YouTube service singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
@@ -70,7 +87,8 @@ import {
   type OverlayServerLike,
   type SecretsStoreLike,
   type WebContentsLike,
-  type WindowLike
+  type WindowLike,
+  type YouTubeServiceLike
 } from '@main/ipc/register'
 
 // ---------------------------------------------------------------------------
@@ -372,6 +390,150 @@ function createFakeCameraService(): FakeCameraService {
   return service
 }
 
+// ---------------------------------------------------------------------------
+// YouTube fake (BLUEPRINT.md §5, Part A)
+//
+// Entirely in-memory. It never constructs an OAuth client, never imports `googleapis` and
+// never opens a socket — the point of the structural seam is that these tests can prove the
+// IPC contract with zero credentials and zero network, which is the only environment this
+// repo will ever be built in.
+// ---------------------------------------------------------------------------
+
+const SIGNED_OUT_STATUS: YouTubeStatus = {
+  auth: { state: 'signed-out', channel: null, lastError: null },
+  broadcast: null,
+  stream: null,
+  template: defaultBroadcastTemplate(),
+  preflight: [
+    {
+      code: 'ccli-streaming-licence',
+      // docs/v2-notes/LEGAL_AND_CONTENT.md — the streaming-licence gate is a legal
+      // requirement, and it surfaces as a blocking pre-flight issue rather than as a nag.
+      message: 'confirm the CCLI streaming licence covers this service',
+      severity: 'error'
+    }
+  ]
+}
+
+/** What the fake reports once signed in. Still no token field anywhere — the type has none. */
+const SIGNED_IN_STATUS: YouTubeStatus = {
+  auth: {
+    state: 'signed-in',
+    channel: { id: 'UC_test', title: 'Test Church', customUrl: '@testchurch' },
+    lastError: null
+  },
+  broadcast: null,
+  stream: {
+    id: 'stream-persistent',
+    title: 'Verger persistent stream',
+    ingestAddress: 'rtmp://a.rtmp.youtube.com/live2',
+    health: 'noData'
+  },
+  template: defaultBroadcastTemplate(),
+  preflight: []
+}
+
+const CREATED_BROADCAST: Broadcast = {
+  id: 'broadcast-1',
+  title: 'Sunday Service — 2026-07-26',
+  privacy: 'unlisted',
+  scheduledStartTime: '2026-07-26T01:00:00.000Z',
+  lifecycle: 'ready',
+  boundStreamId: 'stream-persistent',
+  watchUrl: 'https://www.youtube.com/watch?v=broadcast-1'
+}
+
+interface FakeYouTubeService extends YouTubeServiceLike {
+  emitStatus(status: YouTubeStatus): void
+  /** Every template that actually reached the service. Must stay empty for rejected input. */
+  readonly templateWrites: BroadcastTemplate[]
+  /** Every create request that actually reached the service. Same rule. */
+  readonly createCalls: Array<{ scheduledStartTime?: string }>
+  readonly signInCalls: () => number
+  readonly signOutCalls: () => number
+  readonly statusUnsubscribed: () => number
+}
+
+function createFakeYouTubeService(): FakeYouTubeService {
+  let listener: ((status: YouTubeStatus) => void) | null = null
+  let unsubscribes = 0
+  let signIns = 0
+  let signOuts = 0
+  let status: YouTubeStatus = SIGNED_OUT_STATUS
+  const templateWrites: BroadcastTemplate[] = []
+  const createCalls: Array<{ scheduledStartTime?: string }> = []
+
+  const service: FakeYouTubeService = {
+    templateWrites,
+    createCalls,
+    signInCalls: () => signIns,
+    signOutCalls: () => signOuts,
+    statusUnsubscribed: () => unsubscribes,
+
+    // A bare value rather than a Result, deliberately — `resolveCall` normalises both, and
+    // mixing the shapes across this fake's methods is what keeps that honest.
+    getStatus: () => status,
+    signIn: () => {
+      signIns += 1
+      status = SIGNED_IN_STATUS
+      listener?.(status)
+      return ok(status)
+    },
+    signOut: () => {
+      signOuts += 1
+      status = SIGNED_OUT_STATUS
+      listener?.(status)
+      return ok(status)
+    },
+    setTemplate: (template) => {
+      templateWrites.push(template)
+      status = { ...status, template }
+      return ok(status)
+    },
+    createBroadcast: (options) => {
+      createCalls.push(options)
+      return ok(CREATED_BROADCAST)
+    },
+    onStatus: (next) => {
+      listener = next
+      return () => {
+        unsubscribes += 1
+        listener = null
+      }
+    },
+
+    emitStatus: (next) => {
+      listener?.(next)
+    }
+  }
+  return service
+}
+
+/**
+ * Anything that smells like a credential.
+ *
+ * Used to assert, structurally rather than by inspection, that nothing crossing the youtube
+ * channels carries an OAuth token or an RTMP stream key. `ingestAddress` is deliberately *not*
+ * matched: the ingest URL is public and is not a secret on its own — the key that goes with it
+ * is, and `PersistentStream` has no field for one.
+ */
+const CREDENTIAL_KEY_PATTERN = /key|token|secret|password|credential|bearer|refresh/i
+
+/** Every property name appearing anywhere in a JSON-serialisable value. */
+function collectKeys(value: unknown, into: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const entry of value) collectKeys(entry, into)
+    return into
+  }
+  if (typeof value === 'object' && value !== null) {
+    for (const [name, nested] of Object.entries(value)) {
+      into.push(name)
+      collectKeys(nested, into)
+    }
+  }
+  return into
+}
+
 /** Standing Rule 4: no verse text is ever authored in this repo, fixtures included. */
 const SCRIPTURE_TEXT_PLACEHOLDER = 'VERSE TEXT PLACEHOLDER'
 
@@ -410,6 +572,7 @@ interface Harness {
   readonly obs: FakeObsClient
   readonly overlay: FakeOverlayServer
   readonly camera: FakeCameraService
+  readonly youtube: FakeYouTubeService
   readonly windows: FakeWindow[]
   readonly secrets: SecretsStoreLike & { readonly writes: Array<[string, string]> }
   readonly dispose: () => void
@@ -422,6 +585,7 @@ function setup(options: { windows?: number } = {}): Harness {
   const obs = createFakeObsClient()
   const overlay = createFakeOverlayServer()
   const camera = createFakeCameraService()
+  const youtube = createFakeYouTubeService()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
     createFakeWindow()
   )
@@ -440,6 +604,7 @@ function setup(options: { windows?: number } = {}): Harness {
     obs,
     overlay,
     camera,
+    youtube,
     config: CONFIG,
     logger: createSilentLogger(),
     ipcMain: ipc,
@@ -454,6 +619,7 @@ function setup(options: { windows?: number } = {}): Harness {
     obs,
     overlay,
     camera,
+    youtube,
     windows,
     secrets,
     dispose,
@@ -693,7 +859,7 @@ describe('registerIpc', () => {
     ).toBe('INVALID_ARG')
   })
 
-  it('dispose removes every handler and unsubscribes from all three subsystems', () => {
+  it('dispose removes every handler and unsubscribes from all four subsystems', () => {
     expect(harness.ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
 
     harness.dispose()
@@ -707,6 +873,10 @@ describe('registerIpc', () => {
     // The camera subscription is disposed on exactly the same path — a listener left behind
     // here would keep pushing scene changes into a dead bridge for the rest of the process.
     expect(harness.camera.stateUnsubscribed()).toBe(1)
+    // Same for YouTube. Its status subscription is the one most likely to be backed by a poll
+    // timer, so a listener surviving dispose would keep pushing at a dead bridge — and would
+    // keep talking to Google — for the rest of the process.
+    expect(harness.youtube.statusUnsubscribed()).toBe(1)
 
     // Idempotent — a second dispose must not double-unsubscribe or re-remove.
     harness.dispose()
@@ -714,6 +884,7 @@ describe('registerIpc', () => {
     expect(harness.obs.statusUnsubscribed()).toBe(1)
     expect(harness.overlay.stateUnsubscribed()).toBe(1)
     expect(harness.camera.stateUnsubscribed()).toBe(1)
+    expect(harness.youtube.statusUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -725,6 +896,7 @@ describe('registerIpc', () => {
       activeSlot: 'wide',
       availableTransitions: AVAILABLE_TRANSITIONS
     })
+    harness.youtube.emitStatus(SIGNED_IN_STATUS)
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -1228,6 +1400,391 @@ describe('registerIpc', () => {
       expect(() => {
         dispose()
       }).not.toThrow()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // YouTube (BLUEPRINT.md §5, Part A)
+  //
+  // Every test here runs against the in-memory fake. Nothing constructs an OAuth client,
+  // nothing imports `googleapis`, and nothing resolves a hostname — there are no Google
+  // credentials on this machine and there never will be, so "works with a mocked client and
+  // zero network" is the only definition of working available.
+  // -------------------------------------------------------------------------
+
+  describe('youtube channels', () => {
+    it('returns the whole Go Live snapshot from youtubeGetStatus', async () => {
+      const result = (await harness.invoke(IpcChannel.youtubeGetStatus)) as Result<YouTubeStatus>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(SIGNED_OUT_STATUS)
+      // The CCLI streaming-licence gate rides along as a blocking pre-flight issue rather than
+      // as something the renderer has to know to ask for separately.
+      expect(result.value.preflight).toHaveLength(1)
+      expect(result.value.preflight[0]?.severity).toBe('error')
+    })
+
+    it('signs in and out, resolving with a status and never with a credential', async () => {
+      const signedIn = (await harness.invoke(IpcChannel.youtubeSignIn)) as Result<YouTubeStatus>
+      expect(signedIn.ok).toBe(true)
+      if (!signedIn.ok) return
+      expect(harness.youtube.signInCalls()).toBe(1)
+      expect(signedIn.value.auth.state).toBe('signed-in')
+      expect(signedIn.value.auth.channel?.title).toBe('Test Church')
+
+      const signedOut = (await harness.invoke(IpcChannel.youtubeSignOut)) as Result<YouTubeStatus>
+      expect(signedOut.ok).toBe(true)
+      if (!signedOut.ok) return
+      expect(harness.youtube.signOutCalls()).toBe(1)
+      expect(signedOut.value.auth.state).toBe('signed-out')
+    })
+
+    /**
+     * The security assertion of this phase, made structurally rather than by eyeball.
+     *
+     * Two credentials must never cross this boundary: the OAuth refresh token (it lives in
+     * `safeStorage`) and the RTMP stream key (it grants anyone the ability to broadcast to the
+     * channel, and it lives in OBS's own settings). Rather than assert "the token is absent" —
+     * which passes trivially for a payload that never had one — this walks every property name
+     * in what actually crossed and refuses anything credential-shaped.
+     */
+    it('never carries a token or a stream key across any youtube channel', async () => {
+      const responses: unknown[] = [
+        await harness.invoke(IpcChannel.youtubeSignIn),
+        await harness.invoke(IpcChannel.youtubeGetStatus),
+        await harness.invoke(IpcChannel.youtubeSetTemplate, defaultBroadcastTemplate()),
+        await harness.invoke(IpcChannel.youtubeCreateBroadcast, {}),
+        await harness.invoke(IpcChannel.youtubeSignOut)
+      ]
+
+      for (const response of responses) {
+        for (const name of collectKeys(response)) {
+          expect(name).not.toMatch(CREDENTIAL_KEY_PATTERN)
+        }
+      }
+
+      // The scan is not passing merely because the payloads were empty: the signed-in status
+      // did carry the persistent stream, whose public ingest *address* came through intact.
+      // What it has no field for — and therefore could not have carried — is the key.
+      const signedIn = responses[0] as Result<YouTubeStatus>
+      expect(signedIn.ok).toBe(true)
+      if (!signedIn.ok) return
+      expect(signedIn.value.stream?.ingestAddress).toBe('rtmp://a.rtmp.youtube.com/live2')
+      expect(Object.keys(signedIn.value.stream ?? {})).toEqual([
+        'id',
+        'title',
+        'ingestAddress',
+        'health'
+      ])
+    })
+
+    it('never carries a token or a stream key on the youtubeStatus event', () => {
+      const many = setup({ windows: 2 })
+      many.youtube.emitStatus(SIGNED_IN_STATUS)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([
+          { channel: IpcEvent.youtubeStatus, payload: SIGNED_IN_STATUS }
+        ])
+        const payload = window.sent[0]?.payload
+        for (const name of collectKeys(payload)) {
+          expect(name).not.toMatch(CREDENTIAL_KEY_PATTERN)
+        }
+      }
+    })
+
+    it('fans youtube status changes out to every window', async () => {
+      const many = setup({ windows: 3 })
+
+      // Not a synthetic emit: signing in is what actually moves the status, and the fan-out has
+      // to follow it without the renderer asking.
+      const result = (await (async (): Promise<unknown> => {
+        const handler = many.ipc.handlers.get(IpcChannel.youtubeSignIn)
+        if (handler === undefined) throw new Error('no youtubeSignIn handler')
+        const first = many.windows[0]
+        if (first === undefined) throw new Error('the harness needs a window')
+        return handler(eventFrom(first), undefined)
+      })()) as Result<YouTubeStatus>
+      expect(result.ok).toBe(true)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([
+          { channel: IpcEvent.youtubeStatus, payload: SIGNED_IN_STATUS }
+        ])
+      }
+    })
+
+    it('stores a well-formed template and reports it back on the status', async () => {
+      const template: BroadcastTemplate = {
+        titleTemplate: 'Sunday Service — {date}',
+        description: 'Live from the sanctuary.',
+        privacy: 'unlisted',
+        thumbnailPath: null,
+        timeZone: 'Asia/Seoul'
+      }
+
+      const result = (await harness.invoke(
+        IpcChannel.youtubeSetTemplate,
+        template
+      )) as Result<YouTubeStatus>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(harness.youtube.templateWrites).toEqual([template])
+      expect(result.value.template).toEqual(template)
+    })
+
+    it('rejects a malformed template with Err(INVALID_ARG) and never calls the service', async () => {
+      const rejected: unknown[] = [
+        // Not an object.
+        'Sunday Service',
+        undefined,
+        // Empty title — a blank broadcast title is unusable and YouTube would refuse it anyway.
+        { ...defaultBroadcastTemplate(), titleTemplate: '' },
+        // Over the 100-character title bound.
+        { ...defaultBroadcastTemplate(), titleTemplate: 'x'.repeat(101) },
+        // A privacy value outside the contract's three.
+        { ...defaultBroadcastTemplate(), privacy: 'semi-public' },
+        // `thumbnailPath` must be a string or null, never a number.
+        { ...defaultBroadcastTemplate(), thumbnailPath: 7 },
+        // An empty time zone — `{date}` and the scheduled start are both resolved through it.
+        { ...defaultBroadcastTemplate(), timeZone: '' },
+        // Missing fields entirely.
+        { titleTemplate: 'Sunday Service' }
+      ]
+
+      for (const arg of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.youtubeSetTemplate, arg)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      // The load-bearing assertion: a template that failed validation must never have reached
+      // the service, because the next thing the service does is send it to Google.
+      expect(harness.youtube.templateWrites).toHaveLength(0)
+
+      // And nothing moved — the stored template is still the default.
+      const status = (await harness.invoke(IpcChannel.youtubeGetStatus)) as Result<YouTubeStatus>
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.value.template).toEqual(defaultBroadcastTemplate())
+    })
+
+    it('creates a broadcast, omitting an absent scheduledStartTime rather than sending undefined', async () => {
+      const result = (await harness.invoke(
+        IpcChannel.youtubeCreateBroadcast,
+        {}
+      )) as Result<Broadcast>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(CREATED_BROADCAST)
+      // `exactOptionalPropertyTypes`: the key is omitted, not set to `undefined`.
+      expect(harness.youtube.createCalls).toEqual([{}])
+      expect(Object.hasOwn(harness.youtube.createCalls[0] ?? {}, 'scheduledStartTime')).toBe(false)
+
+      // Part A stops at create-and-bind. The broadcast comes back `ready` with a bound stream,
+      // never `live` — the transition is Phase 5's, and nothing on this channel can drive it.
+      expect(result.value.lifecycle).toBe('ready')
+      expect(result.value.boundStreamId).toBe('stream-persistent')
+    })
+
+    it('passes a supplied scheduledStartTime through', async () => {
+      const result = (await harness.invoke(IpcChannel.youtubeCreateBroadcast, {
+        scheduledStartTime: '2026-07-26T01:00:00.000Z'
+      })) as Result<Broadcast>
+
+      expect(result.ok).toBe(true)
+      expect(harness.youtube.createCalls).toEqual([
+        { scheduledStartTime: '2026-07-26T01:00:00.000Z' }
+      ])
+    })
+
+    it('rejects a malformed create request with Err(INVALID_ARG) and never calls the service', async () => {
+      const rejected: unknown[] = [
+        'now',
+        undefined,
+        { scheduledStartTime: 1_700_000_000 },
+        { scheduledStartTime: null },
+        { scheduledStartTime: '' },
+        { scheduledStartTime: 'x'.repeat(65) }
+      ]
+
+      for (const arg of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.youtubeCreateBroadcast, arg)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      expect(harness.youtube.createCalls).toHaveLength(0)
+    })
+
+    it('refuses a payload on the three no-argument youtube channels', async () => {
+      for (const channel of [
+        IpcChannel.youtubeGetStatus,
+        IpcChannel.youtubeSignIn,
+        IpcChannel.youtubeSignOut
+      ]) {
+        expect(expectErr(await harness.invoke(channel, { evil: true })).code).toBe('INVALID_ARG')
+      }
+      expect(harness.youtube.signInCalls()).toBe(0)
+      expect(harness.youtube.signOutCalls()).toBe(0)
+    })
+
+    /**
+     * The empty-`.env` case, which is the state of every fresh checkout and of this build
+     * machine. It must be a `Result` the renderer can render, not a rejection and not a crash.
+     */
+    it('degrades to NOT_CONFIGURED when there is no YouTube service at all', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      const settled = [
+        await call(IpcChannel.youtubeGetStatus),
+        await call(IpcChannel.youtubeSignIn),
+        await call(IpcChannel.youtubeSignOut),
+        await call(IpcChannel.youtubeSetTemplate, defaultBroadcastTemplate()),
+        await call(IpcChannel.youtubeCreateBroadcast, {})
+      ]
+
+      for (const response of settled) {
+        const error = expectErr(response)
+        expect(error.code).toBe('NOT_CONFIGURED')
+        // Renderable: the operator is told which two keys are missing, not shown a stack.
+        expect(error.message).toContain('YouTube')
+        expect(error.detail).toContain('GOOGLE_CLIENT_ID')
+      }
+    })
+
+    it('survives a YouTube singleton that cannot be constructed', async () => {
+      // `youtube` is omitted entirely, so `registerIpc` falls back to `getYouTubeService()` —
+      // which the module mock at the top of this file makes throw. No OAuth client is ever
+      // built, and no network call is ever attempted.
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      const handler = ipc.handlers.get(IpcChannel.youtubeGetStatus)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      expect(expectErr(await handler(eventFrom(window), undefined)).code).toBe('NOT_CONFIGURED')
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates a YouTube service whose subscription returns nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: YouTubeServiceLike = {
+        getStatus: () => SIGNED_OUT_STATUS,
+        signIn: () => SIGNED_OUT_STATUS,
+        signOut: () => SIGNED_OUT_STATUS,
+        setTemplate: () => SIGNED_OUT_STATUS,
+        createBroadcast: () => CREATED_BROADCAST,
+        onStatus: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('converts a throwing YouTube service into Err(INTERNAL) instead of rejecting', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const exploding: YouTubeServiceLike = {
+        getStatus: () => {
+          throw new Error('the OAuth client exploded')
+        },
+        signIn: () => SIGNED_OUT_STATUS,
+        signOut: () => SIGNED_OUT_STATUS,
+        setTemplate: () => SIGNED_OUT_STATUS,
+        createBroadcast: () => CREATED_BROADCAST,
+        onStatus: () => undefined
+      }
+
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: exploding,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.youtubeGetStatus)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      const settled = await Promise.resolve(handler(eventFrom(window), undefined))
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      expect(expectErr(settled.value).code).toBe('INTERNAL')
+    })
+
+    it('leaves the camera and overlay untouched', async () => {
+      const shown = (await harness.invoke(
+        IpcChannel.overlaySend,
+        SHOW_LOWER_THIRD
+      )) as Result<OverlayState>
+      expect(shown.ok).toBe(true)
+
+      const selected = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'cam2'
+      })) as Result<CameraState>
+      expect(selected.ok).toBe(true)
+
+      expect((await harness.invoke(IpcChannel.youtubeSignIn) as Result<unknown>).ok).toBe(true)
+      expect(
+        ((await harness.invoke(IpcChannel.youtubeCreateBroadcast, {})) as Result<unknown>).ok
+      ).toBe(true)
+
+      // Creating a broadcast is the single most side-effect-heavy verb in Part A, and it still
+      // did not send an overlay command or move a camera.
+      expect(harness.overlay.sent).toEqual([SHOW_LOWER_THIRD])
+      expect(harness.camera.selected).toEqual(['cam2'])
     })
   })
 

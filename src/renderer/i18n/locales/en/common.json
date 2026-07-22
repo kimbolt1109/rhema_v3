@@ -19,6 +19,7 @@
       "connection": "Connection",
       "camera": "Cameras",
       "overlay": "Overlay",
+      "goLive": "Go Live",
       "cameraSetup": "Camera setup"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
@@ -231,6 +232,138 @@
       },
       "noTransitions": "OBS has not reported any transitions, so only \"use whatever OBS is set to\" is offered."
     }
+  },
+
+  "youtube": {
+    "title": "Go Live settings",
+    "subtitle": "Everything the GO LIVE button will use. Nothing on this screen broadcasts anything: creating a broadcast only schedules it, and going live is a separate, later step.",
+    "state": {
+      "not-configured": "Not configured",
+      "signed-out": "Signed out",
+      "authorizing": "Waiting for Google",
+      "signed-in": "Signed in",
+      "auth-error": "Sign-in failed"
+    },
+    "subsystem": {
+      "unknown": "Checking",
+      "not-configured": "Not configured",
+      "signed-out": "Signed out",
+      "authorizing": "Signing in",
+      "signed-in": "Ready",
+      "auth-error": "Sign-in failed"
+    },
+    "notConfigured": {
+      "title": "YouTube is not set up yet",
+      "body": "Verger talks to YouTube through your own Google OAuth client, never a shared one. Until GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are present in .env there is nothing to sign in to, so every control on this screen is switched off.",
+      "stepsLabel": "How to set it up",
+      "step1": "Create a project in the Google Cloud console at console.cloud.google.com.",
+      "step2": "In that project, enable the YouTube Data API v3.",
+      "step3": "Under APIs & Services → Credentials, create an OAuth client ID with application type \"Desktop app\".",
+      "step4": "Copy the client ID and client secret into .env as GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET — the key names are already listed in .env.example — then restart Verger.",
+      "humanTasks": "The full checklist, including the CCLI Streaming Licence number and the persistent stream key that belongs in OBS, is in HUMAN_TASKS.md at the root of this project.",
+      "safe": "Nothing else is affected. OBS keeps streaming and recording, and every other screen works normally — only YouTube control is unavailable."
+    },
+    "bridgeUnavailable": {
+      "title": "The privileged bridge did not load",
+      "body": "Verger cannot reach its own main process, so YouTube control is unavailable. Restart the app; if this persists, the log file will say why."
+    },
+    "account": {
+      "title": "Google account",
+      "stateLabel": "Sign-in",
+      "connectedAsLabel": "Connected as",
+      "channelUnknown": "Signed in, but YouTube has not named a channel yet.",
+      "confirmChannel": "Check this is the right channel before you go live. Google signs you in as whichever account the browser was already using, and a service published to somebody's personal channel cannot be quietly undone.",
+      "signIn": "Sign in with Google",
+      "signOut": "Sign out",
+      "signingIn": "Waiting for Google…",
+      "signInHint": "Opens your browser once. Verger keeps only a refresh token, encrypted by the operating system, so later Sundays are silent.",
+      "signedOutHint": "Verger has forgotten the stored token. Nothing can be published until you sign in again.",
+      "authError": "Sign-in failed"
+    },
+    "preflight": {
+      "title": "Pre-flight",
+      "listLabel": "Pre-flight problems",
+      "allClear": "No pre-flight problems. Nothing is blocking a broadcast.",
+      "severity": {
+        "error": "Blocks going live",
+        "warning": "Warning"
+      },
+      "blocksNote": "Anything marked \"blocks going live\" has to be fixed before the GO LIVE button will run. Warnings are shown and left to your judgement.",
+      "ccliNote": "The CCLI Streaming Licence check is a legal gate, not a reminder: streaming worship music needs a Streaming Licence in addition to the ordinary church copyright licence, and the required attribution has to go out with the stream."
+    },
+    "template": {
+      "title": "Weekly template",
+      "formLabel": "Broadcast template",
+      "titleLabel": "Title template",
+      "titleHint": "Write {date} where the date should go — it is replaced when the broadcast is created. Everything else is used exactly as typed.",
+      "previewLabel": "Title preview",
+      "previewEmpty": "Type a title template to see how it will read.",
+      "descriptionLabel": "Description",
+      "descriptionHint": "Shown under the video on YouTube. Service times and any required attribution belong here.",
+      "privacyLabel": "Privacy",
+      "privacyOption": {
+        "public": "Public — listed and searchable",
+        "unlisted": "Unlisted — only people with the link",
+        "private": "Private — only this account"
+      },
+      "privacyHint": "Unlisted is the usual choice for a service: anyone you send the link to can watch, but it is not listed or searchable.",
+      "scheduledLabel": "Scheduled start",
+      "scheduledHint": "Your local time. Leave it blank to schedule the broadcast for now.",
+      "thumbnailLabel": "Thumbnail image",
+      "thumbnailHint": "Full path to a JPEG or PNG on this machine. Leave blank to let YouTube pick a frame.",
+      "timeZoneLabel": "Time zone",
+      "timeZoneHint": "IANA name, e.g. Asia/Seoul. Used to work out which day {date} means.",
+      "save": "Save template",
+      "saved": "Template saved.",
+      "invalid": "That template was rejected. A title is required and must be 100 characters or fewer."
+    },
+    "publicWarning": {
+      "title": "This broadcast will be public",
+      "body": "A public broadcast is listed, searchable, and visible to anyone the moment it starts. Publishing a service by mistake cannot be taken back — copies are already out. Choose Unlisted unless you genuinely mean to publish."
+    },
+    "broadcast": {
+      "title": "This week's broadcast",
+      "none": "No broadcast has been created yet.",
+      "create": "Create the broadcast",
+      "creating": "Creating…",
+      "createHint": "Creates the scheduled broadcast on YouTube and binds the persistent stream to it. It does not start streaming — nothing goes out until GO LIVE.",
+      "titleLabel": "Title",
+      "privacyLabel": "Privacy",
+      "scheduledLabel": "Scheduled for",
+      "lifecycleLabel": "Status",
+      "watchUrlLabel": "Watch URL",
+      "boundLabel": "Bound stream",
+      "notBound": "Not bound yet",
+      "lifecycle": {
+        "created": "Created",
+        "ready": "Ready",
+        "testing": "Testing",
+        "live": "Live",
+        "complete": "Finished",
+        "revoked": "Revoked"
+      }
+    },
+    "stream": {
+      "title": "Persistent stream",
+      "none": "No persistent stream yet. Verger creates one the first time it makes a broadcast, then reuses it every week.",
+      "explain": "One ingest stream is reused forever so the settings in OBS never change and never need re-pasting. Only the broadcast is new each week.",
+      "nameLabel": "Name",
+      "ingestLabel": "Ingest address",
+      "ingestUnknown": "Not reported",
+      "healthLabel": "Health",
+      "health": {
+        "good": "Good",
+        "ok": "OK",
+        "bad": "Bad",
+        "noData": "No data yet — OBS is not pushing"
+      },
+      "keyNote": "The ingest credential is deliberately not shown here and never leaves the main process — it would let anyone broadcast to this channel. It lives in OBS's own stream settings and nowhere else."
+    },
+    "quota": {
+      "title": "API quota",
+      "body": "YouTube's Data API has a daily quota. Running a handful of services a day sits comfortably inside it, so this is not something you need to watch."
+    },
+    "lastError": "Last error"
   },
 
   "holdButton": {

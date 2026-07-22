@@ -2,7 +2,7 @@
  * Main-process IPC registration — the trusted half of the process bridge.
  *
  * This module owns exactly one `ipcMain.handle` per `IpcChannel` value and the fan-out of
- * OBS, overlay and camera events to every open window. `registerIpc` returns a disposer; calling it
+ * OBS, overlay, camera and YouTube events to every open window. `registerIpc` returns a disposer; calling it
  * removes every handler and every subscription, so a hot reload or a quit cannot leave a
  * second generation of handlers wired to a dead client.
  *
@@ -50,6 +50,13 @@
  *    can name the other's types. Switching cameras therefore cannot disturb a lower-third, and
  *    showing a lower-third cannot disturb the camera — asserted in `register.test.ts` rather
  *    than asserted in this comment.
+ *  - **BLUEPRINT.md §5 — no credential crosses this boundary.** The five `youtube:*` handlers
+ *    return `YouTubeStatus` and `Broadcast`, and neither type has a field for an OAuth token or
+ *    for the RTMP stream key. The key in particular is a credential that grants anyone the
+ *    ability to broadcast to the channel: it lives in OBS's own settings, it is absent from
+ *    `PersistentStream` by design, and no handler here can produce one. Nothing in this file logs
+ *    an authorization code or a token either — the OAuth exchange happens entirely inside
+ *    `src/main/youtube`, behind the `YouTubeServiceLike` seam.
  */
 
 import { BrowserWindow, app, ipcMain } from 'electron'
@@ -59,6 +66,7 @@ import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getOverlayServer } from '@main/overlay'
 import { getSecretsStore } from '@main/secrets/secrets'
+import { getYouTubeService } from '@main/youtube'
 import { CAMERA_SLOTS, cameraConfigSchema } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
@@ -81,6 +89,8 @@ import { overlayCommandSchema } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
+import { broadcastTemplateSchema, createBroadcastSchema } from '@shared/youtube'
+import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
 // ---------------------------------------------------------------------------
 // Structural seams
@@ -202,6 +212,42 @@ export interface CameraServiceLike {
   onState(listener: (state: CameraState) => void): Unsubscribe | void
 }
 
+/**
+ * The minimum this module needs from the YouTube service (`src/main/youtube`).
+ *
+ * Structural, like every other seam here, and for one extra reason: **no test in this repo may
+ * touch the network**, and there are no Google credentials on the build machine. A concrete
+ * import would drag `googleapis` and an OAuth client into every test that so much as registers
+ * an IPC handler. Six methods against plain objects instead.
+ *
+ * Read the *return* types as the security contract:
+ *
+ *  - Everything auth-shaped resolves with `YouTubeStatus`, which contains `YouTubeAuthStatus`
+ *    (state, channel, lastError) and nothing else. There is no field on it for an access token,
+ *    a refresh token or an authorization code, so no handler below can return one by accident.
+ *  - `YouTubeStatus.stream` is a `PersistentStream`, whose type deliberately has **no stream-key
+ *    field**. The RTMP key is a credential — it grants anyone the ability to broadcast to the
+ *    channel — and it stays in OBS's own settings. Widening this seam to carry one would mean
+ *    editing `@shared/youtube` first, which is the point.
+ *
+ * Note also what is absent from the verbs: no `startStream`, no `transition`, no `goLive`. Part A
+ * of BLUEPRINT.md §5 is sign-in plus create-and-bind; the orchestration is Phase 5's, and a seam
+ * that cannot name those operations cannot accidentally acquire them here.
+ */
+export interface YouTubeServiceLike {
+  /** The whole Go Live screen in one struct, including the pre-flight issues. Never throws. */
+  getStatus(): ClientCall<YouTubeStatus>
+  /** Run (or re-run) the loopback OAuth consent flow. Resolves with the resulting status. */
+  signIn(): ClientCall<YouTubeStatus>
+  /** Forget the stored refresh token. */
+  signOut(): ClientCall<YouTubeStatus>
+  /** Persist the weekly template and resolve with the resulting status. */
+  setTemplate(template: BroadcastTemplate): ClientCall<YouTubeStatus>
+  /** Create the weekly broadcast and bind the persistent stream. */
+  createBroadcast(options: { scheduledStartTime?: string }): ClientCall<Broadcast>
+  onStatus(listener: (status: YouTubeStatus) => void): Unsubscribe | void
+}
+
 /** The slice of `SecretsStore` used by `obsSetConfig`. */
 export interface SecretsStoreLike {
   setSecret(key: string, value: string): Result<void>
@@ -241,6 +287,18 @@ export interface RegisterIpcDeps {
    * Pass `null` to say "there is no camera service" explicitly and skip the default lookup.
    */
   readonly camera?: CameraServiceLike | null
+  /**
+   * The YouTube service.
+   *
+   * Optional for the same compile-time reason `overlay` and `camera` are: `src/main/index.ts`
+   * calls `registerIpc({ config, logger, obs, overlay })` and a required sixth key would fail to
+   * compile. Defaults to the process-wide singleton from `@main/youtube`; if that cannot be
+   * resolved — no Google credentials in `.env` is the *ordinary* case, not an exceptional one —
+   * the five youtube handlers degrade to `Err(NOT_CONFIGURED)` rather than throwing.
+   *
+   * Pass `null` to say "there is no YouTube service" explicitly and skip the default lookup.
+   */
+  readonly youtube?: YouTubeServiceLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -319,6 +377,33 @@ const cameraConfigArg: ArgValidator<CameraConfig> = zodArg(cameraConfigSchema)
 const cameraSelectArg: ArgValidator<{ slot: CameraSlot }> = zodArg(
   z.object({ slot: z.enum(CAMERA_SLOTS) })
 )
+
+/**
+ * The weekly broadcast template, validated at the process boundary.
+ *
+ * `titleTemplate` reaches YouTube's `snippet.title` and `thumbnailPath` reaches the filesystem,
+ * so both are length-bounded here before the service ever sees them — a 10 MB "title" pasted into
+ * the field is refused by this line, not by a 400 from Google in the middle of a service.
+ */
+const broadcastTemplateArg: ArgValidator<BroadcastTemplate> = zodArg(broadcastTemplateSchema)
+
+/**
+ * `youtubeCreateBroadcast`'s envelope.
+ *
+ * Rebuilt field by field rather than passed straight through, for the same reason
+ * `logRecordArg` is: `exactOptionalPropertyTypes` refuses `{ scheduledStartTime: undefined }`
+ * where the request type declares `scheduledStartTime?: string`. Omitting the key is the only
+ * assignable form — and it is also the form the service wants, since "absent" means
+ * "schedule it for the default time" rather than "schedule it for `undefined`".
+ */
+const createBroadcastArg: ArgValidator<{ scheduledStartTime?: string }> = (raw) => {
+  const parsed = createBroadcastSchema.safeParse(raw)
+  if (!parsed.success) {
+    return err('INVALID_ARG', 'the request payload failed validation', describeIssues(parsed.error))
+  }
+  const { scheduledStartTime } = parsed.data
+  return ok(scheduledStartTime === undefined ? {} : { scheduledStartTime })
+}
 
 const logRecordSchema = z.object({
   ts: z.number(),
@@ -450,6 +535,24 @@ function cameraUnavailable(): Result<never> {
   return err('NOT_CONNECTED', 'the camera service is not available')
 }
 
+/**
+ * The answer every youtube channel gives when there is no YouTube service object at all.
+ *
+ * `NOT_CONFIGURED`, not `NOT_CONNECTED` and certainly not `INTERNAL`. On a machine with no
+ * `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` — which is the state of every fresh checkout, and of
+ * the build machine — there is nothing to connect *to* and nothing broken. The Go Live screen's
+ * job is to render "YouTube is not configured" with the two key names, and Standing Rule 5 says
+ * the rest of the app carries on regardless: cameras still switch, overlays still fire, OBS still
+ * streams by hand.
+ */
+function youtubeUnavailable(): Result<never> {
+  return err(
+    'NOT_CONFIGURED',
+    'YouTube is not configured',
+    'set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env, then restart Verger'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -518,6 +621,28 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       return getCameraService()
     } catch (cause) {
       log.warn('the camera service is unavailable; camera IPC will report NOT_CONNECTED', {
+        cause
+      })
+      return null
+    }
+  }
+
+  /**
+   * The YouTube service, or `null` if there is not one. Resolved once, like the other two.
+   *
+   * A `null` here is the *expected* state on a machine with no Google credentials, so the lookup
+   * failing is logged at debug-adjacent severity and the five youtube handlers each have a
+   * defined answer. Nothing about it touches OBS, the overlay or the cameras: a Verger with no
+   * YouTube at all is a fully working camera switcher and overlay controller.
+   */
+  const youtube: YouTubeServiceLike | null = resolveYouTubeService()
+
+  function resolveYouTubeService(): YouTubeServiceLike | null {
+    if (deps.youtube !== undefined) return deps.youtube
+    try {
+      return getYouTubeService()
+    } catch (cause) {
+      log.warn('the YouTube service is unavailable; youtube IPC will report NOT_CONFIGURED', {
         cause
       })
       return null
@@ -652,6 +777,25 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
+  // The YouTube fan-out. `YouTubeStatus` is a whole snapshot — auth, broadcast, stream, template
+  // and the pre-flight issues — pushed on every change, so a control window that reloads
+  // mid-service recovers with one `getStatus()` exactly as the overlay and camera panels do.
+  //
+  // What is pushed here is precisely what `getStatus()` returns, and that type has no field for a
+  // token or a stream key. The event carries no credential because there is no credential in the
+  // type to carry.
+  if (youtube !== null) {
+    try {
+      registerUnsubscribe(
+        youtube.onStatus((status) => {
+          broadcast(IpcEvent.youtubeStatus, status)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the YouTube service', { cause })
+    }
+  }
+
   // --- handlers ------------------------------------------------------------
 
   safeHandle(IpcChannel.obsGetStatus, noArg, async () => resolveCall(deps.obs.getStatus()))
@@ -750,6 +894,61 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return resolveCall(camera.select(slot))
   })
 
+  // --- youtube (BLUEPRINT.md §5, Part A) -----------------------------------
+  //
+  // Five channels, and between them they can return exactly two shapes: `YouTubeStatus` and
+  // `Broadcast`. Neither has a token field and neither has a stream-key field, which is the
+  // security property of this whole block — it is enforced by `@shared/youtube` and by the
+  // `YouTubeServiceLike` seam above, not by care taken in these bodies.
+  //
+  // Nothing here logs a payload. `signIn` in particular never sees the OAuth code (that stays
+  // inside the service's loopback handler) and never returns a token, so there is nothing for a
+  // future `log.debug('signed in', { result })` to leak — but there is also no such line.
+
+  safeHandle(IpcChannel.youtubeGetStatus, noArg, async () => {
+    if (youtube === null) return youtubeUnavailable()
+    return resolveCall(youtube.getStatus())
+  })
+
+  /**
+   * Sign in.
+   *
+   * The whole loopback OAuth dance — ephemeral port on 127.0.0.1, `state` parameter, consent in
+   * the system browser — lives in the service. This handler's entire job is to start it and hand
+   * back the resulting status, because the trust boundary is here and the credential handling is
+   * not. A user who cancels the consent screen gets `auth.state: 'auth-error'` with a message,
+   * not an exception.
+   */
+  safeHandle(IpcChannel.youtubeSignIn, noArg, async () => {
+    if (youtube === null) return youtubeUnavailable()
+    return resolveCall(youtube.signIn())
+  })
+
+  safeHandle(IpcChannel.youtubeSignOut, noArg, async () => {
+    if (youtube === null) return youtubeUnavailable()
+    return resolveCall(youtube.signOut())
+  })
+
+  safeHandle(IpcChannel.youtubeSetTemplate, broadcastTemplateArg, async (template) => {
+    if (youtube === null) return youtubeUnavailable()
+    return resolveCall(youtube.setTemplate(template))
+  })
+
+  /**
+   * Create the weekly broadcast and bind the persistent stream.
+   *
+   * Note the boundary this handler does *not* cross: it creates and binds, and stops. No
+   * `StartStream`, no `StartRecord`, no transition to live — that orchestration is Phase 5's, and
+   * the seam above cannot even name those verbs.
+   *
+   * `scheduledStartTime` is optional and, when absent, the key is omitted rather than sent as
+   * `undefined`; the service picks the default from the template's time zone.
+   */
+  safeHandle(IpcChannel.youtubeCreateBroadcast, createBroadcastArg, async (options) => {
+    if (youtube === null) return youtubeUnavailable()
+    return resolveCall(youtube.createBroadcast(options))
+  })
+
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
 
   safeHandle(IpcChannel.logWrite, logRecordArg, async (record) => {
@@ -822,7 +1021,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
   log.debug('registered IPC handlers', {
     channels: registeredChannels.length,
     overlay: overlay === null ? 'unavailable' : 'attached',
-    camera: camera === null ? 'unavailable' : 'attached'
+    camera: camera === null ? 'unavailable' : 'attached',
+    youtube: youtube === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -840,9 +1040,11 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
     registeredChannels.length = 0
 
-    // Covers the OBS status/scene-list subscriptions, the overlay state/info ones and the
-    // camera state one alike: all of them were pushed onto `unsubscribers` by
-    // `registerUnsubscribe`, so no subsystem is left holding a listener into a disposed bridge.
+    // Covers the OBS status/scene-list subscriptions, the overlay state/info ones, the camera
+    // state one and the YouTube status one alike: all of them were pushed onto `unsubscribers`
+    // by `registerUnsubscribe`, so no subsystem is left holding a listener into a disposed
+    // bridge — a YouTube poll that outlived the bridge would keep pushing at dead windows for
+    // the rest of the process.
     for (const unsubscribe of unsubscribers) {
       try {
         unsubscribe()
