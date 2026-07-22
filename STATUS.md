@@ -465,3 +465,75 @@ allowlist is a deliberate follow-up.
 ### Remaining delta
 
 Phases 7-10.
+
+---
+
+## Cycle 7 — Phase 7: Pluggable ASR (Deepgram cloud + faster-whisper local) (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 1,326 tests / 44 files ·
+`electron-vite build` succeeds · app launches with 39 IPC channels.
+
+### Delta closed
+
+- **ASR contract** (`src/shared/asr.ts`) — provider ids, selection modes, `TranscriptSegment`,
+  status, settings, the 16 kHz mono s16le audio format, and the hallucination phrase list.
+- **AsrService** — owns settings, the active provider, and the fallback policy.
+- **DeepgramProvider** — streaming live transcription with interim results and keyword boosting,
+  reconnect backoff, keepalive, and a bounded outbound buffer that drops oldest audio rather than
+  growing without limit (an OOM in the transcriber must not take down a service).
+- **WhisperProvider + `whisper_sidecar.py`** — a supervised Python child process with two-tier
+  draft/final transcription and VAD gating.
+- **Mic capture in the renderer**, transcript panel, and ASR settings with a custom-vocabulary
+  editor.
+
+### Local ASR actually works on this machine — verified, not assumed
+
+`ctranslate2` ships a **cp314 Windows wheel**, so a project-local venv was provisioned at
+`resources/asr-venv` (gitignored, 290 MB) with faster-whisper 1.2.1 + ctranslate2 4.8.1 +
+onnxruntime 1.27.0. Measured directly:
+
+- `ctranslate2.get_cuda_device_count()` → **1** (GTX 1650, 4 GB).
+- `tiny` model load: **0.8 s** (CPU int8). Inference on 3 s of audio: **0.12 s**.
+- VAD returned **0 segments** for a pure 220 Hz tone — correct: a tone is not speech.
+- Two real-sidecar integration tests pass: `--selftest` in the venv exits 0 (1.2 s), and the
+  sidecar starts, reports `ready` on a real device, accepts PCM and shuts down cleanly (2.4 s).
+
+4 GB will not hold `large-v3`, so the local tier defaults to `small` final / `tiny` draft at int8,
+with a CPU fallback if CUDA init fails — a driver update must not stop a service.
+
+### Design decisions worth knowing
+
+- **`degraded` is set only when a preferred provider was *attempted and failed*.** Running local
+  in `auto` mode because no key was ever configured is plain `listening` — nothing broke, and a
+  permanently amber light teaches operators to ignore amber.
+- **Failover is hysteretic**: 3 errors within a 15 s window before switching, no automatic switch
+  back mid-session. Flipping engines every few seconds visibly rewrites the transcript, which is
+  worse than staying on the fallback.
+- **A rejected hallucination that already reached consumers as a draft is republished as an
+  empty-text final** under the same id, so replace-by-id retracts it. Dropping it silently would
+  leave a phantom "thank you for watching" on screen forever. Phase 8's cue engine will therefore
+  occasionally see a final with empty text.
+- `getUserMedia` runs with `echoCancellation`, `noiseSuppression` and `autoGainControl` **off** —
+  they are tuned for conference calls and mangle a sermon's dynamics and room tone.
+
+### Deviation from the build prompt
+
+Prompt 7 says "mic capture in the main process". That is not achievable in Electron without a
+native module: only the renderer has `getUserMedia`. Capture therefore lives in the renderer and
+PCM flows renderer → main over `asrPushAudio`. `asrPushAudio` is deliberately exempt from zod
+validation and the generic rate limiter — it fires ~36,000 times per service, and validating a
+3 KB binary blob ten times a second is pure waste.
+
+### Not verified
+
+**No Deepgram key exists and none will**, so the entire cloud adapter is mock-tested with zero
+network. Nothing has ever spoken to Deepgram. Korean recognition accuracy, real latency numbers,
+and whether the keyword-boost parameter name is right for the v5 API are all unproven — the SDK
+types were read, but types are not a live handshake.
+
+No real speech has been transcribed either: the local pipeline was exercised with synthesised
+tones, which proves the plumbing but says nothing about accuracy on a sermon.
+
+### Remaining delta
+
+Phases 8-10.

@@ -21,14 +21,15 @@
       "camera": "카메라",
       "overlay": "오버레이",
       "plan": "진행표",
+      "transcript": "자막 기록",
       "goLive": "송출 시작",
       "goLiveSettings": "송출 설정",
-      "cameraSetup": "카메라 설정"
+      "cameraSetup": "카메라 설정",
+      "asrSettings": "음성 설정"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "버전 정보를 가져올 수 없습니다"
   },
-
   "status": {
     "regionLabel": "OBS 연결 상태",
     "announcement": "OBS: {{label}}. {{detail}}",
@@ -56,7 +57,6 @@
     "since": "{{time}}부터",
     "shortLabel": "{{subsystem}}: {{state}}"
   },
-
   "connection": {
     "title": "OBS 연결",
     "subtitle": "Verger는 OBS의 상태를 읽기만 합니다. Verger가 멈춰도 OBS는 계속 송출합니다.",
@@ -99,7 +99,6 @@
     },
     "lastError": "마지막 오류"
   },
-
   "overlay": {
     "title": "오버레이",
     "subtitle": "각 레이어는 서로 독립적입니다. 카메라를 전환해도 오버레이는 그대로 있고, 오버레이를 띄워도 카메라는 바뀌지 않습니다.",
@@ -180,7 +179,6 @@
       "label": "오버레이 전체 지우기"
     }
   },
-
   "camera": {
     "title": "카메라",
     "subtitle": "버튼 네 개, 송출은 하나. 카메라를 바꿔도 하단 자막은 그대로 있고, 하단 자막을 띄워도 카메라는 바뀌지 않습니다.",
@@ -235,7 +233,6 @@
       "noTransitions": "OBS가 보고한 전환 효과가 없어 \"OBS 설정 그대로 사용\"만 선택할 수 있습니다."
     }
   },
-
   "youtube": {
     "title": "송출 설정",
     "subtitle": "GO LIVE 버튼이 사용할 설정입니다. 이 화면에서는 아무것도 송출되지 않습니다. 방송을 만들어도 예약만 될 뿐이고, 실제 송출 시작은 별도의 단계입니다.",
@@ -367,7 +364,6 @@
     },
     "lastError": "마지막 오류"
   },
-
   "goLive": {
     "title": "송출 시작",
     "subtitle": "버튼 하나로 송출과 로컬 녹화, 유튜브 방송이 함께 시작됩니다. 길게 누르는 버튼 하나로 셋 다 끝납니다. 로컬 녹화는 항상 함께 돌아가며, 끄는 설정은 일부러 만들지 않았습니다.",
@@ -496,7 +492,6 @@
     },
     "lastError": "마지막 오류"
   },
-
   "plan": {
     "title": "예배 진행표",
     "subtitle": "예배 순서를 큐 목록으로 정리합니다. 여기 있는 큐는 모두 손으로 실행하며, 마이크도 큐 엔진도 네트워크도 필요 없습니다. 나중의 모든 자동화가 결국 이 화면으로 되돌아옵니다.",
@@ -622,14 +617,139 @@
       "title": "마지막 진행표 작업이 거부되었습니다"
     }
   },
-
+  "asr": {
+    "subsystem": {
+      "unknown": "확인 중",
+      "not-configured": "설정 안 됨",
+      "idle": "준비됨",
+      "starting": "시작 중",
+      "listening": "인식 중",
+      "degraded": "대체 사용",
+      "failed": "실패"
+    },
+    "state": {
+      "not-configured": "설정 안 됨",
+      "idle": "준비됨",
+      "starting": "시작 중",
+      "listening": "인식 중",
+      "degraded": "대체 엔진으로 동작 중",
+      "failed": "실패"
+    },
+    "provider": {
+      "deepgram": "Deepgram (클라우드)",
+      "whisper": "Whisper (로컬)",
+      "none": "엔진 없음"
+    },
+    "panel": {
+      "title": "자막 기록",
+      "subtitle": "강단 마이크의 말을 음성 인식이 받아 적은 내용입니다. 예배 진행에 반드시 필요한 기능은 아닙니다.",
+      "statusLabel": "음성 인식 상태",
+      "controlsLabel": "음성 인식 조작",
+      "transcriptLabel": "실시간 자막 기록",
+      "healthLabel": "상태",
+      "providerLabel": "엔진",
+      "latencyLabel": "지연",
+      "latencyValue": "{{ms}}ms",
+      "latencyUnknown": "아직 측정 안 됨",
+      "deviceLabel": "입력",
+      "deviceUnknown": "시스템 기본 장치",
+      "micLabel": "마이크",
+      "capturing": "열림",
+      "notCapturing": "닫힘",
+      "start": "인식 시작",
+      "stop": "인식 중지",
+      "clear": "기록 지우기",
+      "empty": "아직 인식된 내용이 없습니다.",
+      "emptyHint": "강단 마이크가 켜지면 인식 시작을 누르세요. 이 기능이 없어도 큐, 카메라, 오버레이는 그대로 동작합니다.",
+      "draftBadge": "초안",
+      "partialBadge": "정리 중",
+      "draftHint": "초안과 정리 중 표시가 붙은 줄은 아직 수정되는 중이며 곧 같은 자리에서 교체됩니다. 표시가 없는 줄만 확정된 내용입니다.",
+      "autoScrollOn": "최신 줄 따라가는 중",
+      "autoScrollPaused": "위로 올려서 자동 스크롤을 멈췄습니다",
+      "resumeAutoScroll": "최신 줄로 이동",
+      "degraded": {
+        "title": "{{provider}}(으)로 동작 중",
+        "body": "기본 엔진이 응답하지 않아 대체 엔진으로 넘어갔습니다. 인식은 계속되지만 조금 더 느리고 정확도가 떨어질 수 있습니다.",
+        "reason": "원인: {{reason}}"
+      },
+      "failed": {
+        "title": "음성 인식이 실패했습니다",
+        "body": "자막이 전혀 들어오지 않습니다. Verger는 수동으로 동작하며 막힌 것은 없습니다. 큐, 카메라, 오버레이는 음성 인식이 없을 때와 똑같이 작동합니다."
+      },
+      "notConfigured": {
+        "title": "음성 인식이 설정되지 않았습니다",
+        "body": "사용할 수 있는 인식 엔진이 없어 자막이 만들어지지 않습니다. Verger는 수동으로 동작하며 막힌 것은 없습니다. 필요하면 음성 설정에서 엔진을 지정하세요."
+      },
+      "bridgeUnavailable": {
+        "title": "음성 인식을 사용할 수 없습니다",
+        "body": "Verger의 내부 연결이 준비되지 않아 마이크에 접근할 수 없습니다. 이 화면의 나머지 기능은 그대로 동작합니다."
+      },
+      "micUnavailable": "마이크를 열지 못했습니다: {{reason}}"
+    },
+    "settings": {
+      "title": "음성 설정",
+      "subtitle": "어떤 엔진이 예배를 받아 적을지, 어떤 마이크를 들을지, 어떤 단어를 미리 알려 줄지 정합니다.",
+      "formLabel": "음성 인식 설정",
+      "modeLegend": "인식 엔진",
+      "modeHint": "클라우드와 로컬은 고장 나는 방식이 서로 반대여서 둘 다 필요합니다.",
+      "mode": {
+        "cloud": "클라우드",
+        "local": "로컬",
+        "auto": "자동"
+      },
+      "modeDetail": {
+        "cloud": "Deepgram. 지연이 짧고 한국어 인식이 확실히 낫습니다. 다만 인터넷이 끊기면 함께 멈추는데, 그 인터넷은 이미 송출에 쓰이고 있습니다.",
+        "local": "이 PC의 faster-whisper. 네트워크가 없어도 계속 동작하지만 그래픽카드 성능이 필요하고 더 느립니다.",
+        "auto": "평소에는 클라우드를 쓰고 문제가 생기는 즉시 로컬로 넘어갑니다. 권장 설정입니다."
+      },
+      "languageLegend": "인식 언어",
+      "languageHint": "강단에서 사용하는 언어입니다. Verger 버튼에 표시되는 언어와는 별개입니다.",
+      "language": {
+        "ko": "한국어",
+        "en": "영어"
+      },
+      "deviceLegend": "마이크",
+      "deviceLabel": "입력 장치",
+      "deviceDefault": "— 시스템 기본 장치 —",
+      "deviceHint": "웹캠이 아니라 강단 마이크를 고르세요. 마이크 사용을 한 번 허용해야 장치 이름이 표시됩니다.",
+      "deviceUnavailable": "이 PC에서 오디오 입력 장치를 찾지 못했습니다. 시스템 기본 장치를 사용합니다.",
+      "deviceMissing": "저장된 장치 (지금은 연결 안 됨)",
+      "deviceRefresh": "장치 목록 새로 고침",
+      "modelLegend": "로컬 모델",
+      "modelLabel": "모델 크기",
+      "modelHint": "클수록 정확하지만 느리고, 그래픽카드 메모리에 들어가야 합니다. 이 PC는 4GB라 small이 현실적인 상한이며 large-v3는 올라가지 않습니다.",
+      "vocabulary": {
+        "legend": "사용자 단어 목록",
+        "hint": "이 화면에서 가장 효과가 큰 설정입니다. 목사님 성함, 교회 이름, 찬송가 제목처럼 매주 반복되는 말을 넣어 두세요. 이런 단어를 미리 알려 주면 정작 중요한 단어의 인식률이 크게 올라갑니다.",
+        "examples": "일반 모델이 한 번도 본 적 없는 고유명사이기 때문에, 바로 그 단어부터 틀립니다.",
+        "addLabel": "추가할 단어",
+        "add": "단어 추가",
+        "remove": "{{term}} 삭제",
+        "empty": "등록된 단어가 없습니다.",
+        "listLabel": "사용자 단어 목록",
+        "rejected": {
+          "blank": "단어를 먼저 입력하세요.",
+          "duplicate": "이미 목록에 있는 단어입니다.",
+          "too-long": "단어가 너무 깁니다. 80자 이내로 입력하세요.",
+          "full": "단어 목록이 가득 찼습니다."
+        }
+      },
+      "invalid": "입력한 내용 그대로는 저장할 수 없습니다. 단어 목록과 모델 이름을 확인하세요.",
+      "save": "음성 설정 저장",
+      "saved": "음성 설정을 저장했습니다",
+      "notConfigured": {
+        "title": "사용할 수 있는 인식 엔진이 없습니다",
+        "body": "DEEPGRAM_API_KEY가 비어 있어 클라우드 인식이 꺼져 있습니다. 고장이 아니라 정상적인 대기 상태이며, Verger는 수동으로 동작하고 나머지 기능은 영향을 받지 않습니다.",
+        "humanTasks": "키 등록은 사람이 직접 해야 하는 작업입니다. 프로젝트 폴더의 HUMAN_TASKS.md를 확인하세요. 위에서 로컬 또는 자동을 고르면 로컬 인식을 대신 쓸 수 있습니다."
+      }
+    }
+  },
   "holdButton": {
     "accessibleName": "{{action}} — {{seconds}}초 동안 길게 눌러 확인",
     "hint": "{{seconds}}초 길게 누르기",
     "holding": "{{action}} 누르는 중입니다. 계속 누르고 계세요.",
     "completed": "{{action}} 완료."
   },
-
   "actions": {
     "connect": "연결",
     "disconnect": "연결 해제",
@@ -642,7 +762,6 @@
     "hidePassword": "비밀번호 숨기기",
     "dismiss": "닫기"
   },
-
   "errors": {
     "boundary": {
       "title": "이 화면이 멈췄습니다",

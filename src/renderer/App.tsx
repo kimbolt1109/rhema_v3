@@ -33,12 +33,14 @@ import type { LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import type { AsrState } from '@shared/asr'
 import type { GoLivePhase } from '@shared/golive'
 import type { AppVersions } from '@shared/ipc'
 import type { ObsConnectionState } from '@shared/obs'
 import type { YouTubeAuthState } from '@shared/youtube'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { AsrSettings } from './screens/AsrSettings'
 import { CameraPanel } from './screens/CameraPanel'
 import { CameraSettings } from './screens/CameraSettings'
 import { ConnectionScreen } from './screens/ConnectionScreen'
@@ -46,6 +48,8 @@ import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { PlanEditor } from './screens/PlanEditor'
+import { TranscriptPanel } from './screens/TranscriptPanel'
+import { useAsrStore } from './store/asrStore'
 import { isRecordingMissing, useGoLiveStore } from './store/goLiveStore'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
@@ -61,6 +65,10 @@ const SECTIONS = [
   // Phase 6. The plan sits with the live surfaces rather than with the settings tabs, because it
   // is one: the operator drives slides from it during the service, not only before it.
   { id: 'plan', labelKey: 'app.section.plan' },
+  // Phase 7. The transcript is a live surface too — the operator reads it during the sermon to see
+  // what the cue engine (Phase 8) is going to key off — so it sits with the others, and its
+  // settings sit with the settings tabs.
+  { id: 'transcript', labelKey: 'app.section.transcript' },
   // Phase 5 splits what Phase 4 called "Go Live" in two: the GO LIVE / END *controls* sit here,
   // with the two other live surfaces, and the weekly template and OAuth *settings* move one tab
   // to the right. A screen that both configures a broadcast and starts one invites the operator to
@@ -68,12 +76,13 @@ const SECTIONS = [
   { id: 'goLive', labelKey: 'app.section.goLive' },
   { id: 'goLiveSettings', labelKey: 'app.section.goLiveSettings' },
   { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
+  { id: 'asrSettings', labelKey: 'app.section.asrSettings' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
 
 /** Where a subsystem light gets its state from. */
-type SubsystemSource = 'obs' | 'overlay' | 'youtube' | 'goLive' | 'recording' | 'pending'
+type SubsystemSource = 'obs' | 'overlay' | 'asr' | 'youtube' | 'goLive' | 'recording' | 'pending'
 
 /** One light in the subsystem strip. */
 interface SubsystemDescriptor {
@@ -86,7 +95,7 @@ interface SubsystemDescriptor {
 const SUBSYSTEMS: readonly SubsystemDescriptor[] = [
   { id: 'obs', labelKey: 'app.subsystem.obs', icon: Radio, source: 'obs' },
   { id: 'overlay', labelKey: 'app.subsystem.overlay', icon: Layers, source: 'overlay' },
-  { id: 'asr', labelKey: 'app.subsystem.asr', icon: Mic, source: 'pending' },
+  { id: 'asr', labelKey: 'app.subsystem.asr', icon: Mic, source: 'asr' },
   { id: 'youtube', labelKey: 'app.subsystem.youtube', icon: Cast, source: 'youtube' },
   // Live and Recording are two lights, not one. Standing Rule 3 makes them start together, which
   // is exactly why the strip must be able to show them disagreeing: "streaming, not recording" is
@@ -193,6 +202,23 @@ const GO_LIVE_TONES: Record<GoLivePhase, string> = {
   failed: 'text-panic',
 }
 
+/**
+ * Tints for the SPEECH light.
+ *
+ * `degraded` is amber and emphatically **not** folded in with `listening`: a transcript is still
+ * arriving, but from the fallback provider, and a green light there would hide exactly the fact the
+ * operator needs. `failed` is red; `not-configured` is muted, because a subsystem nobody switched
+ * on is a resting state (Standing Rule 5), not a fault — and either way the console runs manual.
+ */
+const ASR_TONES: Record<AsrState, string> = {
+  'not-configured': 'text-text-muted',
+  idle: 'text-text-muted',
+  starting: 'text-accent-2',
+  listening: 'text-live',
+  degraded: 'text-accent-2',
+  failed: 'text-panic',
+}
+
 function SubsystemStrip(): React.JSX.Element {
   const { t } = useTranslation()
   const obsState = useObsStore((state) => state.status.state)
@@ -203,6 +229,8 @@ function SubsystemStrip(): React.JSX.Element {
   const goLivePhase = useGoLiveStore((state) => state.state.phase)
   const goLiveObs = useGoLiveStore((state) => state.state.obs)
   const goLiveHydrated = useGoLiveStore((state) => state.hydrated)
+  const asrState = useAsrStore((state) => state.status.state)
+  const asrHydrated = useAsrStore((state) => state.hydrated)
 
   const overlayLight = ((): LightState => {
     if (!overlayHydrated) {
@@ -238,6 +266,17 @@ function SubsystemStrip(): React.JSX.Element {
       key: goLivePhase,
       text: t(`goLive.subsystem.${goLivePhase}`),
       tone: GO_LIVE_TONES[goLivePhase],
+    }
+  })()
+
+  const asrLight = ((): LightState => {
+    if (!asrHydrated) {
+      return { key: 'unknown', text: t('asr.subsystem.unknown'), tone: 'text-text-muted' }
+    }
+    return {
+      key: asrState,
+      text: t(`asr.subsystem.${asrState}`),
+      tone: ASR_TONES[asrState],
     }
   })()
 
@@ -277,6 +316,8 @@ function SubsystemStrip(): React.JSX.Element {
         return { key: obsState, text: t(STATE_LABEL_KEYS[obsState]), tone: STATE_TONES[obsState] }
       case 'overlay':
         return overlayLight
+      case 'asr':
+        return asrLight
       case 'youtube':
         return youtubeLight
       case 'goLive':
@@ -440,6 +481,24 @@ function useGoLiveSubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/**
+ * Keep the speech store live for the whole session.
+ *
+ * The SPEECH light has to keep saying "not set up" — or "running on the fallback" — while the
+ * operator is on the Cameras tab. A subsystem light that only updates while its own panel is
+ * mounted is not a light.
+ */
+function useAsrSubsystem(): void {
+  const hydrate = useAsrStore((state) => state.hydrate)
+  const subscribe = useAsrStore((state) => state.subscribe)
+
+  useEffect(() => {
+    const unsubscribe = subscribe()
+    void hydrate()
+    return unsubscribe
+  }, [hydrate, subscribe])
+}
+
 /** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
 function SectionView({ section }: { section: SectionId }): React.JSX.Element {
   switch (section) {
@@ -451,12 +510,16 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <OverlayPanel />
     case 'plan':
       return <PlanEditor />
+    case 'transcript':
+      return <TranscriptPanel />
     case 'goLive':
       return <GoLivePanel />
     case 'goLiveSettings':
       return <GoLiveSettings />
     case 'cameraSetup':
       return <CameraSettings />
+    case 'asrSettings':
+      return <AsrSettings />
   }
 }
 
@@ -489,6 +552,7 @@ export function App(): React.JSX.Element {
   useOverlaySubsystem()
   useYouTubeSubsystem()
   useGoLiveSubsystem()
+  useAsrSubsystem()
 
   const [section, setSection] = useState<SectionId>('connection')
 

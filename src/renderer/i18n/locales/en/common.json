@@ -21,14 +21,15 @@
       "camera": "Cameras",
       "overlay": "Overlay",
       "plan": "Plan",
+      "transcript": "Transcript",
       "goLive": "GO LIVE",
       "goLiveSettings": "Go Live settings",
-      "cameraSetup": "Camera setup"
+      "cameraSetup": "Camera setup",
+      "asrSettings": "Speech settings"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
   },
-
   "status": {
     "regionLabel": "OBS connection",
     "announcement": "OBS: {{label}}. {{detail}}",
@@ -57,7 +58,6 @@
     "since": "Since {{time}}",
     "shortLabel": "{{subsystem}}: {{state}}"
   },
-
   "connection": {
     "title": "OBS connection",
     "subtitle": "Verger reads OBS's state. It never imposes one — if Verger stops, OBS keeps streaming.",
@@ -100,7 +100,6 @@
     },
     "lastError": "Last error"
   },
-
   "overlay": {
     "title": "Overlay",
     "subtitle": "Each layer is independent. Switching cameras never touches these, and showing one of these never touches the camera.",
@@ -181,7 +180,6 @@
       "label": "Clear all overlays"
     }
   },
-
   "camera": {
     "title": "Cameras",
     "subtitle": "Four buttons, one live scene. Switching a camera never touches the lower third, and showing a lower third never touches the camera.",
@@ -236,7 +234,6 @@
       "noTransitions": "OBS has not reported any transitions, so only \"use whatever OBS is set to\" is offered."
     }
   },
-
   "youtube": {
     "title": "Go Live settings",
     "subtitle": "Everything the GO LIVE button will use. Nothing on this screen broadcasts anything: creating a broadcast only schedules it, and going live is a separate, later step.",
@@ -368,7 +365,6 @@
     },
     "lastError": "Last error"
   },
-
   "goLive": {
     "title": "Go live",
     "subtitle": "One button starts the stream, the local recording and the YouTube broadcast together. One held button ends all three. The local recording always runs — there is deliberately no setting to turn it off.",
@@ -497,7 +493,6 @@
     },
     "lastError": "Last error"
   },
-
   "plan": {
     "title": "Service plan",
     "subtitle": "The order of service, as a list of cues. Every cue here is fired by hand — this screen works with no microphone, no cue engine and no network, and it is what everything later falls back to.",
@@ -623,14 +618,139 @@
       "title": "The last plan action was refused"
     }
   },
-
+  "asr": {
+    "subsystem": {
+      "unknown": "Checking",
+      "not-configured": "Not set up",
+      "idle": "Ready",
+      "starting": "Starting",
+      "listening": "Listening",
+      "degraded": "Fallback",
+      "failed": "Failed"
+    },
+    "state": {
+      "not-configured": "Not set up",
+      "idle": "Ready",
+      "starting": "Starting",
+      "listening": "Listening",
+      "degraded": "Running on the fallback",
+      "failed": "Failed"
+    },
+    "provider": {
+      "deepgram": "Deepgram (cloud)",
+      "whisper": "Whisper (local)",
+      "none": "No provider"
+    },
+    "panel": {
+      "title": "Transcript",
+      "subtitle": "What speech recognition is hearing from the pulpit microphone. Verger never needs it to run the service.",
+      "statusLabel": "Speech recognition status",
+      "controlsLabel": "Speech recognition controls",
+      "transcriptLabel": "Live transcript",
+      "healthLabel": "Health",
+      "providerLabel": "Provider",
+      "latencyLabel": "Latency",
+      "latencyValue": "{{ms}} ms",
+      "latencyUnknown": "Not measured yet",
+      "deviceLabel": "Input",
+      "deviceUnknown": "System default",
+      "micLabel": "Microphone",
+      "capturing": "Open",
+      "notCapturing": "Closed",
+      "start": "Start listening",
+      "stop": "Stop listening",
+      "clear": "Clear transcript",
+      "empty": "Nothing transcribed yet.",
+      "emptyHint": "Press Start listening once the pulpit microphone is live. Nothing else waits on this — cues, cameras and overlays all work without it.",
+      "draftBadge": "Draft",
+      "partialBadge": "Settling",
+      "draftHint": "Draft and settling lines are still being revised and will be replaced in place. Only plain lines are final.",
+      "autoScrollOn": "Following the newest line",
+      "autoScrollPaused": "Auto-scroll paused — you scrolled up",
+      "resumeAutoScroll": "Jump to the newest line",
+      "degraded": {
+        "title": "Running on {{provider}}",
+        "body": "The preferred provider stopped responding, so recognition fell back. A transcript is still arriving — expect it to be slower and a little less accurate.",
+        "reason": "Reason: {{reason}}"
+      },
+      "failed": {
+        "title": "Speech recognition failed",
+        "body": "No transcript is arriving. Verger is running manual and nothing is blocked: every cue, camera and overlay still works exactly as it does without speech."
+      },
+      "notConfigured": {
+        "title": "Speech recognition is not set up",
+        "body": "No speech provider is configured, so there is no transcript. Verger is running manual and nothing is blocked. Set a provider up under Speech settings when you want one."
+      },
+      "bridgeUnavailable": {
+        "title": "Speech recognition is unavailable",
+        "body": "Verger's privileged bridge did not load, so the microphone cannot be reached. Everything else on this screen keeps working."
+      },
+      "micUnavailable": "The microphone could not be opened: {{reason}}"
+    },
+    "settings": {
+      "title": "Speech settings",
+      "subtitle": "Which engine transcribes the service, which microphone it listens to, and which words it should expect.",
+      "formLabel": "Speech recognition settings",
+      "modeLegend": "Provider",
+      "modeHint": "Cloud and local fail in opposite ways, which is why both exist.",
+      "mode": {
+        "cloud": "Cloud",
+        "local": "Local",
+        "auto": "Auto"
+      },
+      "modeDetail": {
+        "cloud": "Deepgram. Lower latency and noticeably better at Korean — but it dies with the internet, and the internet is already carrying the stream.",
+        "local": "faster-whisper on this machine. Keeps working with no network at all; needs a capable GPU and is slower.",
+        "auto": "Cloud while it is healthy, falling back to local the moment it is not. Recommended."
+      },
+      "languageLegend": "Language",
+      "languageHint": "The language spoken from the pulpit. This is separate from the language of Verger's own buttons.",
+      "language": {
+        "ko": "Korean",
+        "en": "English"
+      },
+      "deviceLegend": "Microphone",
+      "deviceLabel": "Input device",
+      "deviceDefault": "— system default —",
+      "deviceHint": "Pick the pulpit microphone, not the webcam. Device names appear once you have allowed microphone access at least once.",
+      "deviceUnavailable": "This machine did not report any audio inputs. The system default input will be used.",
+      "deviceMissing": "Saved device (not currently connected)",
+      "deviceRefresh": "Refresh device list",
+      "modelLegend": "Local model",
+      "modelLabel": "Model size",
+      "modelHint": "Larger is more accurate and slower, and must fit in the graphics card's memory. This machine has 4 GB, so 'small' is the sensible ceiling and 'large-v3' will not load.",
+      "vocabulary": {
+        "legend": "Custom vocabulary",
+        "hint": "The single most effective setting here. Add the pastor's name, the church name, hymn titles and any term that comes up week after week — boosting them sharply improves accuracy on exactly the words that matter.",
+        "examples": "These are the words a general-purpose model has never seen, so they are the ones it gets wrong.",
+        "addLabel": "Term to add",
+        "add": "Add term",
+        "remove": "Remove {{term}}",
+        "empty": "No terms yet.",
+        "listLabel": "Custom vocabulary terms",
+        "rejected": {
+          "blank": "Type a term first.",
+          "duplicate": "That term is already in the list.",
+          "too-long": "That term is too long. Keep it under 80 characters.",
+          "full": "The vocabulary list is full."
+        }
+      },
+      "invalid": "These settings could not be saved as written. Check the vocabulary list and the model name.",
+      "save": "Save speech settings",
+      "saved": "Speech settings saved",
+      "notConfigured": {
+        "title": "No speech provider is configured",
+        "body": "DEEPGRAM_API_KEY is empty, so cloud recognition is switched off. This is not a fault — Verger simply runs manual and the rest of the console is unaffected.",
+        "humanTasks": "Adding the key is a human-only task: see HUMAN_TASKS.md in the project folder. Local recognition can be used instead by choosing Local or Auto above."
+      }
+    }
+  },
   "holdButton": {
     "accessibleName": "{{action}} — hold for {{seconds}} seconds to confirm",
     "hint": "Hold {{seconds}}s",
     "holding": "Holding {{action}}. Keep holding to confirm.",
     "completed": "{{action}} — done."
   },
-
   "actions": {
     "connect": "Connect",
     "disconnect": "Disconnect",
@@ -643,7 +763,6 @@
     "hidePassword": "Hide password",
     "dismiss": "Dismiss"
   },
-
   "errors": {
     "boundary": {
       "title": "This screen stopped working",

@@ -12,6 +12,14 @@
  * runtime into the renderer bundle.
  */
 
+import type {
+  AsrProviderId,
+  AsrSettings,
+  AsrStatus,
+  AudioInputDevice,
+  TranscriptSegment,
+} from '@shared/asr'
+import { defaultAsrSettings, idleAsrStatus } from '@shared/asr'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import { defaultCameraConfig, findBinding, slotForScene } from '@shared/camera'
 import type { ConfigSummary } from '@shared/config'
@@ -194,6 +202,28 @@ export interface MockResponses {
    * degraded path unless it deliberately opts out.
    */
   planGetImporterStatus: Result<DeckImporterStatus>
+  /**
+   * What `asr.getStatus` resolves with.
+   *
+   * **Not-configured by default**, because that is this machine's genuine state: `DEEPGRAM_API_KEY`
+   * is empty and no key is coming. Standing Rule 5 says an empty key means the subsystem rests in
+   * `not-configured` rather than crashing, and making that the fake's default means every screen
+   * test exercises the "you are running manual, nothing is blocked" path unless it opts out.
+   */
+  asrGetStatus: Result<AsrStatus>
+  asrGetSettings: Result<AsrSettings>
+  /** `null` — the default — means "behave like the real service": adopt the supplied settings. */
+  asrSetSettings: Result<AsrSettings> | null
+  /**
+   * `null` — the default — means "behave like the real service": refuse with `NOT_CONFIGURED` when
+   * the subsystem has no usable provider, and otherwise settle into `listening` on the provider the
+   * selection mode implies.
+   */
+  asrStart: Result<AsrStatus> | null
+  /** `null` — the default — means "behave like the real service": drop back to the resting state. */
+  asrStop: Result<AsrStatus> | null
+  asrPushAudio: Result<void>
+  asrListDevices: Result<void>
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -237,6 +267,22 @@ export interface MockCalls {
   readonly planAdvance: number[]
   readonly planBack: number[]
   readonly planGetImporterStatus: number[]
+  readonly asrGetStatus: number[]
+  readonly asrGetSettings: number[]
+  /** Every settings save, in order. The vocabulary-editor assertions read this. */
+  readonly asrSetSettings: AsrSettings[]
+  readonly asrStart: number[]
+  readonly asrStop: number[]
+  /**
+   * The **byte length** of every audio chunk pushed, in order — never the audio itself.
+   *
+   * Keeping only the size is not squeamishness: a fixture that retained microphone samples would
+   * be a recording of whatever was said, and Standing Rule 4 keeps that out of the repo. Byte
+   * lengths are enough to assert the 100 ms chunking contract.
+   */
+  readonly asrPushAudio: number[]
+  /** Every device list the renderer reported, in order. */
+  readonly asrListDevices: (readonly AudioInputDevice[])[]
 }
 
 export interface MockVergerApi {
@@ -736,6 +782,121 @@ export function mockDeckImportProgress(
   return { stage: 'converting', slidesDone: 3, slidesTotal: 12, message: null, ...overrides }
 }
 
+/* --------------------------------- speech recognition (ASR) --------------------------------- */
+
+/**
+ * The audio inputs a stock booth PC reports.
+ *
+ * One of them is deliberately unlabelled-in-spirit — a generic USB interface name — because that
+ * is what an operator actually sees, and a picker tested only against "Pulpit mic" would hide a
+ * regression that renders a device with no useful name.
+ */
+export const MOCK_AUDIO_INPUTS: readonly AudioInputDevice[] = [
+  { deviceId: 'default', label: 'Default — Microphone (USB Audio CODEC)' },
+  { deviceId: 'mock-pulpit-mic', label: 'Pulpit mic (Focusrite Scarlett Solo)' },
+  { deviceId: 'mock-room-mic', label: 'Room mic' },
+]
+
+/**
+ * The state this machine is actually in: `DEEPGRAM_API_KEY` is empty and no key is coming.
+ *
+ * `lastError` carries the explanation the settings screen prints, so the operator is told *which*
+ * secret is missing rather than being left to guess.
+ */
+export function mockNotConfiguredAsrStatus(overrides: Partial<AsrStatus> = {}): AsrStatus {
+  return {
+    ...idleAsrStatus(),
+    state: 'not-configured',
+    lastError: 'DEEPGRAM_API_KEY is not set and no local model has been downloaded.',
+    ...overrides,
+  }
+}
+
+/** Configured but not started: the resting state once a provider is genuinely available. */
+export function mockIdleAsrStatus(overrides: Partial<AsrStatus> = {}): AsrStatus {
+  return { ...idleAsrStatus(), ...overrides }
+}
+
+/** A healthy session on the preferred provider. */
+export function mockListeningAsrStatus(overrides: Partial<AsrStatus> = {}): AsrStatus {
+  return {
+    ...idleAsrStatus(),
+    state: 'listening',
+    provider: 'deepgram',
+    latencyMs: 320,
+    deviceId: 'mock-pulpit-mic',
+    deviceLabel: 'Pulpit mic (Focusrite Scarlett Solo)',
+    since: MOCK_NOW,
+    ...overrides,
+  }
+}
+
+/**
+ * Cloud died, local took over.
+ *
+ * The distinction from {@link mockFailedAsrStatus} is the whole reason `degraded` exists: a
+ * transcript is still arriving, just from the fallback, and the panel has to name which provider
+ * and why. Collapsing the two would hide a fallback the operator should know about.
+ */
+export function mockDegradedAsrStatus(overrides: Partial<AsrStatus> = {}): AsrStatus {
+  return {
+    ...mockListeningAsrStatus(),
+    state: 'degraded',
+    provider: 'whisper',
+    latencyMs: 1_450,
+    lastError: 'Deepgram closed the socket; recognition fell back to the local model.',
+    ...overrides,
+  }
+}
+
+/** No transcript at all. The console keeps working; the operator runs manual. */
+export function mockFailedAsrStatus(overrides: Partial<AsrStatus> = {}): AsrStatus {
+  return {
+    ...idleAsrStatus(),
+    state: 'failed',
+    lastError: 'No speech provider could be started.',
+    ...overrides,
+  }
+}
+
+/**
+ * One transcript fragment.
+ *
+ * **Standing Rule 4 applies here as hard as anywhere.** The text is invented placeholder wording —
+ * never a sermon sentence, never a hymn line, never verse text. It is deliberately banal so that a
+ * fixture can never be mistaken for a recording of a real service.
+ */
+export function mockTranscriptSegment(overrides: Partial<TranscriptSegment> = {}): TranscriptSegment {
+  return {
+    id: 'seg-1',
+    text: 'PLACEHOLDER TRANSCRIPT LINE ONE',
+    isFinal: true,
+    tsStart: 0,
+    tsEnd: 2_000,
+    confidence: 0.94,
+    provider: 'deepgram',
+    isDraft: false,
+    ...overrides,
+  }
+}
+
+/** The fast-tier partial that a final later replaces. Same `id`, `isDraft: true`. */
+export function mockDraftSegment(overrides: Partial<TranscriptSegment> = {}): TranscriptSegment {
+  return mockTranscriptSegment({
+    text: 'PLACEHOLDER DRAFT LINE',
+    isFinal: false,
+    isDraft: true,
+    confidence: null,
+    provider: 'whisper',
+    ...overrides,
+  })
+}
+
+/** Which provider a selection mode lands on when everything is healthy. */
+function providerForMode(settings: AsrSettings): AsrProviderId {
+  return settings.mode === 'local' ? 'whisper' : 'deepgram'
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -770,6 +931,13 @@ function defaultResponses(): MockResponses {
     planAdvance: null,
     planBack: null,
     planGetImporterStatus: ok(MOCK_DECK_IMPORTER_UNAVAILABLE),
+    asrGetStatus: ok(mockNotConfiguredAsrStatus()),
+    asrGetSettings: ok(defaultAsrSettings()),
+    asrSetSettings: null,
+    asrStart: null,
+    asrStop: null,
+    asrPushAudio: ok(undefined),
+    asrListDevices: ok(undefined),
   }
 }
 
@@ -818,6 +986,13 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     planAdvance: [],
     planBack: [],
     planGetImporterStatus: [],
+    asrGetStatus: [],
+    asrGetSettings: [],
+    asrSetSettings: [],
+    asrStart: [],
+    asrStop: [],
+    asrPushAudio: [],
+    asrListDevices: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -855,6 +1030,16 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let planSnapshot: PlanState = responses.planGetState.ok
     ? responses.planGetState.value
     : emptyPlanState()
+
+  // And a sixth. Speech recognition is an *input*: starting or stopping it must not move a camera,
+  // blank an overlay layer, touch the broadcast or fire a cue. Nothing in the ASR methods below
+  // reads any of the five snapshots above, and nothing above reads these.
+  let asrSnapshot: AsrStatus = responses.asrGetStatus.ok
+    ? responses.asrGetStatus.value
+    : mockNotConfiguredAsrStatus()
+  let asrSettings: AsrSettings = responses.asrGetSettings.ok
+    ? responses.asrGetSettings.value
+    : defaultAsrSettings()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -1230,6 +1415,77 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onState: (callback) => on(IpcEvent.planState, callback),
       onImportProgress: (callback) => on(IpcEvent.planImportProgress, callback),
+    },
+    asr: {
+      getStatus: () => {
+        calls.asrGetStatus.push(calls.asrGetStatus.length)
+        if (responses.asrGetStatus.ok) asrSnapshot = responses.asrGetStatus.value
+        return Promise.resolve(responses.asrGetStatus)
+      },
+      getSettings: () => {
+        calls.asrGetSettings.push(calls.asrGetSettings.length)
+        if (responses.asrGetSettings.ok) asrSettings = responses.asrGetSettings.value
+        return Promise.resolve(responses.asrGetSettings)
+      },
+      setSettings: (settings) => {
+        calls.asrSetSettings.push(settings)
+        const scripted = responses.asrSetSettings
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        asrSettings = settings
+        // The language is part of the *status* as well as the settings, because the panel prints
+        // what is actually being recognised, not what was requested.
+        asrSnapshot = { ...asrSnapshot, language: settings.language }
+        return Promise.resolve(ok(asrSettings))
+      },
+      start: () => {
+        calls.asrStart.push(calls.asrStart.length)
+        const scripted = responses.asrStart
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        if (asrSnapshot.state === 'not-configured') {
+          // There is genuinely no provider to start. The UI is supposed to make this unreachable
+          // by disabling the control; the fake refuses it anyway, so a regression that enables the
+          // button shows up as a failing assertion rather than a silently dead microphone.
+          return Promise.resolve(
+            err(ErrorCode.NOT_CONFIGURED, 'no speech provider is configured'),
+          )
+        }
+
+        asrSnapshot = {
+          ...asrSnapshot,
+          state: 'listening',
+          provider: providerForMode(asrSettings),
+          language: asrSettings.language,
+          deviceId: asrSettings.deviceId,
+          since: MOCK_NOW,
+          lastError: null,
+        }
+        return Promise.resolve(ok(asrSnapshot))
+      },
+      stop: () => {
+        calls.asrStop.push(calls.asrStop.length)
+        const scripted = responses.asrStop
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        asrSnapshot =
+          asrSnapshot.state === 'not-configured'
+            ? asrSnapshot
+            : { ...idleAsrStatus(asrSettings.language), lastError: asrSnapshot.lastError }
+        return Promise.resolve(ok(asrSnapshot))
+      },
+      pushAudio: (chunk) => {
+        // Only the size is recorded. See `MockCalls.asrPushAudio`: retaining the samples would
+        // put a recording of whatever was said into the repo.
+        calls.asrPushAudio.push(chunk.byteLength)
+        return Promise.resolve(responses.asrPushAudio)
+      },
+      listDevices: (devices) => {
+        calls.asrListDevices.push(devices)
+        return Promise.resolve(responses.asrListDevices)
+      },
+      onStatus: (callback) => on(IpcEvent.asrStatus, callback),
+      onTranscript: (callback) => on(IpcEvent.asrTranscript, callback),
     },
     config: {
       get: () => {

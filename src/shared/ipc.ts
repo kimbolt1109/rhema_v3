@@ -21,6 +21,7 @@ import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
 import type { CameraConfig, CameraSlot, CameraState } from './camera'
 import type { OverlayCommand, OverlayState } from './overlay'
 import type { GoLiveState } from './golive'
+import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from './asr'
 import type { Cue, PlanPosition, ServicePlan } from './plan'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
@@ -112,6 +113,13 @@ export const IpcChannel = {
   planAdvance: 'verger:plan:advance',
   planBack: 'verger:plan:back',
   planGetImporterStatus: 'verger:plan:get-importer-status',
+  asrGetStatus: 'verger:asr:get-status',
+  asrGetSettings: 'verger:asr:get-settings',
+  asrSetSettings: 'verger:asr:set-settings',
+  asrStart: 'verger:asr:start',
+  asrStop: 'verger:asr:stop',
+  asrPushAudio: 'verger:asr:push-audio',
+  asrListDevices: 'verger:asr:list-devices',
 } as const
 
 /** Union of every request channel string. */
@@ -133,6 +141,8 @@ export const IpcEvent = {
   goLiveState: 'verger:golive:state',
   planState: 'verger:plan:state',
   planImportProgress: 'verger:plan:import-progress',
+  asrStatus: 'verger:asr:status',
+  asrTranscript: 'verger:asr:transcript',
 } as const
 
 /** Union of every event channel string. */
@@ -191,6 +201,14 @@ export interface IpcRequest {
   [IpcChannel.planAdvance]: void
   [IpcChannel.planBack]: void
   [IpcChannel.planGetImporterStatus]: void
+  [IpcChannel.asrGetStatus]: void
+  [IpcChannel.asrGetSettings]: void
+  [IpcChannel.asrSetSettings]: AsrSettings
+  [IpcChannel.asrStart]: void
+  [IpcChannel.asrStop]: void
+  /** One PCM chunk from the renderer's capture. 16 kHz mono s16le. */
+  [IpcChannel.asrPushAudio]: ArrayBuffer
+  [IpcChannel.asrListDevices]: readonly AudioInputDevice[]
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -227,6 +245,13 @@ export interface IpcResponse {
   [IpcChannel.planAdvance]: Result<PlanState>
   [IpcChannel.planBack]: Result<PlanState>
   [IpcChannel.planGetImporterStatus]: Result<DeckImporterStatus>
+  [IpcChannel.asrGetStatus]: Result<AsrStatus>
+  [IpcChannel.asrGetSettings]: Result<AsrSettings>
+  [IpcChannel.asrSetSettings]: Result<AsrSettings>
+  [IpcChannel.asrStart]: Result<AsrStatus>
+  [IpcChannel.asrStop]: Result<AsrStatus>
+  [IpcChannel.asrPushAudio]: Result<void>
+  [IpcChannel.asrListDevices]: Result<void>
 }
 
 /** The payload pushed on each event channel. */
@@ -241,6 +266,8 @@ export interface IpcEventPayload {
   [IpcEvent.goLiveState]: GoLiveState
   [IpcEvent.planState]: PlanState
   [IpcEvent.planImportProgress]: DeckImportProgress
+  [IpcEvent.asrStatus]: AsrStatus
+  [IpcEvent.asrTranscript]: TranscriptSegment
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -318,6 +345,25 @@ export interface VergerApi {
     getImporterStatus(): Promise<Result<DeckImporterStatus>>
     onState(callback: (state: PlanState) => void): Unsubscribe
     onImportProgress(callback: (progress: DeckImportProgress) => void): Unsubscribe
+  }
+  readonly asr: {
+    getStatus(): Promise<Result<AsrStatus>>
+    getSettings(): Promise<Result<AsrSettings>>
+    setSettings(settings: AsrSettings): Promise<Result<AsrSettings>>
+    start(): Promise<Result<AsrStatus>>
+    stop(): Promise<Result<AsrStatus>>
+    /**
+     * Hand one PCM chunk to the recogniser.
+     *
+     * Capture lives in the RENDERER: only it has `getUserMedia`. The main process has no
+     * microphone access in Electron without a native module, so audio flows renderer -> main,
+     * not the other way round.
+     */
+    pushAudio(chunk: ArrayBuffer): Promise<Result<void>>
+    /** Report the devices the renderer enumerated, so settings can list them. */
+    listDevices(devices: readonly AudioInputDevice[]): Promise<Result<void>>
+    onStatus(callback: (status: AsrStatus) => void): Unsubscribe
+    onTranscript(callback: (segment: TranscriptSegment) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

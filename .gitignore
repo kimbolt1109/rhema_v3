@@ -48,6 +48,10 @@ desktop.ini
 # --- large runtime assets (provisioned, never committed) ---
 resources/models/
 resources/bin/
+# The local-ASR Python sidecar environment (faster-whisper + ctranslate2 + onnxruntime).
+# Hundreds of MB of platform-specific binaries — provisioned by `npm run asr:setup`, never
+# committed. Downloaded Whisper model weights land in the HuggingFace cache, also outside the repo.
+resources/asr-venv/
 *.pptx
 *.mp4
 *.mkv

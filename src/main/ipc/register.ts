@@ -71,6 +71,13 @@
  *    scripture cue, slide text pasted into a slide payload — are dropped at the process boundary
  *    rather than persisted into a plan file. `DeckImportProgress` has no content field either, so
  *    the import feed cannot carry slide text even while a deck is being converted.
+ *  - **Standing Rule 1 / BLUEPRINT.md §4 — a dead recogniser never blocks the operator.** The
+ *    seven `asr:*` handlers all resolve; an absent ASR service answers `NOT_CONFIGURED` (and a
+ *    renderable red status for `asrGetStatus`) and changes nothing else — the plan still advances
+ *    on SPACE, the cameras still switch, OBS still streams. `asrPushAudio` is the one channel on
+ *    this boundary that is not zod-parsed, not logged per call and not rate-limited: it fires ten
+ *    times a second for the length of a service, and the reasoning is written out at
+ *    `audioChunkArg`.
  *  - **Untrusted file paths are checked before the plan service sees them.** The renderer is the
  *    less-trusted side, and `planOpen`/`planSave`/`planImportDeck` name files on disk. A supplied
  *    path must be absolute, carry the expected extension and (for a read) actually be a file;
@@ -85,6 +92,7 @@ import { extname, isAbsolute, resolve as resolvePath } from 'node:path'
 import { BrowserWindow, app, dialog, ipcMain } from 'electron'
 import { z } from 'zod'
 
+import { getAsrService } from '@main/asr'
 import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getGoLiveService } from '@main/golive'
@@ -92,6 +100,14 @@ import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
 import { getSecretsStore } from '@main/secrets/secrets'
 import { getYouTubeService } from '@main/youtube'
+import {
+  ASR_BITS_PER_SAMPLE,
+  ASR_CHANNELS,
+  ASR_SAMPLE_RATE,
+  asrSettingsSchema,
+  idleAsrStatus
+} from '@shared/asr'
+import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from '@shared/asr'
 import { CAMERA_SLOTS, cameraConfigSchema } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
@@ -366,6 +382,57 @@ export interface PlanServiceLike {
   onImportProgress(listener: (progress: DeckImportProgress) => void): Unsubscribe | void
 }
 
+/**
+ * The minimum this module needs from the ASR service (`src/main/asr`).
+ *
+ * Structural for the strongest reason of any seam in this file: the concrete service owns a
+ * Deepgram websocket *and* a Python child process running faster-whisper on a GPU. **No test in
+ * this repo may make a network call**, there is no `DEEPGRAM_API_KEY` on this machine, and a
+ * local model load is a multi-second, multi-gigabyte affair. Nine methods against a plain object
+ * instead, and the whole IPC contract is provable with zero network and zero audio.
+ *
+ * Read the shape as three separate claims:
+ *
+ *  - **Audio flows renderer -> main, and only that way.** `pushAudio` takes a chunk; nothing here
+ *    returns one, and `TranscriptSegment` has no field that could carry a sample. Capture lives in
+ *    the renderer because only the renderer has `getUserMedia` — Electron's main process has no
+ *    microphone without a native module — so `listDevices` is the renderer *reporting* what it
+ *    enumerated rather than the main process asking.
+ *  - **`pushAudio` is the hot path and is shaped like one.** It fires every `ASR_CHUNK_MS`, ten
+ *    times a second for the length of a service. It takes a bare `ArrayBuffer`, it resolves with
+ *    `void`, and the handler below neither zod-parses it nor logs it. See `audioChunkArg`.
+ *  - **`onStatus` and `onTranscript` are separate feeds because they degrade separately.** A
+ *    `degraded` status (the local adapter took over from a dead Deepgram) still has transcript
+ *    flowing; a `failed` one does not. Collapsing them would hide a fallback the operator needs to
+ *    see, so the status feed keeps pushing whether or not segments are arriving.
+ *
+ * Note what the seam cannot express: there is no `getAudio`, no `getBuffer`, no transcript
+ * history. This layer forwards one segment at a time and keeps nothing.
+ */
+export interface AsrServiceLike {
+  /** The whole status light in one struct — state, provider, latency, device, error. Never throws. */
+  getStatus(): ClientCall<AsrStatus>
+  getSettings(): ClientCall<AsrSettings>
+  /** Persist operator settings (provider mode, language, device, custom vocabulary, model). */
+  setSettings(settings: AsrSettings): ClientCall<AsrSettings>
+  /** Begin recognising. Resolves with the resulting status, including a failed one. */
+  start(): ClientCall<AsrStatus>
+  /** Stop recognising. Never touches OBS, the stream or the recording. */
+  stop(): ClientCall<AsrStatus>
+  /**
+   * One PCM chunk, 16 kHz mono s16le. Called ~10x/second while a service is running.
+   *
+   * A `Uint8Array` rather than an `ArrayBuffer` because that is what the recogniser actually
+   * wants — both providers write bytes to a socket or a stdin pipe — and wrapping a validated
+   * buffer in a view is free, where copying it would not be.
+   */
+  pushAudio(chunk: Uint8Array): ClientCall<void>
+  /** The inputs the renderer enumerated, so the settings panel can list them. */
+  listDevices(devices: readonly AudioInputDevice[]): ClientCall<void>
+  onStatus(listener: (status: AsrStatus) => void): Unsubscribe | void
+  onTranscript(listener: (segment: TranscriptSegment) => void): Unsubscribe | void
+}
+
 /** The slice of Electron's `OpenDialogReturnValue` used here. */
 export interface OpenDialogResultLike {
   readonly canceled: boolean
@@ -500,6 +567,23 @@ export interface RegisterIpcDeps {
    * Pass `null` to say "there is no plan service" explicitly and skip the default lookup.
    */
   readonly plan?: PlanServiceLike | null
+  /**
+   * The ASR service (BLUEPRINT.md §4 and §8).
+   *
+   * Optional for exactly the reason the other five are: `src/main/index.ts` calls
+   * `registerIpc({ config, logger, obs, overlay, youtube, goLive, plan })` and a required ninth
+   * key would fail to compile. Defaults to the process-wide singleton from `@main/asr`.
+   *
+   * A `null` here is the *ordinary* state rather than an exceptional one. There is no
+   * `DEEPGRAM_API_KEY` on a fresh checkout and there may be no usable GPU, so the seven asr
+   * handlers each have a defined answer and the rest of Verger is untouched: cameras still switch,
+   * overlays still fire, the plan still advances on SPACE, OBS still streams. A dead recogniser
+   * must never block the operator — it goes red and the service runs manual (Standing Rules 1
+   * and 5).
+   *
+   * Pass `null` to say "there is no ASR service" explicitly and skip the default lookup.
+   */
+  readonly asr?: AsrServiceLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -810,6 +894,113 @@ const optionalPathArg: ArgValidator<{ path?: string }> = (raw) => {
 }
 
 // ---------------------------------------------------------------------------
+// ASR argument validation (BLUEPRINT.md §4 and §8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Operator ASR settings, validated at the process boundary as well as inside the service.
+ *
+ * `asrSettingsSchema` bounds `customVocabulary` at 500 entries of 80 characters, which is the
+ * field that matters here: keyword-boost terms are forwarded verbatim to Deepgram and used to
+ * build the local decoder's prompt, so an unbounded list is both a cost and a latency problem in
+ * the middle of a service. An invalid settings object is `Err(INVALID_ARG)` and the service is
+ * never called at all — a half-typed vocabulary must not be able to replace a working one.
+ */
+const asrSettingsArg: ArgValidator<AsrSettings> = zodArg(asrSettingsSchema)
+
+/**
+ * The device list the renderer enumerated.
+ *
+ * Bounded rather than trusted: `label` is a string the *operating system* produced from whatever
+ * a USB device claimed its name was, and it ends up rendered in the settings panel. 64 devices is
+ * already absurd for a church PC; 300 characters is a generous bound on a device name.
+ */
+const audioDevicesArg: ArgValidator<readonly AudioInputDevice[]> = zodArg(
+  z
+    .array(
+      z.object({
+        deviceId: z.string().min(1).max(300),
+        label: z.string().max(300)
+      })
+    )
+    .max(64)
+)
+
+/** Bytes of PCM per millisecond at the contract's format: 16 kHz x 1 channel x 16 bits = 32. */
+const ASR_BYTES_PER_MS = (ASR_SAMPLE_RATE * ASR_CHANNELS * ASR_BITS_PER_SAMPLE) / 8 / 1000
+
+/**
+ * The largest audio chunk this boundary will accept: two seconds of PCM.
+ *
+ * A normal chunk is `ASR_CHUNK_MS` (100 ms) — 3,200 bytes. Twenty times that leaves room for a
+ * capture loop that batches a few chunks after a garbage-collection pause without letting a
+ * renderer bug (or a compromised one) hand the main process an arbitrarily large buffer to hold.
+ */
+const MAX_AUDIO_CHUNK_BYTES = ASR_BYTES_PER_MS * 2_000
+
+/**
+ * `asrPushAudio`'s argument — and the one validator in this file that is deliberately **not** zod.
+ *
+ * Every other channel on this boundary is a user action: a button, a dialog, a settings save. They
+ * happen a few times a minute and their payloads are small structured objects, so parsing them
+ * with zod costs nothing measurable and buys a precise, field-level rejection.
+ *
+ * This channel is not that. It fires every `ASR_CHUNK_MS` — ten times a second, for the entire
+ * length of a service, on the process that also owns the OBS websocket and the overlay server.
+ * Handing a 3 KB binary blob to a schema validator ten times a second is pure waste: there are no
+ * fields to check, no optional keys to normalise and no shape to describe. What actually needs
+ * proving about a chunk is exactly two things — that it *is* a binary buffer, and that it is not
+ * absurdly large — and both are a `typeof` and a comparison.
+ *
+ * The same reasoning is why the handler below does not log per call and is not subject to the
+ * `logWrite` token bucket. A per-call log line at 10 Hz would write ~36,000 lines to the rolling
+ * file during a one-hour service, and a rate limiter on the *audio* path would silently drop
+ * speech — the transcript would develop holes and the operator would have no idea why. Back-
+ * pressure belongs in the recogniser, which knows what it can keep up with; this layer's job is to
+ * hand the bytes over and get out of the way.
+ *
+ * A `Uint8Array`/`Buffer` is accepted as well as a bare `ArrayBuffer` because structured clone and
+ * the renderer's own capture code can produce either, and the view's region is copied out rather
+ * than its whole backing store passed on — a view onto a 1 MB pool must not smuggle the pool.
+ */
+const audioChunkArg: ArgValidator<ArrayBuffer> = (raw) => {
+  if (raw instanceof ArrayBuffer) {
+    if (raw.byteLength === 0) {
+      return err('INVALID_ARG', 'the audio chunk is empty')
+    }
+    if (raw.byteLength > MAX_AUDIO_CHUNK_BYTES) {
+      return err(
+        'INVALID_ARG',
+        'the audio chunk is too large',
+        `max ${MAX_AUDIO_CHUNK_BYTES} bytes`
+      )
+    }
+    return ok(raw)
+  }
+
+  if (ArrayBuffer.isView(raw)) {
+    if (raw.byteLength === 0) {
+      return err('INVALID_ARG', 'the audio chunk is empty')
+    }
+    if (raw.byteLength > MAX_AUDIO_CHUNK_BYTES) {
+      return err(
+        'INVALID_ARG',
+        'the audio chunk is too large',
+        `max ${MAX_AUDIO_CHUNK_BYTES} bytes`
+      )
+    }
+    // Copy the view's own region only. `Buffer.from(...)` in particular is frequently a window
+    // onto a much larger shared pool, and passing `raw.buffer` straight through would hand the
+    // recogniser bytes that belong to someone else.
+    return ok(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer)
+  }
+
+  // No `detail`: the offending value here is raw microphone audio, and this file's rule is that a
+  // validation failure never echoes what caused it.
+  return err('INVALID_ARG', 'the audio chunk is not a binary buffer')
+}
+
+// ---------------------------------------------------------------------------
 // Rate limiting
 // ---------------------------------------------------------------------------
 
@@ -967,6 +1158,39 @@ function planUnavailable(): Result<never> {
     'NOT_CONNECTED',
     'the service plan is not available',
     'cameras, overlays and OBS are unaffected; drive slides from OBS directly'
+  )
+}
+
+/**
+ * What `asrGetStatus` reports when there is no ASR service object at all.
+ *
+ * A successful `Result` carrying `state: 'not-configured'` rather than an `Err`, for the same
+ * reason `overlayGetServerInfo` returns an offline info struct: the transcript panel's whole job
+ * is to render this struct, and an operator who sees a red `not-configured` light next to
+ * "DEEPGRAM_API_KEY" knows exactly what is wrong. An `Err` here would leave the panel with nothing
+ * to draw.
+ *
+ * `not-configured`, not `failed`. The two are different facts — "there is no recogniser here" is
+ * something you fix in settings, "the recogniser died" is something you fix during the service —
+ * and `AsrState` keeps them apart deliberately.
+ */
+function unavailableAsrStatus(detail: string): AsrStatus {
+  return { ...idleAsrStatus(), state: 'not-configured', lastError: detail }
+}
+
+/**
+ * The answer the other six asr channels give when there is no service object at all.
+ *
+ * `NOT_CONFIGURED`, not `INTERNAL`, and the `detail` is the part that matters: an operator whose
+ * transcript never appeared must be told in the same breath that nothing else is affected. ASR is
+ * an *assist*; the plan advances on SPACE with no recogniser attached, the cameras switch and the
+ * overlays fire. A dead ASR provider must never block the operator (Standing Rules 1 and 5).
+ */
+function asrUnavailable(): Result<never> {
+  return err(
+    'NOT_CONFIGURED',
+    'speech recognition is not available',
+    'set DEEPGRAM_API_KEY in .env or configure the local model; the service runs manually meanwhile'
   )
 }
 
@@ -1191,6 +1415,26 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
+  /**
+   * The ASR service, or `null` if there is not one. Resolved once, like the other five.
+   *
+   * Separate from every other lookup, and this separation is the one that carries Standing Rule 1.
+   * A recogniser that cannot be constructed — no Deepgram key, no usable GPU, a Python sidecar
+   * that will not start — leaves the plan, the cameras, the overlay and the go-live orchestrator
+   * completely untouched. The operator loses a suggestion engine, not a service.
+   */
+  const asr: AsrServiceLike | null = resolveAsrService()
+
+  function resolveAsrService(): AsrServiceLike | null {
+    if (deps.asr !== undefined) return deps.asr
+    try {
+      return getAsrService()
+    } catch (cause) {
+      log.warn('the ASR service is unavailable; asr IPC will report NOT_CONFIGURED', { cause })
+      return null
+    }
+  }
+
   /** Native file dialogs. `null` means "no dialog here" — the plan channels then need a path. */
   const dialogs: DialogLike | null = deps.dialog === undefined ? (dialog ?? null) : deps.dialog
 
@@ -1387,6 +1631,38 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       )
     } catch (cause) {
       log.error('failed to subscribe to the plan service', { cause })
+    }
+  }
+
+  // The ASR fan-out. Two feeds, and they are separate because they degrade separately.
+  //
+  // `asrStatus` is a whole `AsrStatus` snapshot — state, which provider is actually producing the
+  // transcript, median latency, the captured device and the last error — pushed on every change.
+  // `degraded` (Deepgram died and the local adapter took over) and `failed` (nothing is arriving)
+  // are deliberately distinct states, and this is the channel that tells them apart for the
+  // operator: one means "working, but worse", the other means "you are on your own now".
+  //
+  // `asrTranscript` carries one `TranscriptSegment` at a time, forwarded exactly as the service
+  // emitted it. The draft/final contract rides on the payload rather than on the channel: many
+  // `isFinal: false` segments share one stable `id` and each REPLACES the previous, then exactly
+  // one `isFinal: true` supersedes them all — and the local two-tier scheduler's fast draft
+  // (`isDraft: true`) is replaced by the small model's final the same way. This layer keeps no
+  // history and reorders nothing; a consumer that appended instead of replacing would flicker
+  // gibberish, which is why the rule lives in `@shared/asr` where every consumer can read it.
+  if (asr !== null) {
+    try {
+      registerUnsubscribe(
+        asr.onStatus((status) => {
+          broadcast(IpcEvent.asrStatus, status)
+        })
+      )
+      registerUnsubscribe(
+        asr.onTranscript((segment) => {
+          broadcast(IpcEvent.asrTranscript, segment)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the ASR service', { cause })
     }
   }
 
@@ -1825,6 +2101,106 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return resolveCall(plan.getImporterStatus())
   })
 
+  // --- asr (BLUEPRINT.md §4 and §8) ----------------------------------------
+  //
+  // Seven channels, six of which are ordinary control verbs and one of which is unlike anything
+  // else on this boundary. `asrPushAudio` fires every `ASR_CHUNK_MS` — ten times a second, for the
+  // whole length of a service — while this same process is holding the OBS websocket open and
+  // serving the overlay. It is therefore the one channel that is not zod-parsed (see
+  // `audioChunkArg`), not logged per call, and not rate-limited:
+  //
+  //  - **Not zod-parsed**, because there is nothing structured to parse. A 3 KB binary blob has no
+  //    fields; what needs proving is that it is a buffer and that it is not absurdly large, which
+  //    is a `typeof` and a comparison rather than a schema walk at 10 Hz.
+  //  - **Not logged per call**, because ~36,000 lines an hour into the rolling file — on the
+  //    process that owns the broadcast — buys nothing. A rejected chunk is logged by `safeHandle`
+  //    exactly as any other rejected payload, so a renderer sending nonsense is still visible.
+  //  - **Not rate-limited.** The `logWrite` token bucket sheds excess and returns
+  //    `Err(RATE_LIMITED)`; doing that to audio would silently punch holes in the transcript and
+  //    the operator would have no way to know why. Back-pressure belongs in the recogniser, which
+  //    is the only component that knows what it can keep up with.
+  //
+  // Sender validation still applies to every one of the seven, audio included: `safeHandle` runs
+  // its window-identity check before the validator, so a chunk from anything but a Verger window
+  // is refused before it is even measured.
+  //
+  // And the whole block is subordinate to Standing Rule 1. Nothing here can block the operator:
+  // every handler resolves, an absent service is a defined answer rather than a hang, and no
+  // failure path in this section touches OBS, the plan pointer, the cameras or the overlay.
+
+  /**
+   * The status light.
+   *
+   * Never an `Err`, even with no service at all — see `unavailableAsrStatus`. The transcript
+   * panel renders this struct, and "there is no recogniser" is information it draws in red rather
+   * than a failure it has to special-case.
+   */
+  safeHandle(IpcChannel.asrGetStatus, noArg, async () => {
+    if (asr === null) {
+      return ok(unavailableAsrStatus('the ASR service was never created'))
+    }
+    const status = await resolveCall(asr.getStatus())
+    return status.ok ? status : ok(unavailableAsrStatus(status.error.message))
+  })
+
+  safeHandle(IpcChannel.asrGetSettings, noArg, async () => {
+    if (asr === null) return asrUnavailable()
+    return resolveCall(asr.getSettings())
+  })
+
+  /**
+   * Save operator settings — provider mode, language, device, custom vocabulary, local model.
+   *
+   * `asrSettingsArg` has already run, so the service is never handed an unvalidated vocabulary
+   * list. An invalid payload is `Err(INVALID_ARG)` and the service is not called at all: a
+   * half-typed settings form must not be able to replace a working configuration mid-service.
+   */
+  safeHandle(IpcChannel.asrSetSettings, asrSettingsArg, async (settings) => {
+    if (asr === null) return asrUnavailable()
+    return resolveCall(asr.setSettings(settings))
+  })
+
+  safeHandle(IpcChannel.asrStart, noArg, async () => {
+    if (asr === null) return asrUnavailable()
+    return resolveCall(asr.start())
+  })
+
+  /**
+   * Stop recognising.
+   *
+   * Stops the recogniser and nothing else. There is no OBS call here, no output touched and no
+   * plan pointer moved — turning the ears off must never be able to affect the broadcast.
+   */
+  safeHandle(IpcChannel.asrStop, noArg, async () => {
+    if (asr === null) return asrUnavailable()
+    return resolveCall(asr.stop())
+  })
+
+  /**
+   * One PCM chunk from the renderer's capture. The hot path — see the block comment above.
+   *
+   * Deliberately three lines. Anything added here runs ten times a second for an hour.
+   */
+  safeHandle(IpcChannel.asrPushAudio, audioChunkArg, async (chunk) => {
+    if (asr === null) return asrUnavailable()
+    // A view, not a copy. The bytes were already isolated by `audioChunkArg`.
+    return resolveCall(asr.pushAudio(new Uint8Array(chunk)))
+  })
+
+  /**
+   * The inputs the renderer enumerated.
+   *
+   * Device enumeration lives in the renderer for the same reason capture does — `getUserMedia` and
+   * `enumerateDevices` are renderer APIs, and Electron's main process has no microphone without a
+   * native module — so this channel is the renderer *reporting* rather than the main process
+   * asking. The list is bounded and length-checked before the service sees it: a device `label` is
+   * a string an arbitrary USB device chose for itself.
+   */
+  safeHandle(IpcChannel.asrListDevices, audioDevicesArg, async (devices) => {
+    if (asr === null) return asrUnavailable()
+    return resolveCall(asr.listDevices(devices))
+  })
+
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
 
   safeHandle(IpcChannel.logWrite, logRecordArg, async (record) => {
@@ -1937,7 +2313,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     camera: camera === null ? 'unavailable' : 'attached',
     youtube: youtube === null ? 'unavailable' : 'attached',
     goLive: goLive === null ? 'unavailable' : 'attached',
-    plan: plan === null ? 'unavailable' : 'attached'
+    plan: plan === null ? 'unavailable' : 'attached',
+    asr: asr === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -1956,8 +2333,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     registeredChannels.length = 0
 
     // Covers the OBS status/scene-list subscriptions, the overlay state/info ones, the camera
-    // state one, the YouTube status one, the go-live state one and the plan state/import-progress
-    // pair alike: all of them were pushed
+    // state one, the YouTube status one, the go-live state one, the plan state/import-progress
+    // pair and the ASR status/transcript pair alike: all of them were pushed
     // onto `unsubscribers` by `registerUnsubscribe`, so no subsystem is left holding a listener
     // into a disposed bridge — a YouTube poll that outlived the bridge would keep pushing at dead
     // windows for the rest of the process, and the go-live poller is a health loop that runs at

@@ -33,6 +33,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 
+import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from '@shared/asr'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
 import type { GoLiveState } from '@shared/golive'
@@ -267,6 +268,57 @@ const api: VergerApi = {
       subscribe<PlanState>(IpcEvent.planState, callback),
     onImportProgress: (callback: (progress: DeckImportProgress) => void): Unsubscribe =>
       subscribe<DeckImportProgress>(IpcEvent.planImportProgress, callback)
+  },
+
+  /**
+   * The ears (BLUEPRINT.md §4 and §8).
+   *
+   * This is the one group whose data flows *upward*. Everywhere else the renderer asks and the
+   * main process answers; here the renderer is the source, because **only the renderer has
+   * `getUserMedia`**. Electron's main process has no microphone without a native module, so
+   * capture, resampling to 16 kHz mono s16le and device enumeration all happen in renderer code
+   * and arrive here as `pushAudio` and `listDevices`. (The Phase 7 build prompt says "mic capture
+   * in the main process"; that is not achievable in Electron without native code, and this is the
+   * deviation.)
+   *
+   * Three shapes are load-bearing:
+   *
+   *  - **`pushAudio` is the hot path.** It fires every `ASR_CHUNK_MS` — ten times a second, for
+   *    the length of a service — so it carries a bare `ArrayBuffer` and nothing else. There is no
+   *    envelope object to allocate per chunk and no timestamp field to keep in sync; the main side
+   *    checks the buffer's *shape and size* rather than zod-parsing three kilobytes of binary ten
+   *    times a second. It still resolves with a `Result<void>` like everything else, so a dead
+   *    recogniser is a value the capture loop can read rather than a rejection it has to catch.
+   *  - **Audio only ever goes one way.** There is no method here that returns audio, and
+   *    `TranscriptSegment` has no field that could carry a sample. Raw audio reaches the main
+   *    process, is recognised, and is gone.
+   *  - **`onTranscript` delivers the draft/final contract unchanged.** A span of speech arrives as
+   *    many `isFinal: false` segments sharing one stable `id`, each *replacing* the previous, then
+   *    exactly one `isFinal: true` that supersedes them all — and the local adapter's fast draft
+   *    model works the same way (`isDraft: true`, later replaced by the small model's final).
+   *    Consumers key on `id` and replace; appending before `isFinal` is what makes a transcript
+   *    flicker gibberish.
+   *
+   * `not-configured` (no `DEEPGRAM_API_KEY`, no local model) is an ordinary resolved value, not a
+   * rejection: `getStatus()` succeeds, the panel goes red, and the operator drives the service by
+   * hand exactly as before (Standing Rule 1 and Standing Rule 5). Nothing in this group can block
+   * the operator, because nothing in it is on the path between a keypress and a cue.
+   */
+  asr: {
+    getStatus: (): Promise<Result<AsrStatus>> => ipcRenderer.invoke(IpcChannel.asrGetStatus),
+    getSettings: (): Promise<Result<AsrSettings>> => ipcRenderer.invoke(IpcChannel.asrGetSettings),
+    setSettings: (settings: AsrSettings): Promise<Result<AsrSettings>> =>
+      ipcRenderer.invoke(IpcChannel.asrSetSettings, settings),
+    start: (): Promise<Result<AsrStatus>> => ipcRenderer.invoke(IpcChannel.asrStart),
+    stop: (): Promise<Result<AsrStatus>> => ipcRenderer.invoke(IpcChannel.asrStop),
+    pushAudio: (chunk: ArrayBuffer): Promise<Result<void>> =>
+      ipcRenderer.invoke(IpcChannel.asrPushAudio, chunk),
+    listDevices: (devices: readonly AudioInputDevice[]): Promise<Result<void>> =>
+      ipcRenderer.invoke(IpcChannel.asrListDevices, devices),
+    onStatus: (callback: (status: AsrStatus) => void): Unsubscribe =>
+      subscribe<AsrStatus>(IpcEvent.asrStatus, callback),
+    onTranscript: (callback: (segment: TranscriptSegment) => void): Unsubscribe =>
+      subscribe<TranscriptSegment>(IpcEvent.asrTranscript, callback)
   },
 
   config: {

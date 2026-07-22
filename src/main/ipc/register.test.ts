@@ -12,6 +12,8 @@ import { resolve as resolvePath } from 'node:path'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ASR_CHANNELS, ASR_CHUNK_MS, ASR_SAMPLE_RATE, idleAsrStatus } from '@shared/asr'
+import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from '@shared/asr'
 import { CAMERA_SLOTS, findBinding, isBindingUsable, slotForScene } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
@@ -124,9 +126,28 @@ vi.mock('@main/plan', () => ({
   }
 }))
 
+/**
+ * The ASR singleton, mocked to throw like the other five — and for two reasons at once.
+ *
+ * The real one opens a Deepgram websocket and spawns a Python child process that loads a
+ * faster-whisper model onto the GPU. **No test in this repo may make a network call**, there is no
+ * `DEEPGRAM_API_KEY` on this machine and there never will be, and a model load is a multi-second,
+ * multi-gigabyte affair that would turn this suite into an integration test.
+ *
+ * Making it throw also lets the tests below assert what the seven asr channels answer when the
+ * recogniser could not be constructed at all — which is the state of every fresh checkout, and
+ * which must read as "the service runs manually", never as a crash.
+ */
+vi.mock('@main/asr', () => ({
+  getAsrService: () => {
+    throw new Error('the ASR service singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
+  type AsrServiceLike,
   type CameraServiceLike,
   type DialogLike,
   type FilePathProbeLike,
@@ -889,6 +910,207 @@ function createFakePlanService(): FakePlanService {
   return service
 }
 
+// ---------------------------------------------------------------------------
+// ASR fake (BLUEPRINT.md §4 and §8)
+//
+// Entirely in-memory, and deliberately so in two directions at once. It opens no websocket and
+// spawns no Python, because no test here may reach the network or load a model — and every byte of
+// audio it is fed is **synthesised in this file**, because Standing Rule 4 forbids committing
+// audio fixtures or transcripts of copyrighted material. The PCM below is arithmetic (silence and
+// a sine tone) and the transcript text is invented placeholder wording that nobody has ever said
+// from a pulpit.
+// ---------------------------------------------------------------------------
+
+/** Bytes one millisecond of the contract's PCM format occupies: 16 kHz x 1ch x 16-bit = 32. */
+const PCM_BYTES_PER_MS = 32
+
+/** Samples in `ms` milliseconds of the contract's format. */
+function pcmSampleCount(ms: number): number {
+  return Math.round((ASR_SAMPLE_RATE * ms) / 1000) * ASR_CHANNELS
+}
+
+/**
+ * `ms` milliseconds of digital silence.
+ *
+ * Synthesised, not recorded. It is also the input the local adapter's hallucination filter exists
+ * for — Whisper fed silence emits "thank you for watching" — which is why silence rather than
+ * noise is the default fixture here.
+ */
+function pcmSilence(ms: number): ArrayBuffer {
+  return new Int16Array(pcmSampleCount(ms)).buffer as ArrayBuffer
+}
+
+/** `ms` milliseconds of a pure tone. The only "speech-like" input this repo will ever contain. */
+function pcmSineTone(ms: number, hz = 440): ArrayBuffer {
+  const samples = pcmSampleCount(ms)
+  const pcm = new Int16Array(samples)
+  for (let index = 0; index < samples; index += 1) {
+    pcm[index] = Math.round(Math.sin((2 * Math.PI * hz * index) / ASR_SAMPLE_RATE) * 8_000)
+  }
+  return pcm.buffer as ArrayBuffer
+}
+
+const LISTENING_ASR_STATUS: AsrStatus = {
+  state: 'listening',
+  provider: 'deepgram',
+  language: 'ko',
+  latencyMs: 320,
+  deviceId: 'mic-1',
+  deviceLabel: 'Pulpit mic',
+  lastError: null,
+  since: 1_000
+}
+
+/**
+ * Cloud died, local took over, transcript still arriving.
+ *
+ * Kept distinct from the failed status below on purpose: `degraded` means "working, but worse" and
+ * `failed` means "you are on your own now". Collapsing them would hide a provider fallback the
+ * operator has a right to see, and the tests below assert both survive the boundary unflattened.
+ */
+const DEGRADED_ASR_STATUS: AsrStatus = {
+  ...LISTENING_ASR_STATUS,
+  state: 'degraded',
+  provider: 'whisper',
+  latencyMs: 1_400,
+  lastError: 'the cloud provider dropped; recognising locally'
+}
+
+const FAILED_ASR_STATUS: AsrStatus = {
+  ...idleAsrStatus(),
+  state: 'failed',
+  lastError: 'no provider could be started'
+}
+
+/**
+ * The draft half of one span of speech, and then its final.
+ *
+ * Same `id`, and that is the entire draft/final contract: the final REPLACES the draft rather than
+ * following it. The text is invented placeholder wording — Standing Rule 4 means no real sermon,
+ * hymn or verse text is committed to this repo, and a test asserting fan-out does not need any.
+ */
+const DRAFT_SEGMENT: TranscriptSegment = {
+  id: 'segment-1',
+  text: 'PARTIAL TRANSCRIPT PLACEHOLDER',
+  isFinal: false,
+  tsStart: 0,
+  tsEnd: 640,
+  confidence: null,
+  provider: 'whisper',
+  isDraft: true
+}
+
+const FINAL_SEGMENT: TranscriptSegment = {
+  id: 'segment-1',
+  text: 'FINAL TRANSCRIPT PLACEHOLDER',
+  isFinal: true,
+  tsStart: 0,
+  tsEnd: 980,
+  confidence: 0.91,
+  provider: 'whisper',
+  isDraft: false
+}
+
+const ASR_SETTINGS: AsrSettings = {
+  mode: 'auto',
+  language: 'ko',
+  deviceId: 'mic-1',
+  // Invented placeholder terms. Real keyword boosting would carry a pastor's name and hymn titles;
+  // neither belongs in a committed fixture.
+  customVocabulary: ['PLACEHOLDER NAME', 'PLACEHOLDER CHURCH'],
+  localModel: 'small'
+}
+
+const AUDIO_DEVICES: readonly AudioInputDevice[] = [
+  { deviceId: 'mic-1', label: 'Pulpit mic' },
+  { deviceId: 'mic-2', label: 'Ambient mic' }
+]
+
+interface FakeAsrService extends AsrServiceLike {
+  emitStatus(status: AsrStatus): void
+  emitTranscript(segment: TranscriptSegment): void
+  /** Every chunk that actually reached the service. Must stay empty for rejected input. */
+  readonly chunks: Uint8Array[]
+  /** Every settings object that actually reached the service. Same rule. */
+  readonly settingsWrites: AsrSettings[]
+  readonly deviceReports: Array<readonly AudioInputDevice[]>
+  readonly startCalls: () => number
+  readonly stopCalls: () => number
+  readonly statusUnsubscribed: () => number
+  readonly transcriptUnsubscribed: () => number
+}
+
+function createFakeAsrService(): FakeAsrService {
+  let statusListener: ((status: AsrStatus) => void) | null = null
+  let transcriptListener: ((segment: TranscriptSegment) => void) | null = null
+  let statusUnsubscribes = 0
+  let transcriptUnsubscribes = 0
+  let starts = 0
+  let stops = 0
+  let settings: AsrSettings = ASR_SETTINGS
+  const chunks: Uint8Array[] = []
+  const settingsWrites: AsrSettings[] = []
+  const deviceReports: Array<readonly AudioInputDevice[]> = []
+
+  const service: FakeAsrService = {
+    chunks,
+    settingsWrites,
+    deviceReports,
+    startCalls: () => starts,
+    stopCalls: () => stops,
+    statusUnsubscribed: () => statusUnsubscribes,
+    transcriptUnsubscribed: () => transcriptUnsubscribes,
+
+    // A bare value rather than a Result, like the camera and overlay fakes: mixing the two shapes
+    // across the fakes is what keeps `resolveCall` honest.
+    getStatus: () => LISTENING_ASR_STATUS,
+    getSettings: () => settings,
+    setSettings: (next) => {
+      settingsWrites.push(next)
+      settings = next
+      return ok(settings)
+    },
+    start: () => {
+      starts += 1
+      return ok(LISTENING_ASR_STATUS)
+    },
+    stop: () => {
+      stops += 1
+      return ok(idleAsrStatus())
+    },
+    pushAudio: (chunk) => {
+      chunks.push(chunk)
+      return ok(undefined)
+    },
+    listDevices: (devices) => {
+      deviceReports.push(devices)
+      return ok(undefined)
+    },
+    onStatus: (listener) => {
+      statusListener = listener
+      return () => {
+        statusUnsubscribes += 1
+        statusListener = null
+      }
+    },
+    onTranscript: (listener) => {
+      transcriptListener = listener
+      return () => {
+        transcriptUnsubscribes += 1
+        transcriptListener = null
+      }
+    },
+
+    emitStatus: (status) => {
+      statusListener?.(status)
+    },
+    emitTranscript: (segment) => {
+      transcriptListener?.(segment)
+    }
+  }
+  return service
+}
+
 interface FakeDialog extends DialogLike {
   openResult: OpenDialogResultLike
   saveResult: SaveDialogResultLike
@@ -992,6 +1214,7 @@ interface Harness {
   readonly youtube: FakeYouTubeService
   readonly goLive: FakeGoLiveService
   readonly plan: FakePlanService
+  readonly asr: FakeAsrService
   readonly dialog: FakeDialog
   readonly filePaths: FakeFilePaths
   readonly windows: FakeWindow[]
@@ -1009,6 +1232,7 @@ function setup(options: { windows?: number } = {}): Harness {
   const youtube = createFakeYouTubeService()
   const goLive = createFakeGoLiveService()
   const plan = createFakePlanService()
+  const asr = createFakeAsrService()
   const dialog = createFakeDialog()
   const filePaths = createFakeFilePaths()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
@@ -1032,6 +1256,7 @@ function setup(options: { windows?: number } = {}): Harness {
     youtube,
     goLive,
     plan,
+    asr,
     dialog,
     filePaths,
     config: CONFIG,
@@ -1051,6 +1276,7 @@ function setup(options: { windows?: number } = {}): Harness {
     youtube,
     goLive,
     plan,
+    asr,
     dialog,
     filePaths,
     windows,
@@ -1101,6 +1327,22 @@ describe('registerIpc', () => {
       IpcChannel.goLiveGetState,
       IpcChannel.goLiveStart,
       IpcChannel.goLiveEnd
+    ]) {
+      expect(harness.ipc.handlers.has(channel)).toBe(true)
+    }
+
+    // And the seven Phase 7 asr channels, named for the same reason. `asrPushAudio` in particular
+    // is registered through the same `safeHandle` wrapper as everything else despite being the hot
+    // path — it is the *validator* that differs, never the sender check or the never-throws
+    // guarantee.
+    for (const channel of [
+      IpcChannel.asrGetStatus,
+      IpcChannel.asrGetSettings,
+      IpcChannel.asrSetSettings,
+      IpcChannel.asrStart,
+      IpcChannel.asrStop,
+      IpcChannel.asrPushAudio,
+      IpcChannel.asrListDevices
     ]) {
       expect(harness.ipc.handlers.has(channel)).toBe(true)
     }
@@ -1331,6 +1573,11 @@ describe('registerIpc', () => {
     // keep pushing conversion progress at a dead bridge for the rest of the process.
     expect(harness.plan.stateUnsubscribed()).toBe(1)
     expect(harness.plan.progressUnsubscribed()).toBe(1)
+    // And both ASR subscriptions. The transcript feed is the highest-frequency push in the app —
+    // partials arrive several times a second while anyone is speaking — so a listener surviving
+    // dispose would hammer a dead bridge for the rest of the service.
+    expect(harness.asr.statusUnsubscribed()).toBe(1)
+    expect(harness.asr.transcriptUnsubscribed()).toBe(1)
 
     // Disposal unsubscribed and did nothing else. It did not end the broadcast, and it did not
     // stop the recording — a hot reload or a window close is not a reason to take a
@@ -1348,6 +1595,8 @@ describe('registerIpc', () => {
     expect(harness.goLive.stateUnsubscribed()).toBe(1)
     expect(harness.plan.stateUnsubscribed()).toBe(1)
     expect(harness.plan.progressUnsubscribed()).toBe(1)
+    expect(harness.asr.statusUnsubscribed()).toBe(1)
+    expect(harness.asr.transcriptUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -1368,6 +1617,8 @@ describe('registerIpc', () => {
       slidesTotal: 1,
       message: null
     })
+    harness.asr.emitStatus(LISTENING_ASR_STATUS)
+    harness.asr.emitTranscript(FINAL_SEGMENT)
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -3250,6 +3501,481 @@ describe('registerIpc', () => {
       // through its own seams — this layer stays out of it.
       expect(harness.overlay.sent).toHaveLength(0)
       expect(harness.camera.selected).toHaveLength(0)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // ASR (BLUEPRINT.md §4 and §8)
+  //
+  // Every byte of audio in this block is synthesised arithmetically and every word of transcript
+  // is invented placeholder wording. Standing Rule 4 forbids committing audio fixtures or
+  // transcripts of copyrighted material, and none of these tests needs any: what is being proven
+  // is that the boundary forwards, bounds and refuses correctly, not that a recogniser works.
+  // -------------------------------------------------------------------------
+
+  describe('asr channels', () => {
+    it('returns the recogniser status snapshot', async () => {
+      const result = (await harness.invoke(IpcChannel.asrGetStatus)) as Result<AsrStatus>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(LISTENING_ASR_STATUS)
+    })
+
+    it('returns and replaces settings', async () => {
+      const initial = (await harness.invoke(IpcChannel.asrGetSettings)) as Result<AsrSettings>
+      expect(initial.ok).toBe(true)
+      if (!initial.ok) return
+      expect(initial.value).toEqual(ASR_SETTINGS)
+
+      const next: AsrSettings = { ...ASR_SETTINGS, mode: 'local', language: 'en' }
+      const saved = (await harness.invoke(IpcChannel.asrSetSettings, next)) as Result<AsrSettings>
+      expect(saved.ok).toBe(true)
+      expect(harness.asr.settingsWrites).toEqual([next])
+    })
+
+    /**
+     * Invalid settings are refused *and the service is never called*.
+     *
+     * The second half is the half that matters. A half-typed vocabulary list arriving mid-service
+     * must not be able to replace a working configuration, so the assertion is on
+     * `settingsWrites` staying empty rather than only on the returned code.
+     */
+    it('rejects invalid settings with Err(INVALID_ARG) and never calls the service', async () => {
+      const rejected: unknown[] = [
+        { ...ASR_SETTINGS, mode: 'psychic' },
+        { ...ASR_SETTINGS, language: 'fr' },
+        { ...ASR_SETTINGS, localModel: '' },
+        { ...ASR_SETTINGS, deviceId: 17 },
+        // 501 terms — one past the schema's bound. Keyword-boost lists are forwarded verbatim to
+        // the provider, so an unbounded one is a cost and a latency problem during a service.
+        { ...ASR_SETTINGS, customVocabulary: Array.from({ length: 501 }, (_, i) => `term-${i}`) },
+        'nope',
+        undefined
+      ]
+
+      for (const payload of rejected) {
+        const error = expectErr(await harness.invoke(IpcChannel.asrSetSettings, payload))
+        expect(error.code).toBe('INVALID_ARG')
+      }
+
+      expect(harness.asr.settingsWrites).toHaveLength(0)
+    })
+
+    /**
+     * A custom-vocabulary list is the most personal payload on this boundary — it is where the
+     * pastor's name and the church's name live — so a validation failure must not echo it back.
+     */
+    it('never echoes a rejected vocabulary term in the error detail', async () => {
+      const error = expectErr(
+        await harness.invoke(IpcChannel.asrSetSettings, {
+          ...ASR_SETTINGS,
+          customVocabulary: [`SENSITIVE-${'x'.repeat(80)}`]
+        })
+      )
+      expect(error.code).toBe('INVALID_ARG')
+      expect(JSON.stringify(error)).not.toContain('SENSITIVE')
+    })
+
+    it('starts and stops the recogniser', async () => {
+      const started = (await harness.invoke(IpcChannel.asrStart)) as Result<AsrStatus>
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      expect(started.value.state).toBe('listening')
+      expect(harness.asr.startCalls()).toBe(1)
+
+      const stopped = (await harness.invoke(IpcChannel.asrStop)) as Result<AsrStatus>
+      expect(stopped.ok).toBe(true)
+      if (!stopped.ok) return
+      expect(stopped.value.state).toBe('idle')
+      expect(harness.asr.stopCalls()).toBe(1)
+
+      // Turning the ears off touched nothing else. It is not allowed to.
+      expect(harness.obs.disconnectCalls()).toBe(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
+    })
+
+    it('forwards a normal 100 ms PCM chunk straight to the service', async () => {
+      const tone = pcmSineTone(ASR_CHUNK_MS)
+      expect(tone.byteLength).toBe(ASR_CHUNK_MS * PCM_BYTES_PER_MS)
+
+      const result = (await harness.invoke(IpcChannel.asrPushAudio, tone)) as Result<void>
+      expect(result.ok).toBe(true)
+
+      expect(harness.asr.chunks).toHaveLength(1)
+      const forwarded = harness.asr.chunks[0]
+      // A *view over the same buffer*, not a copy: a bare `ArrayBuffer` is wrapped and handed
+      // straight over. Anything this path does per call, it does ten times a second for an hour.
+      expect(forwarded?.buffer).toBe(tone)
+      expect(forwarded?.byteLength).toBe(tone.byteLength)
+      expect(forwarded).toEqual(new Uint8Array(tone))
+    })
+
+    /**
+     * A `Uint8Array`/`Buffer` is accepted, and only *its own region* is forwarded.
+     *
+     * `Buffer.from(...)` is routinely a window onto a much larger shared pool; passing the whole
+     * backing store on would hand the recogniser bytes belonging to something else entirely.
+     */
+    it('accepts a typed-array view and copies out only its own region', async () => {
+      const pool = new Uint8Array(pcmSilence(1_000))
+      pool.fill(7)
+      const view = pool.subarray(64, 64 + ASR_CHUNK_MS * PCM_BYTES_PER_MS)
+
+      const result = (await harness.invoke(IpcChannel.asrPushAudio, view)) as Result<void>
+      expect(result.ok).toBe(true)
+
+      const forwarded = harness.asr.chunks[0]
+      expect(forwarded?.byteLength).toBe(ASR_CHUNK_MS * PCM_BYTES_PER_MS)
+      // The forwarded chunk sits on a buffer of exactly its own size — the 32 KB pool did not
+      // travel with it, and the recogniser cannot reach back into bytes that were never its own.
+      expect(forwarded?.buffer).not.toBe(pool.buffer)
+      expect(forwarded?.buffer.byteLength).toBe(ASR_CHUNK_MS * PCM_BYTES_PER_MS)
+      expect(forwarded?.byteOffset).toBe(0)
+    })
+
+    /**
+     * An oversized chunk is refused and never reaches the service.
+     *
+     * The bound is two seconds of PCM — twenty normal chunks — which leaves room for a capture
+     * loop that batches after a GC pause while refusing to let a renderer bug hand the main
+     * process an arbitrarily large buffer to hold onto during a service.
+     */
+    it('rejects an oversized audio chunk without calling the service', async () => {
+      const huge = pcmSilence(2_100)
+      expect(huge.byteLength).toBeGreaterThan(2_000 * PCM_BYTES_PER_MS)
+
+      const error = expectErr(await harness.invoke(IpcChannel.asrPushAudio, huge))
+      expect(error.code).toBe('INVALID_ARG')
+      expect(harness.asr.chunks).toHaveLength(0)
+    })
+
+    it('rejects an audio chunk that is not a binary buffer, and an empty one', async () => {
+      for (const payload of [undefined, null, 'audio', 42, { data: [1, 2, 3] }, [1, 2, 3]]) {
+        expect(expectErr(await harness.invoke(IpcChannel.asrPushAudio, payload)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+      expect(expectErr(await harness.invoke(IpcChannel.asrPushAudio, new ArrayBuffer(0))).code).toBe(
+        'INVALID_ARG'
+      )
+      expect(harness.asr.chunks).toHaveLength(0)
+    })
+
+    it('refuses audio from a window this process did not create', async () => {
+      const stranger = createFakeWindow('https://evil.example/')
+      const error = expectErr(
+        await harness.invoke(
+          IpcChannel.asrPushAudio,
+          pcmSilence(ASR_CHUNK_MS),
+          eventFrom(stranger)
+        )
+      )
+      expect(error.code).toBe('INVALID_ARG')
+      expect(harness.asr.chunks).toHaveLength(0)
+    })
+
+    /**
+     * The hot path writes nothing to the log.
+     *
+     * `asrPushAudio` fires every `ASR_CHUNK_MS` — ten times a second, ~36,000 times in an hour —
+     * on the process that owns the OBS websocket and the rolling log file. A single `log.debug`
+     * per call would be 36,000 lines a service for no diagnostic value, so this test pins the
+     * absence: fifty accepted chunks must produce exactly zero log lines.
+     */
+    it('does not log per accepted audio chunk', async () => {
+      const lines: LogLine[] = []
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const asr = createFakeAsrService()
+
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr,
+        config: CONFIG,
+        logger: createRecordingLogger(lines),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.asrPushAudio)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      // Registration itself logs a summary line; only what happens afterwards is under test.
+      const before = lines.length
+
+      for (let index = 0; index < 50; index += 1) {
+        const result = (await handler(
+          eventFrom(window),
+          pcmSilence(ASR_CHUNK_MS)
+        )) as Result<void>
+        expect(result.ok).toBe(true)
+      }
+
+      expect(asr.chunks).toHaveLength(50)
+      expect(lines).toHaveLength(before)
+
+      // And a *rejected* chunk is still logged, exactly like every other rejected payload — the
+      // silence above is about volume, not about hiding a renderer that is sending nonsense.
+      expect(expectErr(await handler(eventFrom(window), 'not audio')).code).toBe('INVALID_ARG')
+      expect(lines.length).toBeGreaterThan(before)
+    })
+
+    /**
+     * Audio is not subject to the `logWrite` token bucket.
+     *
+     * That limiter sheds excess at 100 records/second and answers `RATE_LIMITED`. Applying it to
+     * audio would punch silent holes in the transcript that the operator could not see or explain,
+     * so 200 chunks — twice the bucket's capacity, more than a service ever sends in two seconds —
+     * all arrive.
+     */
+    it('does not rate-limit audio chunks', async () => {
+      for (let index = 0; index < 200; index += 1) {
+        const result = (await harness.invoke(
+          IpcChannel.asrPushAudio,
+          pcmSilence(ASR_CHUNK_MS)
+        )) as Result<void>
+        expect(result.ok).toBe(true)
+      }
+      expect(harness.asr.chunks).toHaveLength(200)
+    })
+
+    it('forwards the enumerated input devices and bounds the list', async () => {
+      const accepted = (await harness.invoke(
+        IpcChannel.asrListDevices,
+        AUDIO_DEVICES
+      )) as Result<void>
+      expect(accepted.ok).toBe(true)
+      expect(harness.asr.deviceReports).toEqual([AUDIO_DEVICES])
+
+      for (const payload of [
+        'nope',
+        [{ deviceId: '', label: 'empty id' }],
+        [{ deviceId: 'mic-1' }],
+        [{ deviceId: 'mic-1', label: 'x'.repeat(301) }],
+        Array.from({ length: 65 }, (_, i) => ({ deviceId: `mic-${i}`, label: `Mic ${i}` }))
+      ]) {
+        expect(expectErr(await harness.invoke(IpcChannel.asrListDevices, payload)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+      expect(harness.asr.deviceReports).toHaveLength(1)
+    })
+
+    /**
+     * Transcript segments fan out to every open window, unaltered.
+     *
+     * The draft and the final share one `id` and arrive in that order — that is the whole
+     * draft/final contract, and this boundary neither collapses them, reorders them nor drops the
+     * `isDraft` flag. A consumer that appended instead of replacing by `id` would render the same
+     * span twice; the flags it needs to avoid that must survive the trip.
+     */
+    it('fans transcript segments out to every window with the draft/final flags intact', () => {
+      const two = setup({ windows: 2 })
+
+      two.asr.emitTranscript(DRAFT_SEGMENT)
+      two.asr.emitTranscript(FINAL_SEGMENT)
+
+      for (const window of two.windows) {
+        const pushed = window.sent.filter((entry) => entry.channel === IpcEvent.asrTranscript)
+        expect(pushed.map((entry) => entry.payload)).toEqual([DRAFT_SEGMENT, FINAL_SEGMENT])
+      }
+
+      const first = two.windows[0]?.sent.find(
+        (entry) => entry.channel === IpcEvent.asrTranscript
+      )?.payload as TranscriptSegment | undefined
+      expect(first?.id).toBe(FINAL_SEGMENT.id)
+      expect(first?.isFinal).toBe(false)
+      expect(first?.isDraft).toBe(true)
+
+      two.dispose()
+    })
+
+    /**
+     * `degraded` and `failed` reach the renderer as themselves.
+     *
+     * They are different facts. `degraded` means a transcript is still arriving, but from the
+     * fallback provider — the operator should know their cloud died even though the words keep
+     * coming. `failed` means nothing is arriving at all. Collapsing them into one "bad" state
+     * would hide a fallback, so this test pins that the boundary flattens neither, and that the
+     * `provider` field says which engine is actually producing the text.
+     */
+    it('fans status changes out and keeps degraded distinct from failed', () => {
+      harness.asr.emitStatus(DEGRADED_ASR_STATUS)
+      harness.asr.emitStatus(FAILED_ASR_STATUS)
+
+      const pushed = (harness.windows[0]?.sent ?? []).filter(
+        (entry) => entry.channel === IpcEvent.asrStatus
+      )
+      expect(pushed.map((entry) => entry.payload)).toEqual([
+        DEGRADED_ASR_STATUS,
+        FAILED_ASR_STATUS
+      ])
+
+      const degraded = pushed[0]?.payload as AsrStatus | undefined
+      expect(degraded?.state).toBe('degraded')
+      // Still producing a transcript, just not from the preferred engine.
+      expect(degraded?.provider).toBe('whisper')
+
+      const failed = pushed[1]?.payload as AsrStatus | undefined
+      expect(failed?.state).toBe('failed')
+      expect(failed?.provider).toBeNull()
+    })
+
+    /**
+     * No ASR service at all — the ordinary state of a fresh checkout, and of this build machine.
+     *
+     * `asrGetStatus` still resolves `ok` with a renderable `not-configured` status, because the
+     * transcript panel's job is to draw that struct in red rather than to special-case a failure.
+     * The other six answer `NOT_CONFIGURED` with a detail that says the service runs manually.
+     * Nothing throws, nothing hangs, and nothing else in the app is affected.
+     */
+    it('degrades to a renderable not-configured status when there is no service', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      const status = (await call(IpcChannel.asrGetStatus)) as Result<AsrStatus>
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.value.state).toBe('not-configured')
+      expect(status.value.provider).toBeNull()
+      expect(status.value.lastError).not.toBeNull()
+
+      for (const [channel, arg] of [
+        [IpcChannel.asrGetSettings, undefined],
+        [IpcChannel.asrSetSettings, ASR_SETTINGS],
+        [IpcChannel.asrStart, undefined],
+        [IpcChannel.asrStop, undefined],
+        [IpcChannel.asrPushAudio, pcmSilence(ASR_CHUNK_MS)],
+        [IpcChannel.asrListDevices, AUDIO_DEVICES]
+      ] as Array<[IpcChannelValue, unknown]>) {
+        expect(expectErr(await call(channel, arg)).code).toBe('NOT_CONFIGURED')
+      }
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates an ASR service whose subscriptions return nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: AsrServiceLike = {
+        getStatus: () => idleAsrStatus(),
+        getSettings: () => ASR_SETTINGS,
+        setSettings: (settings) => settings,
+        start: () => idleAsrStatus(),
+        stop: () => idleAsrStatus(),
+        pushAudio: () => undefined,
+        listDevices: () => undefined,
+        onStatus: () => undefined,
+        onTranscript: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('converts a throwing ASR service into Err(INTERNAL) instead of rejecting', async () => {
+      const asr = createFakeAsrService()
+      Object.assign(asr, {
+        start: () => {
+          throw new Error('the recogniser exploded')
+        }
+      })
+
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.asrStart)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      const settled = await Promise.resolve(handler(eventFrom(window), undefined))
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      expect(expectErr(settled.value).code).toBe('INTERNAL')
+    })
+
+    /**
+     * Standing Rule 1, at the boundary: the ears cannot touch anything else.
+     *
+     * Driving the whole ASR surface — start, a second of audio, a settings change, stop — fires no
+     * overlay command, moves no camera and does not advance the plan. Whatever a *cue* does when
+     * the Phase 8 engine decides to fire one is reached through the plan's own seam; this layer
+     * stays out of it, which is what lets a dead recogniser cost the operator nothing.
+     */
+    it('leaves the plan, the camera and the overlay untouched', async () => {
+      expect(((await harness.invoke(IpcChannel.asrStart)) as Result<unknown>).ok).toBe(true)
+      for (let index = 0; index < 10; index += 1) {
+        await harness.invoke(IpcChannel.asrPushAudio, pcmSineTone(ASR_CHUNK_MS))
+      }
+      await harness.invoke(IpcChannel.asrSetSettings, { ...ASR_SETTINGS, mode: 'local' })
+      expect(((await harness.invoke(IpcChannel.asrStop)) as Result<unknown>).ok).toBe(true)
+
+      expect(harness.overlay.sent).toHaveLength(0)
+      expect(harness.camera.selected).toHaveLength(0)
+      expect(harness.plan.advances()).toBe(0)
+      expect(harness.plan.fired).toHaveLength(0)
+      expect(harness.obs.connectCalls).toHaveLength(0)
     })
   })
 
