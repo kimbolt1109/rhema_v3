@@ -27,7 +27,8 @@
       "goLive": "GO LIVE",
       "goLiveSettings": "Go Live settings",
       "cameraSetup": "Camera setup",
-      "asrSettings": "Speech settings"
+      "asrSettings": "Speech settings",
+      "status": "Status"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
@@ -917,5 +918,61 @@
       "CRYPTO_ERROR": "Secret storage error"
     },
     "unknown": "Something went wrong."
+  },
+  "health": {
+    "title": "Subsystem status",
+    "lightsLabel": "Subsystem lights",
+    "serviceQuestion": "Is the service still going out?",
+    "serviceYes": "Yes — the service is still going out.",
+    "serviceNo": "No — nothing is going out right now.",
+    "serviceYesDetail": "The stream, the local recording, or both are still running. Whatever else on this page is red, the congregation is still being served — do not stop anything to investigate.",
+    "serviceNoDetail": "Neither the stream nor the local recording is running. This is the one state worth interrupting for.",
+    "attentionLabel": "Needs attention",
+    "attentionNone": "Nothing needs attention. Anything listed as not set up is resting, not broken.",
+    "stillWorks": "Still working: {{text}}",
+    "forDuration": "for {{duration}}",
+    "bridgeUnavailable": "Verger cannot reach its own main process, so these lights are not being updated. Restart the app. OBS is unaffected and keeps streaming and recording.",
+    "duration": {
+      "seconds": "{{value}}s",
+      "minutes": "{{value}}m",
+      "hours": "{{value}}h"
+    },
+    "level": {
+      "ok": "OK",
+      "not-configured": "Not set up",
+      "degraded": "Working, not as set up",
+      "down": "Down"
+    },
+    "subsystem": {
+      "obs": "OBS",
+      "overlay": "Overlay",
+      "asr": "Speech",
+      "youtube": "YouTube",
+      "recording": "Recording",
+      "stream": "Stream",
+      "automation": "Automation"
+    },
+    "light": {
+      "accessibleName": "{{subsystem}}: {{level}}. {{detail}}",
+      "accessibleNameTimed": "{{subsystem}}: {{level}} for {{duration}}. {{detail}}"
+    },
+    "recovery": {
+      "label": "Recovery",
+      "noBroadcastImpact": "Nothing on this panel can stop the stream or the recording. Both keep running through every action here.",
+      "reloadOverlays": "Reload the overlays",
+      "reloadOverlaysDetail": "Forces every attached OBS browser source to reload and re-sync from Verger. Use this when an overlay is stuck or blank. The camera feed and the broadcast are untouched.",
+      "reloadDone": "Overlays reloaded and re-synced.",
+      "reloadFailed": "The overlays could not be reloaded. Nothing else changed.",
+      "restoreDone": "Automation rewound to {{label}}.",
+      "restoreFailed": "That checkpoint could not be restored. Automation was left exactly as it was."
+    },
+    "checkpoint": {
+      "legend": "Rewind automation to a checkpoint",
+      "detail": "Pick the last point where automation was doing the right thing. Newest first.",
+      "none": "No checkpoints have been recorded yet.",
+      "position": "Plan position {{position}}",
+      "restore": "Rewind automation",
+      "nonEffects": "This rewinds automation only — the plan pointer and what Verger will do next. It does NOT touch the stream and it does NOT touch the recording. Nothing the congregation is watching changes."
+    }
   }
 }

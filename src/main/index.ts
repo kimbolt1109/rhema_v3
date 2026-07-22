@@ -29,16 +29,20 @@ import { createLogger } from '@main/logging/logger'
 import type { Logger } from '@main/logging/logger'
 import { registerIpc } from '@main/ipc/register'
 import { getGoLiveService } from '@main/golive'
+import { getCheckpointStore, getHealthService, resetHealthService } from '@main/health'
+import { OverlayWatchdog } from '@main/health/overlayWatchdog'
 import { getObsClient } from '@main/obs'
 import { getOverlayServer } from '@main/overlay'
 import { getYouTubeService } from '@main/youtube'
 import { createMainWindow } from '@main/window'
-import { ErrorCode } from '@shared/result'
+import { ErrorCode, err } from '@shared/result'
+import type { Result } from '@shared/result'
 
 let logger: Logger | null = null
 let disposeIpc: (() => void) | null = null
 let mainWindow: BrowserWindow | null = null
 let overlayServer: ReturnType<typeof getOverlayServer> | null = null
+let disposeServices: (() => void) | null = null
 
 // ---------------------------------------------------------------------------
 // Crash capture — installed immediately, before `ready`
@@ -111,6 +115,20 @@ if (!hasSingleInstanceLock) {
       }
     }
 
+    // Release the watchdog timer, the health aggregator's subscriptions and the checkpoint
+    // store's. Every one of those is a listener or a timer and nothing else: disposing them
+    // stops no output, blanks no overlay and rewinds nothing. Quitting Verger is not a reason
+    // for a service to change.
+    const disposeAll = disposeServices
+    disposeServices = null
+    if (disposeAll !== null) {
+      try {
+        disposeAll()
+      } catch (cause) {
+        report('warn', 'failed to dispose the health services on quit', { cause })
+      }
+    }
+
     // Release port 7320 so the next launch can bind it. Fire-and-forget: `will-quit` does not
     // await, and holding up the quit for a socket close would be worse than a late close.
     const overlay = overlayServer
@@ -149,6 +167,86 @@ function onReady(): void {
     log.warn('configuration warning', { key: warning.key, detail: warning.message })
   }
 
+  const services = composeServices(log)
+  disposeServices = services.dispose
+
+  disposeIpc = toDisposer(
+    registerIpc({
+      config,
+      logger: log,
+      obs: services.obs,
+      overlay: services.overlay,
+      youtube: services.youtube,
+      goLive: services.goLive,
+      health: services.health,
+      checkpoints: services.checkpoints,
+      overlayReload: services.overlayReload
+    })
+  )
+
+  mainWindow = createMainWindow({ logger: log })
+}
+
+/** Everything `composeServices` builds, wired and already running. */
+interface ComposedServices {
+  readonly obs: ReturnType<typeof getObsClient>
+  readonly overlay: ReturnType<typeof getOverlayServer>
+  readonly youtube: ReturnType<typeof getYouTubeService>
+  readonly goLive: ReturnType<typeof getGoLiveService>
+  readonly health: ReturnType<typeof getHealthService>
+  readonly checkpoints: ReturnType<typeof getCheckpointStore>
+  readonly overlayReload: OverlayWatchdog
+  /** Release the listeners and timers this composition started. Stops no output, ever. */
+  readonly dispose: () => void
+}
+
+/**
+ * Build every long-lived subsystem and — the part that matters — **connect** it.
+ *
+ * ## Why this function is written out at this length
+ *
+ * STATUS.md records the same defect in four separate phases, and all four landed in this file or
+ * in a file exactly like it:
+ *
+ *  - Phase 2: the overlay server was constructed and never `start()`ed, so port 7320 was never
+ *    bound and OBS's browser source had nothing to load.
+ *  - Phase 4: the Google session was never restored at launch, so a perfectly good stored refresh
+ *    token read as "signed out" every Sunday.
+ *  - Phase 5: the go-live re-attach never ran, so a relaunch mid-service would have pushed a
+ *    SECOND stream and started a SECOND recording.
+ *  - Phase 8: the cue engine had no transcript source and no scripture detector — a brain with
+ *    neither ears nor eyes.
+ *
+ * Every one of those passed every unit test, because unit tests inject their own fakes. The only
+ * thing that catches a component wired to nothing is a file that says out loud what it starts.
+ *
+ * ## What is STARTED here, and why each one has to be
+ *
+ *  1. **The OBS client** — observes OBS. It imposes nothing (Standing Rule 2).
+ *  2. **The overlay HTTP + WebSocket server** — `start()`, not just `new`. Nothing binds 127.0.0.1
+ *     :7320 otherwise and the congregation screen has no overlay layer at all.
+ *  3. **The YouTube session refresh** — the OAuth service starts `signed-out` even when a refresh
+ *     token IS stored, because its constructor cannot await the secrets store.
+ *  4. **The go-live re-attach** — reads OBS's REAL output state and adopts it, issuing no `Start*`
+ *     of any kind. This is the "control app crashes" row of BLUEPRINT.md §9.
+ *  5. **The health aggregator** — subscribes to all six subsystems as part of construction, so the
+ *     dashboard is live before the window exists. Nothing here has to remember to `start()` it.
+ *  6. **The checkpoint store** — watches the cue engine for fired cues, so CTRL+D recovery has
+ *     something to rewind to.
+ *  7. **The overlay watchdog** — `start()`ed, watching for a browser source that has gone away.
+ *
+ * ## What is deliberately NOT here
+ *
+ * No `StartStream`, no `StartRecord`, no `StopStream`, no `StopRecord`, no scene change, no
+ * overlay command. Launching Verger changes nothing about a service that is already running, and
+ * quitting it changes nothing either. That is the whole architecture (Standing Rule 2): if Verger
+ * dies mid-service, OBS keeps streaming and recording, and the next launch re-observes.
+ *
+ * Every step is fire-and-forget where it touches the network or OBS. A subsystem that cannot start
+ * degrades visibly and never blocks the app (Standing Rule 5) — the window opens either way, and
+ * the operator can still drive OBS by hand.
+ */
+function composeServices(log: Logger): ComposedServices {
   const obs = getObsClient({ logger: log })
 
   // The overlay server must be STARTED here, not merely constructed. OBS loads the overlay as
@@ -214,9 +312,71 @@ function onReady(): void {
     }
   })
 
-  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay, youtube, goLive }))
+  // The health aggregator and the checkpoint store (BLUEPRINT.md §9).
+  //
+  // Both are constructed AFTER the four subsystems above, on purpose: each of those is a lazy
+  // singleton, so by the time `getHealthService()` reaches for them they already exist and already
+  // hold the real rolling-file logger. Constructing health first would build them with the null
+  // logger and nothing on a service day would be written down.
+  //
+  // Neither needs a `start()` call here — both subscribe as part of construction, because "a
+  // caller must remember" is exactly how the four defects above happened.
+  const health = getHealthService({ logger: log })
+  const checkpoints = getCheckpointStore({ logger: log })
 
-  mainWindow = createMainWindow({ logger: log })
+  // The overlay watchdog — the "overlay browser source crashes" row of BLUEPRINT.md §9.
+  //
+  // It watches the attached browser-source count and surfaces a dropped source as a subsystem
+  // light. Its recovery half is wired through `reload` below rather than through the server's
+  // optional `reloadClients`, because this build's overlay server has no client-reload channel:
+  // its public surface is start/stop/send/getState/getInfo and nothing more. Rather than let the
+  // watchdog report a reload that never happened, the seam says so, and the operator gets an
+  // actionable remedy instead of a false success. When the overlay server grows a real reload,
+  // this is the one line that changes.
+  //
+  // Note what the watchdog cannot do: it holds only the overlay server and a timer. It has no OBS
+  // client, no output verb, and no way to reach the stream or the recording — a watchdog that
+  // could take a service off the air while "recovering" would be far worse than a blank overlay.
+  const overlayReload = new OverlayWatchdog({
+    overlay,
+    logger: log,
+    reload: (): Result<never> =>
+      err(
+        ErrorCode.NOT_CONFIGURED,
+        'this build has no overlay reload channel',
+        'refresh the browser source in OBS — the overlay re-syncs from the cached state on reconnect'
+      )
+  })
+  const watchdogStarted = overlayReload.start()
+  if (watchdogStarted.ok) {
+    log.info('overlay watchdog started', {
+      level: watchdogStarted.value.level,
+      detail: watchdogStarted.value.detail
+    })
+  } else {
+    // Standing Rule 5. A watchdog that will not start costs the operator an early warning, not a
+    // service: the overlay server, the stream and the recording are all untouched by this.
+    log.warn('the overlay watchdog did not start; overlay drops will not be flagged early', {
+      code: watchdogStarted.error.code,
+      detail: watchdogStarted.error.message
+    })
+  }
+
+  return {
+    obs,
+    overlay,
+    youtube,
+    goLive,
+    health,
+    checkpoints,
+    overlayReload,
+    dispose: () => {
+      // Listeners and timers only. Not one of these three calls can stop an output — see
+      // `resetHealthService` and `OverlayWatchdog.dispose`.
+      overlayReload.dispose()
+      resetHealthService()
+    }
+  }
 }
 
 /**

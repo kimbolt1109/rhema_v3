@@ -24,6 +24,7 @@ import type { GoLiveState } from './golive'
 import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from './asr'
 import type { Cue, PlanPosition, ServicePlan } from './plan'
 import type { CueEngineSettings, CueEngineState, CueSuggestion } from './cue'
+import type { Checkpoint, HealthSnapshot } from './health'
 import type { ResolvedScripture, ScriptureReference, TranslationSource } from './scripture'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
@@ -132,6 +133,10 @@ export const IpcChannel = {
   cueResume: 'verger:cue:resume',
   cueResolveScripture: 'verger:cue:resolve-scripture',
   cueListTranslations: 'verger:cue:list-translations',
+  healthGet: 'verger:health:get',
+  healthListCheckpoints: 'verger:health:list-checkpoints',
+  healthRestoreCheckpoint: 'verger:health:restore-checkpoint',
+  healthReloadOverlays: 'verger:health:reload-overlays',
 } as const
 
 /** Union of every request channel string. */
@@ -157,6 +162,7 @@ export const IpcEvent = {
   asrTranscript: 'verger:asr:transcript',
   cueState: 'verger:cue:state',
   cueSuggestion: 'verger:cue:suggestion',
+  healthSnapshot: 'verger:health:snapshot',
 } as const
 
 /** Union of every event channel string. */
@@ -233,6 +239,10 @@ export interface IpcRequest {
   [IpcChannel.cueResume]: void
   [IpcChannel.cueResolveScripture]: { reference: ScriptureReference; translation?: string }
   [IpcChannel.cueListTranslations]: void
+  [IpcChannel.healthGet]: void
+  [IpcChannel.healthListCheckpoints]: void
+  [IpcChannel.healthRestoreCheckpoint]: { checkpointId: string }
+  [IpcChannel.healthReloadOverlays]: void
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -286,6 +296,10 @@ export interface IpcResponse {
   [IpcChannel.cueResume]: Result<CueEngineState>
   [IpcChannel.cueResolveScripture]: Result<ResolvedScripture>
   [IpcChannel.cueListTranslations]: Result<readonly TranslationSource[]>
+  [IpcChannel.healthGet]: Result<HealthSnapshot>
+  [IpcChannel.healthListCheckpoints]: Result<readonly Checkpoint[]>
+  [IpcChannel.healthRestoreCheckpoint]: Result<HealthSnapshot>
+  [IpcChannel.healthReloadOverlays]: Result<HealthSnapshot>
 }
 
 /** The payload pushed on each event channel. */
@@ -304,6 +318,7 @@ export interface IpcEventPayload {
   [IpcEvent.asrTranscript]: TranscriptSegment
   [IpcEvent.cueState]: CueEngineState
   [IpcEvent.cueSuggestion]: CueSuggestion
+  [IpcEvent.healthSnapshot]: HealthSnapshot
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -422,6 +437,15 @@ export interface VergerApi {
     listTranslations(): Promise<Result<readonly TranslationSource[]>>
     onState(callback: (state: CueEngineState) => void): Unsubscribe
     onSuggestion(callback: (suggestion: CueSuggestion) => void): Unsubscribe
+  }
+  readonly health: {
+    get(): Promise<Result<HealthSnapshot>>
+    listCheckpoints(): Promise<Result<readonly Checkpoint[]>>
+    /** Rewind AUTOMATION state only. Never touches the stream or the recording. */
+    restoreCheckpoint(options: { checkpointId: string }): Promise<Result<HealthSnapshot>>
+    /** Force every attached overlay browser source to reload and re-sync. */
+    reloadOverlays(): Promise<Result<HealthSnapshot>>
+    onSnapshot(callback: (snapshot: HealthSnapshot) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

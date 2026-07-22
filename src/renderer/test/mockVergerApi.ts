@@ -39,6 +39,14 @@ import type {
   ObsOutputState,
   StepState,
 } from '@shared/golive'
+import type {
+  Checkpoint,
+  HealthLevel,
+  HealthSnapshot,
+  SubsystemHealth,
+  SubsystemId,
+} from '@shared/health'
+import { SUBSYSTEMS, initialHealth, worstLevel } from '@shared/health'
 import {
   GO_LIVE_STEPS,
   emptyObsOutputState,
@@ -277,6 +285,29 @@ export interface MockResponses {
    */
   cueResolveScripture: Result<ResolvedScripture> | null
   cueListTranslations: Result<readonly TranslationSource[]>
+  /**
+   * What `health.get` resolves with.
+   *
+   * {@link mockRestingHealthSnapshot} by default — every subsystem `not-configured`, which is this
+   * machine's genuine state and is a *resting* state, never an alarm. A dashboard test that wants
+   * a fault says so explicitly with {@link mockHealthSnapshot}.
+   */
+  healthGet: Result<HealthSnapshot>
+  healthListCheckpoints: Result<readonly Checkpoint[]>
+  /**
+   * `null` — the default — means "behave like the real service": look the checkpoint up, refuse an
+   * unknown id with `NOT_FOUND`, and otherwise hand back the health snapshot **unchanged apart
+   * from the automation light**. Note what the fake has no way to do here: it holds no stream and
+   * no recording, so a restore that touched either would have to be written into this file to
+   * happen at all.
+   */
+  healthRestoreCheckpoint: Result<HealthSnapshot> | null
+  /**
+   * `null` — the default — means "behave like the real service": mark the overlay subsystem `ok`
+   * and re-roll the worst-of. Reloading a browser source cannot reach the broadcast, and neither
+   * can this.
+   */
+  healthReloadOverlays: Result<HealthSnapshot> | null
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -353,6 +384,12 @@ export interface MockCalls {
   /** Every resolution request, in order. Never the verse text — only what was asked for. */
   readonly cueResolveScripture: { reference: ScriptureReference; translation?: string }[]
   readonly cueListTranslations: number[]
+  readonly healthGet: number[]
+  readonly healthListCheckpoints: number[]
+  /** Every checkpoint rewind, in order. A short press on the hold button must never appear here. */
+  readonly healthRestoreCheckpoint: { checkpointId: string }[]
+  /** Every overlay reload, in order. */
+  readonly healthReloadOverlays: number[]
 }
 
 export interface MockVergerApi {
@@ -1147,6 +1184,175 @@ export function mockPanickedCueEngineState(
   return mockCueEngineState({ panicked: true, pending: null, ...overrides })
 }
 
+/* --------------------------------- subsystem health --------------------------------- */
+
+/**
+ * One light.
+ *
+ * `stillWorks` defaults to `null`, which is correct for `ok` and `not-configured` and *wrong* for
+ * anything else — so a fixture author who builds a `down` subsystem without saying what still
+ * works produces a visibly incomplete card, which is exactly the pressure BLUEPRINT.md §9 wants.
+ */
+export function mockSubsystemHealth(
+  id: SubsystemId,
+  overrides: Partial<Omit<SubsystemHealth, 'id'>> = {},
+): SubsystemHealth {
+  return { ...initialHealth(id, MOCK_NOW), ...overrides }
+}
+
+/**
+ * Build a snapshot by naming only the subsystems that are not at rest.
+ *
+ * Everything unnamed falls back to {@link initialHealth}, i.e. `not-configured`. `worst` is always
+ * derived with the shared {@link worstLevel} rather than passed in, so a fixture cannot claim a
+ * roll-up that disagrees with its own lights.
+ */
+export function mockHealthSnapshot(
+  overrides: Partial<Record<SubsystemId, Partial<Omit<SubsystemHealth, 'id'>>>> = {},
+  at: number = MOCK_NOW,
+): HealthSnapshot {
+  const subsystems = SUBSYSTEMS.map((id) => mockSubsystemHealth(id, overrides[id] ?? {}))
+  return { subsystems, worst: worstLevel(subsystems), at }
+}
+
+/** This machine's genuine state: nothing configured, nothing wrong. */
+export function mockRestingHealthSnapshot(): HealthSnapshot {
+  return mockHealthSnapshot()
+}
+
+/** A healthy service: OBS connected, overlays attached, pushing and recording. */
+export function mockHealthySnapshot(): HealthSnapshot {
+  return mockHealthSnapshot({
+    obs: { level: 'ok', detail: 'connected' },
+    overlay: { level: 'ok', detail: '1 browser source attached' },
+    stream: { level: 'ok', detail: 'pushing to YouTube' },
+    recording: { level: 'ok', detail: 'writing to disk' },
+    automation: { level: 'ok', detail: 'assisting' },
+  })
+}
+
+/**
+ * **The fixture this phase exists for.** OBS's control link to Verger is dead; the service is not.
+ *
+ * Standing Rule 2: OBS keeps streaming and recording without Verger, so `stream` and `recording`
+ * stay `ok` while `obs` is `down`. A dashboard that reads this as a catastrophe would send an
+ * operator to stop a service that is going out perfectly well.
+ */
+export function mockObsDownHealthSnapshot(): HealthSnapshot {
+  return mockHealthSnapshot({
+    obs: {
+      level: 'down',
+      detail: 'obs-websocket went away',
+      stillWorks:
+        'OBS is still streaming and still recording on its own. Only this console lost its remote control.',
+      since: MOCK_NOW - 45_000,
+    },
+    overlay: { level: 'ok', detail: '1 browser source attached' },
+    stream: { level: 'ok', detail: 'pushing to YouTube' },
+    recording: { level: 'ok', detail: 'writing to disk' },
+  })
+}
+
+/** The RTMP link is flapping. Amber, and the local recording is untouched. */
+export function mockStreamReconnectingSnapshot(): HealthSnapshot {
+  return mockHealthSnapshot({
+    obs: { level: 'ok', detail: 'connected' },
+    stream: {
+      level: 'degraded',
+      detail: 'reconnecting (attempt 3)',
+      stillWorks: 'The local recording is unaffected and still writing to disk.',
+      since: MOCK_NOW - 90_000,
+    },
+    recording: { level: 'ok', detail: 'writing to disk' },
+    asr: {
+      level: 'degraded',
+      detail: 'running on the local model',
+      stillWorks: 'A transcript is still arriving, just from the fallback recogniser.',
+      since: MOCK_NOW - 12_000,
+    },
+  })
+}
+
+/** Nothing is going out: the one case the dashboard has to answer "no" to. */
+export function mockOffAirHealthSnapshot(): HealthSnapshot {
+  return mockHealthSnapshot({
+    obs: { level: 'ok', detail: 'connected' },
+    stream: {
+      level: 'down',
+      detail: 'OBS is not pushing',
+      stillWorks: null,
+      since: MOCK_NOW - 5_000,
+    },
+    recording: {
+      level: 'down',
+      detail: 'OBS is not recording',
+      stillWorks: null,
+      since: MOCK_NOW - 5_000,
+    },
+  })
+}
+
+/**
+ * One checkpoint.
+ *
+ * The label is an operator sentence, not an id: the restore list is read under pressure, and
+ * "after cue …" is the only form that lets somebody pick the right rewind at a glance.
+ */
+export function mockCheckpoint(overrides: Partial<Checkpoint> = {}): Checkpoint {
+  return {
+    id: 'checkpoint-1',
+    at: MOCK_NOW - 10_000,
+    planPosition: 2,
+    overlayRevision: 4,
+    label: 'after cue "SLIDE 1"',
+    ...overrides,
+  }
+}
+
+/** Three checkpoints, newest first — the order the restore list renders in. */
+export const MOCK_CHECKPOINTS: readonly Checkpoint[] = [
+  mockCheckpoint({ id: 'checkpoint-3', at: MOCK_NOW - 4_000, planPosition: 2, label: 'after cue "SLIDE 1"' }),
+  mockCheckpoint({
+    id: 'checkpoint-2',
+    at: MOCK_NOW - 30_000,
+    planPosition: 1,
+    overlayRevision: 3,
+    label: 'after cue "PLACEHOLDER TITLE"',
+  }),
+  mockCheckpoint({
+    id: 'checkpoint-1',
+    at: MOCK_NOW - 90_000,
+    planPosition: 0,
+    overlayRevision: 1,
+    label: 'service start',
+  }),
+]
+
+/** Re-derive the roll-up after a fake mutated one light. */
+function withWorst(
+  subsystems: readonly SubsystemHealth[],
+  at: number,
+): HealthSnapshot {
+  return { subsystems, worst: worstLevel(subsystems), at }
+}
+
+/** Set one subsystem's level, leaving every other light exactly as it was. */
+function setSubsystem(
+  snapshot: HealthSnapshot,
+  id: SubsystemId,
+  level: HealthLevel,
+  detail: string,
+): HealthSnapshot {
+  return withWorst(
+    snapshot.subsystems.map((subsystem) =>
+      subsystem.id === id
+        ? { id, level, detail, stillWorks: null, since: MOCK_NOW }
+        : subsystem,
+    ),
+    MOCK_NOW,
+  )
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -1198,6 +1404,10 @@ function defaultResponses(): MockResponses {
     cueResume: null,
     cueResolveScripture: null,
     cueListTranslations: ok(MOCK_TRANSLATIONS),
+    healthGet: ok(mockRestingHealthSnapshot()),
+    healthListCheckpoints: ok(MOCK_CHECKPOINTS),
+    healthRestoreCheckpoint: null,
+    healthReloadOverlays: null,
   }
 }
 
@@ -1263,6 +1473,10 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     cueResume: [],
     cueResolveScripture: [],
     cueListTranslations: [],
+    healthGet: [],
+    healthListCheckpoints: [],
+    healthRestoreCheckpoint: [],
+    healthReloadOverlays: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -1322,6 +1536,18 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let cueSettings: CueEngineSettings = responses.cueGetSettings.ok
     ? responses.cueGetSettings.value
     : defaultCueEngineSettings()
+
+  // An eighth separate snapshot, and the one with the strictest rule attached. The two recovery
+  // actions below reach `healthSnapshot` and NOTHING else — in particular not `goLiveSnapshot`,
+  // which is where this fake keeps the stream and the recording. BLUEPRINT.md §9 says no recovery
+  // may ever stop either, and here that is true by construction: a restore or a reload that
+  // dropped the broadcast would have to be written into this file to happen at all.
+  let healthSnapshot: HealthSnapshot = responses.healthGet.ok
+    ? responses.healthGet.value
+    : mockRestingHealthSnapshot()
+  let checkpoints: readonly Checkpoint[] = responses.healthListCheckpoints.ok
+    ? responses.healthListCheckpoints.value
+    : []
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -1868,6 +2094,52 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onState: (callback) => on(IpcEvent.cueState, callback),
       onSuggestion: (callback) => on(IpcEvent.cueSuggestion, callback),
+    },
+    health: {
+      get: () => {
+        calls.healthGet.push(calls.healthGet.length)
+        if (responses.healthGet.ok) healthSnapshot = responses.healthGet.value
+        return Promise.resolve(responses.healthGet)
+      },
+      listCheckpoints: () => {
+        calls.healthListCheckpoints.push(calls.healthListCheckpoints.length)
+        if (responses.healthListCheckpoints.ok) checkpoints = responses.healthListCheckpoints.value
+        return Promise.resolve(responses.healthListCheckpoints)
+      },
+      restoreCheckpoint: (options) => {
+        calls.healthRestoreCheckpoint.push(options)
+        const scripted = responses.healthRestoreCheckpoint
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const checkpoint = checkpoints.find((entry) => entry.id === options.checkpointId)
+        if (checkpoint === undefined) {
+          // Rewinding to a checkpoint that has aged out is not a no-op worth hiding: the operator
+          // would be told automation moved when it did not.
+          return Promise.resolve(
+            err(ErrorCode.NOT_FOUND, `no checkpoint with id ${options.checkpointId}`),
+          )
+        }
+
+        // Automation, and only automation. `goLiveSnapshot` is deliberately not referenced.
+        healthSnapshot = setSubsystem(
+          healthSnapshot,
+          'automation',
+          'ok',
+          `rewound to ${checkpoint.label}`,
+        )
+        return Promise.resolve(ok(healthSnapshot))
+      },
+      reloadOverlays: () => {
+        calls.healthReloadOverlays.push(calls.healthReloadOverlays.length)
+        const scripted = responses.healthReloadOverlays
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        // The overlay layer, and only the overlay layer. Reloading a browser source cannot reach
+        // the cameras, the plan or the broadcast, and neither does this.
+        healthSnapshot = setSubsystem(healthSnapshot, 'overlay', 'ok', 'reloaded and re-synced')
+        return Promise.resolve(ok(healthSnapshot))
+      },
+      onSnapshot: (callback) => on(IpcEvent.healthSnapshot, callback),
     },
     config: {
       get: () => {

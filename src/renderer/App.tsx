@@ -13,32 +13,22 @@
  * a deliberate echo of BLUEPRINT.md §6: they are independent layers, and a single screen that
  * drove both would be the first place that independence quietly eroded.
  *
- * The strip is structured as a list of subsystem descriptors rather than as hard-coded markup,
- * because it is going to grow: recording and YouTube (Phases 4–5) and speech (Phase 7) each need a
- * light in exactly this row. OBS and — as of Phase 2 — the overlay resolve to real states; the
- * rest render an explicit "not built yet" rather than a green light that lies. A subsystem light
- * that is optimistic by default is worse than no light at all.
- *
- * The overlay light is deliberately three-valued rather than two: a running server with **zero**
- * attached browser sources is not "fine", it is the failure `src/shared/ipc.ts` calls out — OBS's
- * Overlays source has died and nothing is on screen — so it gets its own amber state and its own
- * words.
+ * As of Phase 9 the strip is **not** assembled here from seven stores' private notions of
+ * healthiness. It is {@link StatusStrip}, driven by the one `@shared/health` snapshot the main
+ * process publishes, and it carries the answer to the only question an operator has mid-service —
+ * *is the service still going out?* — next to the lights. The previous hand-rolled version had a
+ * separate tone table per subsystem, which is exactly how "OBS is red" and "the congregation is
+ * fine" ended up looking the same on screen.
  *
  * Everything is inside the {@link ErrorBoundary}, including the strip, so a crash anywhere in the
  * tree still produces a readable screen rather than a black window.
  */
 
-import { Bot, Cast, Disc, Layers, Mic, Radio, RadioTower } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ActionId, DEFAULT_KEY_BINDINGS } from '@shared/actions'
-import type { AsrState } from '@shared/asr'
-import type { GoLivePhase } from '@shared/golive'
 import type { AppVersions } from '@shared/ipc'
-import type { ObsConnectionState } from '@shared/obs'
-import type { YouTubeAuthState } from '@shared/youtube'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { TrustDial } from './components/TrustDial'
@@ -54,11 +44,12 @@ import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { PlanEditor } from './screens/PlanEditor'
+import { StatusDashboard, StatusStrip } from './screens/StatusDashboard'
 import { TranscriptPanel } from './screens/TranscriptPanel'
 import { useAsrStore } from './store/asrStore'
 import { useCueStore } from './store/cueStore'
-import { isRecordingMissing, useGoLiveStore } from './store/goLiveStore'
-import { useObsStore } from './store/obsStore'
+import { useGoLiveStore } from './store/goLiveStore'
+import { useHealthStore } from './store/healthStore'
 import { useOverlayStore } from './store/overlayStore'
 import { useYouTubeStore } from './store/youtubeStore'
 
@@ -84,67 +75,16 @@ const SECTIONS = [
   // to the right. A screen that both configures a broadcast and starts one invites the operator to
   // press the big button while they are still editing a title.
   { id: 'goLive', labelKey: 'app.section.goLive' },
+  // Phase 9. The full status dashboard sits with the live surfaces, not with the settings tabs:
+  // it is opened *during* a service, by somebody who has just seen a light change and wants to
+  // know whether the congregation is still watching.
+  { id: 'status', labelKey: 'app.section.status' },
   { id: 'goLiveSettings', labelKey: 'app.section.goLiveSettings' },
   { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
   { id: 'asrSettings', labelKey: 'app.section.asrSettings' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
-
-/** Where a subsystem light gets its state from. */
-type SubsystemSource =
-  | 'obs'
-  | 'overlay'
-  | 'asr'
-  | 'youtube'
-  | 'goLive'
-  | 'recording'
-  | 'cue'
-  | 'pending'
-
-/** One light in the subsystem strip. */
-interface SubsystemDescriptor {
-  readonly id: string
-  readonly labelKey: string
-  readonly icon: LucideIcon
-  readonly source: SubsystemSource
-}
-
-const SUBSYSTEMS: readonly SubsystemDescriptor[] = [
-  { id: 'obs', labelKey: 'app.subsystem.obs', icon: Radio, source: 'obs' },
-  { id: 'overlay', labelKey: 'app.subsystem.overlay', icon: Layers, source: 'overlay' },
-  { id: 'asr', labelKey: 'app.subsystem.asr', icon: Mic, source: 'asr' },
-  { id: 'youtube', labelKey: 'app.subsystem.youtube', icon: Cast, source: 'youtube' },
-  // Live and Recording are two lights, not one. Standing Rule 3 makes them start together, which
-  // is exactly why the strip must be able to show them disagreeing: "streaming, not recording" is
-  // the failure the operator most needs to notice, and it is invisible in a combined light.
-  { id: 'live', labelKey: 'app.subsystem.live', icon: RadioTower, source: 'goLive' },
-  { id: 'recording', labelKey: 'app.subsystem.recording', icon: Disc, source: 'recording' },
-  // Phase 8. What the automation is allowed to do, always visible: an operator must never have to
-  // open a tab to find out whether the console is about to act on its own.
-  { id: 'automation', labelKey: 'app.subsystem.automation', icon: Bot, source: 'cue' },
-]
-
-/** Same three-channel rule as the big light: colour is never the only signal. */
-const STATE_TONES: Record<ObsConnectionState, string> = {
-  'not-configured': 'text-text-muted',
-  idle: 'text-text-muted',
-  connecting: 'text-accent-2',
-  connected: 'text-live',
-  reconnecting: 'text-accent-2',
-  disconnected: 'text-panic',
-  'auth-failed': 'text-panic',
-}
-
-const STATE_LABEL_KEYS: Record<ObsConnectionState, string> = {
-  'not-configured': 'status.state.not-configured',
-  idle: 'status.state.idle',
-  connecting: 'status.state.connecting',
-  connected: 'status.state.connected',
-  reconnecting: 'status.state.reconnecting',
-  disconnected: 'status.state.disconnected',
-  'auth-failed': 'status.state.auth-failed',
-}
 
 /** Reflect the active UI language onto `<html lang>` so the OS/AT picks the right voice. */
 function useDocumentLanguage(): void {
@@ -183,229 +123,6 @@ function useAppVersions(): AppVersions | null {
   }, [])
 
   return versions
-}
-
-/** What one light should say and how it should be tinted. */
-interface LightState {
-  readonly key: string
-  readonly text: string
-  readonly tone: string
-}
-
-/**
- * Tints for the YouTube light.
- *
- * `not-configured` is muted, not red: with no Google credentials the subsystem is *off*, which is
- * a resting state (Standing Rule 5), not a fault. Only a failed sign-in earns the panic colour.
- */
-const YOUTUBE_TONES: Record<YouTubeAuthState, string> = {
-  'not-configured': 'text-text-muted',
-  'signed-out': 'text-text-muted',
-  authorizing: 'text-accent-2',
-  'signed-in': 'text-live',
-  'auth-error': 'text-panic',
-}
-
-/**
- * Tints for the LIVE light.
- *
- * `partial` is panic-coloured and *not* folded in with `live`: OBS is pushing but the broadcast is
- * not public, and a green light over that state would be the single most expensive lie the strip
- * could tell. `failed` is panic for the obvious reason; `idle` is muted, because not being live is
- * a resting state, not a fault.
- */
-const GO_LIVE_TONES: Record<GoLivePhase, string> = {
-  idle: 'text-text-muted',
-  starting: 'text-accent-2',
-  live: 'text-live',
-  partial: 'text-panic',
-  ending: 'text-accent-2',
-  failed: 'text-panic',
-}
-
-/**
- * Tints for the SPEECH light.
- *
- * `degraded` is amber and emphatically **not** folded in with `listening`: a transcript is still
- * arriving, but from the fallback provider, and a green light there would hide exactly the fact the
- * operator needs. `failed` is red; `not-configured` is muted, because a subsystem nobody switched
- * on is a resting state (Standing Rule 5), not a fault — and either way the console runs manual.
- */
-const ASR_TONES: Record<AsrState, string> = {
-  'not-configured': 'text-text-muted',
-  idle: 'text-text-muted',
-  starting: 'text-accent-2',
-  listening: 'text-live',
-  degraded: 'text-accent-2',
-  failed: 'text-panic',
-}
-
-function SubsystemStrip(): React.JSX.Element {
-  const { t } = useTranslation()
-  const obsState = useObsStore((state) => state.status.state)
-  const serverInfo = useOverlayStore((state) => state.serverInfo)
-  const overlayHydrated = useOverlayStore((state) => state.hydrated)
-  const youtubeState = useYouTubeStore((state) => state.status.auth.state)
-  const youtubeHydrated = useYouTubeStore((state) => state.hydrated)
-  const goLivePhase = useGoLiveStore((state) => state.state.phase)
-  const goLiveObs = useGoLiveStore((state) => state.state.obs)
-  const goLiveHydrated = useGoLiveStore((state) => state.hydrated)
-  const asrState = useAsrStore((state) => state.status.state)
-  const asrHydrated = useAsrStore((state) => state.hydrated)
-  const cueEngine = useCueStore((state) => state.state)
-  const cueHydrated = useCueStore((state) => state.hydrated)
-
-  const overlayLight = ((): LightState => {
-    if (!overlayHydrated) {
-      return { key: 'unknown', text: t('overlay.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    if (!serverInfo.running) {
-      return { key: 'stopped', text: t('overlay.subsystem.stopped'), tone: 'text-panic' }
-    }
-    if (serverInfo.clients === 0) {
-      // Running with nothing attached is the silent failure, so it gets its own words rather
-      // than being folded into a green "running".
-      return { key: 'no-clients', text: t('overlay.subsystem.noClients'), tone: 'text-accent-2' }
-    }
-    return { key: 'attached', text: t('overlay.subsystem.attached'), tone: 'text-live' }
-  })()
-
-  const youtubeLight = ((): LightState => {
-    if (!youtubeHydrated) {
-      return { key: 'unknown', text: t('youtube.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    return {
-      key: youtubeState,
-      text: t(`youtube.subsystem.${youtubeState}`),
-      tone: YOUTUBE_TONES[youtubeState],
-    }
-  })()
-
-  const goLiveLight = ((): LightState => {
-    if (!goLiveHydrated) {
-      return { key: 'unknown', text: t('goLive.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    return {
-      key: goLivePhase,
-      text: t(`goLive.subsystem.${goLivePhase}`),
-      tone: GO_LIVE_TONES[goLivePhase],
-    }
-  })()
-
-  const asrLight = ((): LightState => {
-    if (!asrHydrated) {
-      return { key: 'unknown', text: t('asr.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    return {
-      key: asrState,
-      text: t(`asr.subsystem.${asrState}`),
-      tone: ASR_TONES[asrState],
-    }
-  })()
-
-  const recordingLight = ((): LightState => {
-    if (!goLiveHydrated) {
-      return { key: 'unknown', text: t('goLive.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    // Streaming with no recording is the Standing Rule 3 failure. It gets its own words and the
-    // panic colour, rather than reading as an unremarkable "not recording".
-    if (isRecordingMissing(goLiveObs)) {
-      return {
-        key: 'missing',
-        text: t('goLive.subsystem.recordingMissing'),
-        tone: 'text-panic',
-      }
-    }
-    if (goLiveObs.recording && goLiveObs.recordingPaused) {
-      return {
-        key: 'paused',
-        text: t('goLive.subsystem.recordingPaused'),
-        tone: 'text-accent-2',
-      }
-    }
-    if (goLiveObs.recording) {
-      return { key: 'recording', text: t('goLive.subsystem.recording'), tone: 'text-live' }
-    }
-    return {
-      key: 'not-recording',
-      text: t('goLive.subsystem.notRecording'),
-      tone: 'text-text-muted',
-    }
-  })()
-
-  const cueLight = ((): LightState => {
-    if (!cueHydrated) {
-      return { key: 'unknown', text: t('cue.subsystem.unknown'), tone: 'text-text-muted' }
-    }
-    // Panic outranks the mode, and it is panic-coloured rather than muted on purpose: automation
-    // being halted is a state the operator chose, and one they must be reminded of until they undo
-    // it. A halted engine that read as an ordinary "manual" would be found out the hard way.
-    if (cueEngine.panicked) {
-      return { key: 'panicked', text: t('cue.subsystem.panicked'), tone: 'text-panic' }
-    }
-    // A decision waiting on the operator is louder than the mode, because it is the thing with a
-    // deadline attached.
-    if (cueEngine.pending !== null) {
-      return { key: 'waiting', text: t('cue.subsystem.waiting'), tone: 'text-accent-2' }
-    }
-    // Auto is amber, not green. Green would say "all well"; what it actually means is "this console
-    // may put something on screen without asking you", and the strip should say so at a glance.
-    const tone =
-      cueEngine.mode === 'auto'
-        ? 'text-accent-2'
-        : cueEngine.mode === 'assist'
-          ? 'text-live'
-          : 'text-text-muted'
-    return { key: cueEngine.mode, text: t(`cue.subsystem.${cueEngine.mode}`), tone }
-  })()
-
-  const lightFor = (source: SubsystemSource): LightState => {
-    switch (source) {
-      case 'obs':
-        return { key: obsState, text: t(STATE_LABEL_KEYS[obsState]), tone: STATE_TONES[obsState] }
-      case 'overlay':
-        return overlayLight
-      case 'asr':
-        return asrLight
-      case 'youtube':
-        return youtubeLight
-      case 'goLive':
-        return goLiveLight
-      case 'recording':
-        return recordingLight
-      case 'cue':
-        return cueLight
-      case 'pending':
-        return { key: 'pending', text: t('app.phasePending'), tone: 'text-text-muted' }
-    }
-  }
-
-  return (
-    <ul
-      aria-label={t('app.subsystemsLabel')}
-      className="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-2"
-    >
-      {SUBSYSTEMS.map((subsystem) => {
-        const Icon = subsystem.icon
-        const label = t(subsystem.labelKey)
-        const light = lightFor(subsystem.source)
-
-        return (
-          <li
-            key={subsystem.id}
-            data-subsystem={subsystem.id}
-            data-subsystem-state={light.key}
-            className="flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-3"
-          >
-            <Icon aria-hidden="true" className={`h-4 w-4 shrink-0 ${light.tone}`} />
-            <span className="text-xs font-medium text-text">{label}</span>
-            {/* The state text is what carries the meaning; the tint only reinforces it. */}
-            <span className={`text-xs ${light.tone}`}>{light.text}</span>
-          </li>
-        )
-      })}
-    </ul>
-  )
 }
 
 /**
@@ -569,6 +286,25 @@ function useCueSubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/**
+ * Keep subsystem health live for the whole session.
+ *
+ * The one hook that must never be conditional. The strip is the only part of Verger an operator is
+ * guaranteed to be looking at when something breaks, and the four bugs logged in `STATUS.md` cycles
+ * 2, 4, 5 and 8 were all the same shape: a fully unit-tested component wired to nothing. A health
+ * store that hydrated only when its own tab was open would be the fifth.
+ */
+function useHealthSubsystem(): void {
+  const hydrate = useHealthStore((state) => state.hydrate)
+  const subscribe = useHealthStore((state) => state.subscribe)
+
+  useEffect(() => {
+    const unsubscribe = subscribe()
+    void hydrate()
+    return unsubscribe
+  }, [hydrate, subscribe])
+}
+
 /** The trust dial and the hot phrases, together. */
 function AutomationSection(): React.JSX.Element {
   return (
@@ -596,6 +332,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <AutomationSection />
     case 'goLive':
       return <GoLivePanel />
+    case 'status':
+      return <StatusDashboard />
     case 'goLiveSettings':
       return <GoLiveSettings />
     case 'cameraSetup':
@@ -649,6 +387,7 @@ export function App(): React.JSX.Element {
   useGoLiveSubsystem()
   useAsrSubsystem()
   useCueSubsystem()
+  useHealthSubsystem()
 
   const [section, setSection] = useState<SectionId>('connection')
 
@@ -661,7 +400,9 @@ export function App(): React.JSX.Element {
     <ErrorBoundary>
       <div className="flex h-full w-full flex-col bg-background text-text">
         <TitleBar />
-        <SubsystemStrip />
+        {/* One strip, one source of truth (`@shared/health`), and the "is it still going out?"
+            answer next to the lights. */}
+        <StatusStrip />
         {/* Above the tabs, on every screen. A suggestion has a deadline measured in seconds and
             must never be one tab-click away. */}
         <SuggestionPanel dispatcher={dispatcher} />

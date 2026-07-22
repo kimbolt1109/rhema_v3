@@ -21,6 +21,8 @@ import { TRUST_MODES, defaultCueEngineSettings, idleCueEngineState } from '@shar
 import type { CueEngineSettings, CueEngineState, CueSuggestion, TrustMode } from '@shared/cue'
 import { GO_LIVE_STEPS, emptyObsOutputState, idleGoLiveState } from '@shared/golive'
 import type { GoLiveState, GoLiveStepStatus, StepState } from '@shared/golive'
+import { SUBSYSTEMS, initialHealth, isServiceStillGoingOut, worstLevel } from '@shared/health'
+import type { Checkpoint, HealthSnapshot, SubsystemHealth } from '@shared/health'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type { IpcChannelValue } from '@shared/ipc'
 import type { DeckImportProgress, DeckImporterStatus, OverlayServerInfo, PlanState } from '@shared/ipc'
@@ -163,19 +165,40 @@ vi.mock('@main/cue', () => ({
   }
 }))
 
+/**
+ * The health singleton, mocked to throw like the other seven.
+ *
+ * The real one watches a live overlay socket, an OBS client and a recogniser, and owns a watchdog
+ * timer. None of those exist here. Making it throw also lets a test below assert what the four
+ * health channels answer when the monitor could not be constructed at all — which must be "the
+ * dashboard is gone, the service is not", never a crash, and never a recovery action that silently
+ * claims to have happened.
+ */
+vi.mock('@main/health', () => ({
+  getHealthService: () => {
+    throw new Error('the health service singleton is unavailable under vitest')
+  },
+  getCheckpointStore: () => {
+    throw new Error('the checkpoint store singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
   type AsrServiceLike,
   type CameraServiceLike,
+  type CheckpointStoreLike,
   type CueEngineLike,
   type DialogLike,
   type FilePathProbeLike,
   type GoLiveServiceLike,
+  type HealthServiceLike,
   type IpcInvokeEventLike,
   type IpcMainLike,
   type ObsClientLike,
   type OpenDialogResultLike,
+  type OverlayReloadLike,
   type OverlayServerLike,
   type PathKind,
   type PlanServiceLike,
@@ -1407,6 +1430,173 @@ function createFakeCueEngine(): FakeCueEngine {
   return engine
 }
 
+// ---------------------------------------------------------------------------
+// Health (BLUEPRINT.md §9)
+// ---------------------------------------------------------------------------
+
+const HEALTH_AT = 1_764_000_000_000
+
+/** Every light green. The state a service should be in. */
+function healthySnapshot(at = HEALTH_AT): HealthSnapshot {
+  const subsystems: readonly SubsystemHealth[] = SUBSYSTEMS.map((id) => ({
+    ...initialHealth(id, at),
+    level: 'ok' as const,
+    detail: 'ok'
+  }))
+  return { subsystems, worst: worstLevel(subsystems), at }
+}
+
+/**
+ * The blueprint's "internet drops mid-stream" row, as a snapshot.
+ *
+ * `stream` is amber — working, but not as configured, which is what `degraded` is reserved for —
+ * and `stillWorks` says the thing that keeps an operator from stopping the service to investigate.
+ * `recording` stays green, because the local recording is exactly what does not care that the
+ * uplink wobbled.
+ */
+function reconnectingSnapshot(at = HEALTH_AT): HealthSnapshot {
+  const subsystems: readonly SubsystemHealth[] = healthySnapshot(at).subsystems.map((subsystem) =>
+    subsystem.id === 'stream'
+      ? {
+          ...subsystem,
+          level: 'degraded' as const,
+          detail: 'reconnecting (attempt 3)',
+          stillWorks: 'the local recording is unaffected and is still writing to disk'
+        }
+      : subsystem
+  )
+  return { subsystems, worst: worstLevel(subsystems), at }
+}
+
+const CHECKPOINTS: readonly Checkpoint[] = [
+  {
+    id: 'cp-2',
+    at: HEALTH_AT - 30_000,
+    planPosition: 7,
+    overlayRevision: 12,
+    label: 'after cue "Point 1 — Grace"'
+  },
+  {
+    id: 'cp-1',
+    at: HEALTH_AT - 90_000,
+    planPosition: 4,
+    overlayRevision: 9,
+    label: 'after cue "Welcome"'
+  }
+]
+
+interface FakeHealthService extends HealthServiceLike {
+  emitSnapshot(snapshot: HealthSnapshot): void
+  readonly snapshotUnsubscribed: () => number
+  /** When set, `getSnapshot` throws it — a monitor that has itself broken mid-service. */
+  throwWith: Error | null
+}
+
+/**
+ * A health aggregator that watches nothing.
+ *
+ * Note what it has no way to do, because {@link HealthServiceLike} has no way to say it: stop a
+ * stream, stop a recording, disconnect OBS — or in fact change anything at all. The aggregator
+ * observes; the two seams below are the ones that act.
+ */
+function createFakeHealthService(): FakeHealthService {
+  let listener: ((snapshot: HealthSnapshot) => void) | null = null
+  let unsubscribes = 0
+  let snapshot = healthySnapshot()
+
+  const service: FakeHealthService = {
+    throwWith: null,
+    snapshotUnsubscribed: () => unsubscribes,
+    getSnapshot: () => {
+      if (service.throwWith !== null) throw service.throwWith
+      return snapshot
+    },
+    onSnapshot: (next) => {
+      listener = next
+      return () => {
+        unsubscribes += 1
+        listener = null
+      }
+    },
+    emitSnapshot: (next) => {
+      snapshot = next
+      listener?.(next)
+    }
+  }
+  return service
+}
+
+interface FakeCheckpointStore extends CheckpointStoreLike {
+  readonly restoreCalls: string[]
+  /** When set, every method throws it. */
+  throwWith: Error | null
+}
+
+/**
+ * A checkpoint store holding two checkpoints and nothing else.
+ *
+ * `restore` answers `NOT_FOUND` for an id it does not hold, which is the case the handler has to
+ * forward cleanly rather than turn into a crash: an operator whose rewind did not happen is about
+ * to act on the assumption that it did.
+ *
+ * There is no `stopStream` and no `stopRecord` here because {@link CheckpointStoreLike} has no way
+ * to name one. The tests below assert that a restore left the go-live service and the OBS client
+ * untouched, and the type is what makes that assertion true by construction rather than by this
+ * fake's good behaviour.
+ */
+function createFakeCheckpointStore(): FakeCheckpointStore {
+  const restoreCalls: string[] = []
+
+  const store: FakeCheckpointStore = {
+    throwWith: null,
+    restoreCalls,
+    list: () => {
+      if (store.throwWith !== null) throw store.throwWith
+      return CHECKPOINTS
+    },
+    restore: (checkpointId: string) => {
+      if (store.throwWith !== null) throw store.throwWith
+      restoreCalls.push(checkpointId)
+      const found = CHECKPOINTS.find((checkpoint) => checkpoint.id === checkpointId)
+      if (found === undefined) {
+        return err(
+          'NOT_FOUND',
+          'that checkpoint is no longer retained',
+          'nothing was changed; the stream and the recording are unaffected'
+        )
+      }
+      return found
+    }
+  }
+  return store
+}
+
+interface FakeOverlayReload extends OverlayReloadLike {
+  readonly reloadCalls: () => number
+  /** When set, `reloadNow` throws it. */
+  throwWith: Error | null
+  /** When set, `reloadNow` reports this failure instead of succeeding. */
+  failWith: Result<never> | null
+}
+
+/** The overlay watchdog's reload channel, with no socket behind it. */
+function createFakeOverlayReload(): FakeOverlayReload {
+  let reloads = 0
+
+  const channel: FakeOverlayReload = {
+    throwWith: null,
+    failWith: null,
+    reloadCalls: () => reloads,
+    reloadNow: () => {
+      if (channel.throwWith !== null) throw channel.throwWith
+      if (channel.failWith !== null) return channel.failWith
+      reloads += 1
+      return ok(undefined)
+    }
+  }
+  return channel
+}
+
 interface FakeScriptureResolver extends ScriptureResolverLike {
   readonly resolveCalls: Array<{
     reference: ScriptureReference
@@ -1486,6 +1676,9 @@ interface Harness {
   readonly asr: FakeAsrService
   readonly cue: FakeCueEngine
   readonly scripture: FakeScriptureResolver
+  readonly health: FakeHealthService
+  readonly checkpoints: FakeCheckpointStore
+  readonly overlayReload: FakeOverlayReload
   readonly dialog: FakeDialog
   readonly filePaths: FakeFilePaths
   readonly windows: FakeWindow[]
@@ -1506,6 +1699,9 @@ function setup(options: { windows?: number } = {}): Harness {
   const asr = createFakeAsrService()
   const cue = createFakeCueEngine()
   const scripture = createFakeScriptureResolver()
+  const health = createFakeHealthService()
+  const checkpoints = createFakeCheckpointStore()
+  const overlayReload = createFakeOverlayReload()
   const dialog = createFakeDialog()
   const filePaths = createFakeFilePaths()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
@@ -1532,6 +1728,9 @@ function setup(options: { windows?: number } = {}): Harness {
     asr,
     cue,
     scripture,
+    health,
+    checkpoints,
+    overlayReload,
     dialog,
     filePaths,
     config: CONFIG,
@@ -1554,6 +1753,9 @@ function setup(options: { windows?: number } = {}): Harness {
     asr,
     cue,
     scripture,
+    health,
+    checkpoints,
+    overlayReload,
     dialog,
     filePaths,
     windows,
@@ -1642,6 +1844,30 @@ describe('registerIpc', () => {
     ]) {
       expect(harness.ipc.handlers.has(channel)).toBe(true)
     }
+
+    // And the four Phase 9 health channels. Named explicitly for the strongest version of the
+    // reason the others are: this phase exists partly because four previous phases shipped a
+    // component that was fully unit-tested and connected to NOTHING. A health service with no
+    // handler on the boundary would be the fifth, and it would pass every test that injects its
+    // own fake.
+    for (const channel of [
+      IpcChannel.healthGet,
+      IpcChannel.healthListCheckpoints,
+      IpcChannel.healthRestoreCheckpoint,
+      IpcChannel.healthReloadOverlays
+    ]) {
+      expect(harness.ipc.handlers.has(channel)).toBe(true)
+    }
+
+    // There is deliberately no `health:stop-*` channel of any kind, and there never may be. No
+    // recovery action may stop the stream or the recording — recovering from a failure must never
+    // cost more than the failure did — so a future edit that added one would have to delete this
+    // assertion first.
+    expect(
+      IPC_CHANNEL_VALUES.filter(
+        (channel) => channel.startsWith('verger:health:') && /stop|end|disconnect/.test(channel)
+      )
+    ).toEqual([])
 
     // There is deliberately no `cue:fire` channel. The engine emits intents; something else
     // applies them, and that separation is what makes an operator's veto instant. A future edit
@@ -1888,6 +2114,10 @@ describe('registerIpc', () => {
     // "something automated happened that nobody asked for" failure this phase exists to prevent.
     expect(harness.cue.stateUnsubscribed()).toBe(1)
     expect(harness.cue.suggestionUnsubscribed()).toBe(1)
+    // And the health snapshot feed. It is backed by a watchdog timer that keeps ticking for as
+    // long as the process lives, so a listener surviving dispose would push subsystem snapshots at
+    // dead windows for the rest of the service.
+    expect(harness.health.snapshotUnsubscribed()).toBe(1)
 
     // Disposal unsubscribed and did nothing else. It did not end the broadcast, and it did not
     // stop the recording — a hot reload or a window close is not a reason to take a
@@ -1909,6 +2139,7 @@ describe('registerIpc', () => {
     expect(harness.asr.transcriptUnsubscribed()).toBe(1)
     expect(harness.cue.stateUnsubscribed()).toBe(1)
     expect(harness.cue.suggestionUnsubscribed()).toBe(1)
+    expect(harness.health.snapshotUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -1933,6 +2164,7 @@ describe('registerIpc', () => {
     harness.asr.emitTranscript(FINAL_SEGMENT)
     harness.cue.emitState(ASSISTING_CUE_STATE)
     harness.cue.emitSuggestion(PLAN_SUGGESTION)
+    harness.health.emitSnapshot(reconnectingSnapshot())
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -4975,6 +5207,376 @@ describe('registerIpc', () => {
   // each other. Asserted here at the IPC boundary, where a careless future handler would be
   // most tempted to "helpfully" clear a lower-third on a camera cut.
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Health and recovery (BLUEPRINT.md §9)
+  // -------------------------------------------------------------------------
+
+  describe('health channels', () => {
+    it('returns the whole dashboard from healthGet, including what still works', async () => {
+      harness.health.emitSnapshot(reconnectingSnapshot())
+
+      const result = (await harness.invoke(IpcChannel.healthGet)) as Result<HealthSnapshot>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+
+      const stream = result.value.subsystems.find((subsystem) => subsystem.id === 'stream')
+      const recording = result.value.subsystems.find((subsystem) => subsystem.id === 'recording')
+
+      // Amber means "working, but not as configured" — and the string next to it is the one that
+      // keeps an operator from stopping a service to investigate.
+      expect(stream?.level).toBe('degraded')
+      expect(stream?.stillWorks).toContain('recording')
+      expect(recording?.level).toBe('ok')
+      expect(result.value.worst).toBe('degraded')
+
+      // The only question that matters mid-service, answered from the payload alone.
+      expect(isServiceStillGoingOut(result.value)).toBe(true)
+    })
+
+    it('lists the retained checkpoints', async () => {
+      const result = (await harness.invoke(
+        IpcChannel.healthListCheckpoints
+      )) as Result<readonly Checkpoint[]>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.map((checkpoint) => checkpoint.id)).toEqual(['cp-2', 'cp-1'])
+      // A checkpoint describes automation and nothing else. There is no field here naming the
+      // stream or the recording, so nothing restoring one could ever read as "undo the broadcast".
+      expect(Object.keys(result.value[0] ?? {}).sort()).toEqual([
+        'at',
+        'id',
+        'label',
+        'overlayRevision',
+        'planPosition'
+      ])
+    })
+
+    /**
+     * The case the whole handler exists for.
+     *
+     * A checkpoint list is bounded (`MAX_CHECKPOINTS`), so an id the operator is looking at can
+     * age out between the dialog opening and the button being pressed. That must be an ordinary
+     * failed `Result` the UI can render — not a rejected promise, and emphatically not a silent
+     * success, because an operator told "restored" when nothing was restored will carry on as
+     * though the plan pointer moved.
+     */
+    it('answers an unknown checkpoint id with a clean Err rather than throwing', async () => {
+      const call = harness.invoke(IpcChannel.healthRestoreCheckpoint, {
+        checkpointId: 'cp-does-not-exist'
+      })
+      await expect(call).resolves.toBeDefined()
+
+      const error = expectErr(await call)
+      expect(error.code).toBe('NOT_FOUND')
+      expect(error.detail).toContain('nothing was changed')
+
+      // The service was asked, and it said no. Nothing else moved.
+      expect(harness.checkpoints.restoreCalls).toEqual(['cp-does-not-exist'])
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+      expect(harness.plan.advances()).toBe(0)
+    })
+
+    it('restores a known checkpoint without touching the stream or the recording', async () => {
+      const result = (await harness.invoke(IpcChannel.healthRestoreCheckpoint, {
+        checkpointId: 'cp-1'
+      })) as Result<HealthSnapshot>
+      expect(result.ok).toBe(true)
+      expect(harness.checkpoints.restoreCalls).toEqual(['cp-1'])
+
+      // The rule of this phase, asserted rather than asserted-in-a-comment. A rewind of automation
+      // is not a rewind of the broadcast; the broadcast cannot be rewound, and must not be ended
+      // in the attempt.
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.goLive.startArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+    })
+
+    it('reloads the overlays without touching the stream or the recording', async () => {
+      const result = (await harness.invoke(IpcChannel.healthReloadOverlays)) as Result<HealthSnapshot>
+      expect(result.ok).toBe(true)
+      expect(harness.overlayReload.reloadCalls()).toBe(1)
+
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+    })
+
+    /**
+     * A reload that could not happen.
+     *
+     * The failure is forwarded rather than swallowed, and — the part that matters — the broadcast
+     * is untouched on the way past. There is no cleanup branch here that reacts to a failed
+     * recovery by stopping something, because there is no verb on any health seam that could.
+     */
+    it('forwards a refused overlay reload without touching the broadcast', async () => {
+      harness.overlayReload.failWith = err(
+        'NOT_CONFIGURED',
+        'this build has no overlay reload channel',
+        'refresh the browser source in OBS'
+      )
+
+      const error = expectErr(await harness.invoke(IpcChannel.healthReloadOverlays))
+      expect(error.code).toBe('NOT_CONFIGURED')
+      expect(error.detail).toContain('OBS')
+
+      expect(harness.overlayReload.reloadCalls()).toBe(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+    })
+
+    it('rejects a malformed checkpoint id without calling the service', async () => {
+      for (const bad of [undefined, {}, { checkpointId: '' }, { checkpointId: 'x'.repeat(65) }]) {
+        const error = expectErr(await harness.invoke(IpcChannel.healthRestoreCheckpoint, bad))
+        expect(error.code).toBe('INVALID_ARG')
+      }
+      expect(harness.checkpoints.restoreCalls).toHaveLength(0)
+    })
+
+    /**
+     * A monitor that has itself broken.
+     *
+     * `healthGet` still answers — the panel an operator stares at during a failure must always
+     * have something to draw — while the two *actions* report the failure, because an action that
+     * silently claimed to have happened is the worse lie.
+     */
+    it('survives a health service that throws', async () => {
+      harness.health.throwWith = new Error('the aggregator is wedged')
+      harness.checkpoints.throwWith = harness.health.throwWith
+      harness.overlayReload.throwWith = harness.health.throwWith
+
+      const snapshot = (await harness.invoke(IpcChannel.healthGet)) as Result<HealthSnapshot>
+      expect(snapshot.ok).toBe(true)
+      if (!snapshot.ok) return
+      expect(snapshot.value.subsystems).toHaveLength(SUBSYSTEMS.length)
+      expect(snapshot.value.worst).toBe('not-configured')
+
+      // Nothing rejects, on any of the four.
+      expect(expectErr(await harness.invoke(IpcChannel.healthListCheckpoints)).code).toBe('INTERNAL')
+      expect(
+        expectErr(await harness.invoke(IpcChannel.healthRestoreCheckpoint, { checkpointId: 'cp-1' }))
+          .code
+      ).toBe('INTERNAL')
+      expect(expectErr(await harness.invoke(IpcChannel.healthReloadOverlays)).code).toBe('INTERNAL')
+
+      // And the broadcast is exactly where it was.
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.obs.disconnectCalls()).toBe(0)
+    })
+
+    it('fans health snapshots out to every window', () => {
+      const many = setup({ windows: 3 })
+      try {
+        const snapshot = reconnectingSnapshot()
+        many.health.emitSnapshot(snapshot)
+
+        for (const window of many.windows) {
+          const pushed = window.sent.filter(
+            (entry) => entry.channel === IpcEvent.healthSnapshot
+          )
+          expect(pushed).toHaveLength(1)
+          expect(pushed[0]?.payload).toEqual(snapshot)
+        }
+      } finally {
+        many.dispose()
+      }
+    })
+
+    it('skips destroyed windows when fanning health out', () => {
+      const many = setup({ windows: 2 })
+      try {
+        const dead = many.windows[1]
+        expect(dead).toBeDefined()
+        if (dead === undefined) return
+        Object.assign(dead, { isDestroyed: () => true })
+
+        many.health.emitSnapshot(healthySnapshot())
+        expect(many.windows[0]?.sent).toHaveLength(1)
+        expect(dead.sent).toHaveLength(0)
+      } finally {
+        many.dispose()
+      }
+    })
+
+    /**
+     * No health service at all.
+     *
+     * The dashboard is gone; the service is not. Every light reads `not-configured` — a resting
+     * state, deliberately NOT amber, because an amber light that is always on is one an operator
+     * learns to ignore — and the two recovery actions say plainly that they did not run.
+     */
+    it('degrades to a renderable snapshot and refusing actions with no health service', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: null,
+        health: null,
+        checkpoints: null,
+        overlayReload: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      const snapshot = (await call(IpcChannel.healthGet)) as Result<HealthSnapshot>
+      expect(snapshot.ok).toBe(true)
+      if (!snapshot.ok) return
+      expect(snapshot.value.subsystems.map((subsystem) => subsystem.id)).toEqual([...SUBSYSTEMS])
+      expect(snapshot.value.subsystems.every((subsystem) => subsystem.level === 'not-configured')).toBe(
+        true
+      )
+      expect(snapshot.value.worst).toBe('not-configured')
+
+      const checkpoints = (await call(IpcChannel.healthListCheckpoints)) as Result<
+        readonly Checkpoint[]
+      >
+      expect(checkpoints.ok).toBe(true)
+      if (checkpoints.ok) expect(checkpoints.value).toEqual([])
+
+      for (const channel of [IpcChannel.healthRestoreCheckpoint, IpcChannel.healthReloadOverlays]) {
+        const error = expectErr(
+          await call(channel, channel === IpcChannel.healthRestoreCheckpoint ? { checkpointId: 'cp-1' } : undefined)
+        )
+        expect(error.code).toBe('NOT_CONFIGURED')
+        // The detail names what is unaffected, which is the fact that keeps someone calm.
+        expect(error.detail).toContain('recording')
+      }
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('survives a health singleton that cannot be constructed', async () => {
+      // `health` is omitted entirely, so `registerIpc` falls back to `getHealthService()` — which
+      // the module mock at the top of this file makes throw.
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      const handler = ipc.handlers.get(IpcChannel.healthGet)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      const snapshot = (await handler(eventFrom(window), undefined)) as Result<HealthSnapshot>
+      expect(snapshot.ok).toBe(true)
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates a health service whose subscription returns nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: HealthServiceLike = {
+        getSnapshot: () => healthySnapshot(),
+        onSnapshot: () => undefined
+      }
+      const bareCheckpoints: CheckpointStoreLike = {
+        list: () => CHECKPOINTS,
+        restore: () => CHECKPOINTS[0] as Checkpoint
+      }
+      const bareReload: OverlayReloadLike = { reloadNow: () => ok(undefined) }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: null,
+        health: bare,
+        checkpoints: bareCheckpoints,
+        overlayReload: bareReload,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    /**
+     * The audit trail for the two recovery actions.
+     *
+     * When someone asks afterwards why the plan jumped back three cues in the middle of the
+     * sermon, the rolling log is where the answer is — so the press is logged before the attempt,
+     * exactly as GO LIVE / END and PANIC are.
+     */
+    it('logs both recovery actions at info level with who asked and when', async () => {
+      const lines: LogLine[] = []
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow('file:///app/out/renderer/index.html')
+      const at = 1_764_000_000_000
+
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: null,
+        health: createFakeHealthService(),
+        checkpoints: createFakeCheckpointStore(),
+        overlayReload: createFakeOverlayReload(),
+        config: CONFIG,
+        logger: createRecordingLogger(lines),
+        ipcMain: ipc,
+        getWindows: () => [window],
+        now: () => at
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      await call(IpcChannel.healthRestoreCheckpoint, { checkpointId: 'cp-1' })
+      await call(IpcChannel.healthReloadOverlays)
+
+      const info = lines.filter((line) => line.level === 'info')
+      const restored = info.find((line) => line.msg === 'checkpoint restore requested')
+      const reloaded = info.find((line) => line.msg === 'overlay reload requested')
+      expect(restored).toBeDefined()
+      expect(reloaded).toBeDefined()
+      for (const line of [restored, reloaded]) {
+        expect(line?.data?.who).toBe('file:///app/out/renderer/index.html')
+        expect(line?.data?.at).toBe(new Date(at).toISOString())
+      }
+    })
+  })
 
   describe('camera and overlay independence', () => {
     it('a camera switch leaves the overlay snapshot byte-identical', async () => {

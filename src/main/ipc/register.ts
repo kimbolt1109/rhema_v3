@@ -91,6 +91,12 @@
  *    with no path at all the *main* process opens the native dialog, because the trusted side is
  *    the side that should be choosing. A cancelled dialog is an ordinary `Ok` carrying the
  *    unchanged state — never an exception, never an error toast.
+ *  - **BLUEPRINT.md §9 — no recovery action may ever stop the stream or the recording.** The two
+ *    `health:*` action channels rewind *automation* (`healthRestoreCheckpoint`) and ask browser
+ *    sources to reload (`healthReloadOverlays`). None of the three health seams —
+ *    `HealthServiceLike`, `CheckpointStoreLike`, `OverlayReloadLike` — has a `stopStream`, a
+ *    `stopRecord` or a `disconnect`, so neither action can reach an OBS output on any path,
+ *    success or failure. Recovering from a failure must never cost more than the failure did.
  */
 
 import { statSync } from 'node:fs'
@@ -104,6 +110,7 @@ import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getCueEngine } from '@main/cue'
 import { getGoLiveService } from '@main/golive'
+import { getCheckpointStore, getHealthService } from '@main/health'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
 import { getSecretsStore } from '@main/secrets/secrets'
@@ -123,6 +130,8 @@ import { obsConfigSchema } from '@shared/config'
 import { TRUST_MODES, cueEngineSettingsSchema, idleCueEngineState } from '@shared/cue'
 import type { CueEngineSettings, CueEngineState, CueSuggestion, TrustMode } from '@shared/cue'
 import type { GoLiveState } from '@shared/golive'
+import { SUBSYSTEMS, initialHealth, worstLevel } from '@shared/health'
+import type { Checkpoint, HealthSnapshot, SubsystemHealth } from '@shared/health'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
@@ -531,6 +540,77 @@ export interface ScriptureResolverLike {
   listTranslations(): ClientCall<readonly TranslationSource[]>
 }
 
+/**
+ * The minimum this module needs from the health aggregator (`src/main/health`).
+ *
+ * BLUEPRINT.md §9. Two methods, and note that **neither of them changes anything**. The aggregator
+ * observes; it has no verb that acts, which is why the two recovery channels below reach two
+ * *different* seams to do their work and come back here only to read the result.
+ *
+ *  - **`getSnapshot` is the whole dashboard in one struct.** One strip of lights read across a dark
+ *    room, with `worst` rolled up so the operator can answer "is anything wrong?" without parsing
+ *    seven of them.
+ *  - **`onSnapshot` is a push feed, not a poll.** A subsystem degrades on its own schedule — an
+ *    RTMP link drops mid-sermon, Deepgram stops answering and the local recogniser takes over —
+ *    and every one of those has to light up without anybody pressing anything.
+ *
+ * Structural, like every other seam here, and for the binding reason: the concrete aggregator
+ * watches a real overlay socket, a real OBS client and a real recogniser, none of which exist on
+ * the build machine. Every failure below is simulated against a plain object.
+ */
+export interface HealthServiceLike {
+  /** The whole dashboard in one struct. Cheap, and never throws. */
+  getSnapshot(): ClientCall<HealthSnapshot>
+  onSnapshot(listener: (snapshot: HealthSnapshot) => void): Unsubscribe | void
+}
+
+/**
+ * The minimum this module needs from the checkpoint store (`src/main/health/checkpoints`).
+ *
+ * A *separate* seam from `HealthServiceLike`, and separate for the same reason the scripture
+ * resolver is separate from the cue engine: recording and rewinding automation is a different job
+ * from observing it, and the aggregator deliberately has no verb that changes anything. They also
+ * degrade independently — a dashboard with no checkpoint store still lights up, and a store with
+ * no dashboard still rewinds.
+ *
+ * Read the shape as the phase's central rule expressed as a type. There is no `stopStream`, no
+ * `stopRecord`, no `disconnect` and no `restart`: `restore` moves the plan pointer back and
+ * nothing else, and `Checkpoint` has no field naming the stream or the recording, so there is
+ * nothing on this boundary that could describe undoing a broadcast. A broadcast cannot be undone —
+ * the congregation saw it — which is exactly why a recovery path must not try.
+ */
+export interface CheckpointStoreLike {
+  /** The retained checkpoints, newest first. Bounded by `MAX_CHECKPOINTS`. */
+  list(): ClientCall<readonly Checkpoint[]>
+  /**
+   * Rewind AUTOMATION state to a checkpoint. Never touches the stream or the recording.
+   *
+   * An id that names no retained checkpoint is an ordinary `Err`, not a throw and not a silent
+   * no-op: an operator who asked to rewind and got nothing must be told, because they are about to
+   * act on the assumption that it happened.
+   */
+  restore(checkpointId: string): ClientCall<Checkpoint>
+}
+
+/**
+ * The minimum this module needs to force attached overlay browser sources to reload.
+ *
+ * In production this is the overlay watchdog constructed in `src/main/index.ts`. It is a third
+ * seam rather than a method on either of the two above because it is the only recovery verb that
+ * reaches *out* of the process, and because the watchdog's primary duty — making a dropped browser
+ * source visible — must keep working on a machine where no reload channel is wired at all.
+ *
+ * A reload is the safe half of the "overlay browser source crashes" row in BLUEPRINT.md §9: the
+ * server holds the authoritative `OverlayState`, so a source that reconnects is sent the current
+ * snapshot and comes back showing exactly what it was showing. It asks a *page inside OBS* to
+ * reload; it does not ask OBS to do anything, and it cannot interrupt an encoder that is
+ * mid-stream.
+ */
+export interface OverlayReloadLike {
+  /** Ask every attached overlay page to reload and re-sync from the cached snapshot. */
+  reloadNow(): ClientCall<unknown>
+}
+
 /** The slice of Electron's `OpenDialogReturnValue` used here. */
 export interface OpenDialogResultLike {
   readonly canceled: boolean
@@ -711,6 +791,45 @@ export interface RegisterIpcDeps {
    * Kept separate from `cue` so the two degrade independently. See {@link ScriptureResolverLike}.
    */
   readonly scripture?: ScriptureResolverLike | null
+  /**
+   * The subsystem health service (BLUEPRINT.md §9).
+   *
+   * Optional for exactly the reason the other seven are: `src/main/index.ts` composes its deps
+   * object explicitly and a required key would fail to compile for every caller that predates it.
+   * Defaults to the process-wide singleton from `@main/health`.
+   *
+   * A `null` here costs the operator the *dashboard*, not the service. Every subsystem still runs,
+   * still reports its own status on its own channel, and OBS still streams and records; what is
+   * lost is the single glanceable roll-up and the two recovery actions. So `healthGet` still
+   * answers with a renderable snapshot (every light at `not-configured`, saying so), and the two
+   * recovery channels report `NOT_CONFIGURED` rather than pretending to have acted — an operator
+   * told "restored" when nothing was restored is worse off than one told nothing happened.
+   *
+   * Pass `null` to say "there is no health service" explicitly and skip the default lookup.
+   */
+  readonly health?: HealthServiceLike | null
+  /**
+   * The checkpoint store behind `healthListCheckpoints` and `healthRestoreCheckpoint`.
+   *
+   * Optional, defaulting to the process-wide singleton from `@main/health`. Kept separate from
+   * `health` so the two degrade independently: a dashboard with no store still lights up, and a
+   * store with no dashboard still rewinds. With neither, the plan still advances on SPACE and the
+   * one-tap BACK is still there — a checkpoint is a convenience over that, not a replacement for
+   * it.
+   *
+   * Pass `null` to say "there is no checkpoint store" explicitly and skip the default lookup.
+   */
+  readonly checkpoints?: CheckpointStoreLike | null
+  /**
+   * The overlay reload channel behind `healthReloadOverlays` — in production, the watchdog.
+   *
+   * Defaults to **absent** rather than to a singleton lookup, because the watchdog is constructed
+   * in the composition root (`src/main/index.ts`) where the overlay server it watches already
+   * exists. With none attached the channel reports `NOT_CONFIGURED`; the operator's fallback is
+   * OBS's own "Refresh cache of current page" on the browser source, and the overlay's state-based
+   * contract means that recovers just as well.
+   */
+  readonly overlayReload?: OverlayReloadLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -1181,6 +1300,21 @@ const suggestionIdArg: ArgValidator<{ suggestionId: string }> = zodArg(
   z.object({ suggestionId: z.string().min(1).max(64) })
 )
 
+/**
+ * `healthRestoreCheckpoint`'s envelope.
+ *
+ * Bounded at 64 characters to match the id bounds used everywhere else on this boundary. The id
+ * is *required* and there is deliberately no "restore the latest" form: a rewind the operator did
+ * not name is a rewind they cannot predict, and the whole point of CTRL+D recovery
+ * (`docs/v2-notes/SHORTCUTS_AND_A11Y.md`) is that it lands somewhere the operator chose.
+ *
+ * An id that parses but names no retained checkpoint is *not* rejected here — that is the health
+ * service's answer to give, because it is the only thing that knows what it retained.
+ */
+const checkpointIdArg: ArgValidator<{ checkpointId: string }> = zodArg(
+  z.object({ checkpointId: z.string().min(1).max(64) })
+)
+
 const resolveScriptureSchema = z.object({
   reference: scriptureReferenceSchema,
   translation: z.string().min(1).max(20).optional()
@@ -1445,6 +1579,44 @@ function scriptureResolutionUnavailable(): Result<never> {
     'NOT_CONFIGURED',
     'scripture resolution is not available',
     'set ESV_API_KEY or API_BIBLE_KEY in .env, or download a verified public-domain translation'
+  )
+}
+
+/**
+ * What `healthGet` reports when there is no health service object at all.
+ *
+ * A successful `Result` rather than an `Err`, for the same reason `overlayGetServerInfo` and
+ * `asrGetStatus` return renderable structs: the dashboard's entire job is to draw this value, and
+ * an `Err` would leave the one panel an operator looks at during a failure with nothing to draw.
+ *
+ * Every light reads `not-configured`, which is the honest answer — Verger does not know how those
+ * subsystems are doing, because the thing that watches them was never created. It is deliberately
+ * **not** `degraded`: amber means "working, but not as configured", and an amber light that is
+ * always on is an amber light an operator learns to ignore (see `@shared/health`).
+ */
+function unavailableHealthSnapshot(at: number, detail: string): HealthSnapshot {
+  const subsystems: readonly SubsystemHealth[] = SUBSYSTEMS.map((id) => ({
+    ...initialHealth(id, at),
+    detail
+  }))
+  return { subsystems, worst: worstLevel(subsystems), at }
+}
+
+/**
+ * The answer the two *recovery* channels give when there is no health service object at all.
+ *
+ * These two are `Err` where `healthGet` is `Ok`, and the asymmetry is the point. A read that
+ * degrades can still say something true. An *action* that degrades must not: an operator told
+ * "restored" when nothing was restored, or "overlays reloaded" when no reload was sent, will stop
+ * looking for the real problem — during a service, with a congregation watching.
+ *
+ * The `detail` says what is unaffected, because that is the fact that keeps someone calm.
+ */
+function healthActionUnavailable(what: string): Result<never> {
+  return err(
+    'NOT_CONFIGURED',
+    `${what} is not available`,
+    'the health monitor was never created; the stream, the recording and every other subsystem are unaffected'
   )
 }
 
@@ -1775,6 +1947,59 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
    */
   const scripture: ScriptureResolverLike | null = deps.scripture ?? null
 
+  /**
+   * The health service, or `null` if there is not one. Resolved once, like the other six.
+   *
+   * Separate from every other lookup, and separate for a reason peculiar to this one: the health
+   * service *watches* the other subsystems, so a failure inside it must not be able to take any of
+   * them down with it. A `null` here costs the operator the dashboard and the two recovery
+   * actions; the overlay server keeps serving, the plan keeps advancing on SPACE, and OBS keeps
+   * streaming and recording exactly as it was (Standing Rule 5).
+   *
+   * Note also which direction the dependency runs. Nothing else in this file reads `health`, and
+   * `health` is handed no other subsystem by this file — the monitor observes through its own
+   * seams, so no handler here can end up routed through it.
+   */
+  const health: HealthServiceLike | null = resolveHealthService()
+
+  function resolveHealthService(): HealthServiceLike | null {
+    if (deps.health !== undefined) return deps.health
+    try {
+      return getHealthService()
+    } catch (cause) {
+      log.warn('the health service is unavailable; health IPC will report NOT_CONFIGURED', {
+        cause
+      })
+      return null
+    }
+  }
+
+  /**
+   * The checkpoint store, or `null`. Resolved once and separately from the aggregator.
+   *
+   * Separate because the two jobs are different — one observes, one rewinds — and because a
+   * failure in either must leave the other working. Neither is handed the other by this file.
+   */
+  const checkpoints: CheckpointStoreLike | null = resolveCheckpointStore()
+
+  function resolveCheckpointStore(): CheckpointStoreLike | null {
+    if (deps.checkpoints !== undefined) return deps.checkpoints
+    try {
+      return getCheckpointStore()
+    } catch (cause) {
+      log.warn('the checkpoint store is unavailable; recovery IPC will report NOT_CONFIGURED', {
+        cause
+      })
+      return null
+    }
+  }
+
+  /**
+   * The overlay reload channel. No singleton lookup — the watchdog is built in the composition
+   * root, where the overlay server it watches already exists.
+   */
+  const overlayReload: OverlayReloadLike | null = deps.overlayReload ?? null
+
   /** Native file dialogs. `null` means "no dialog here" — the plan channels then need a path. */
   const dialogs: DialogLike | null = deps.dialog === undefined ? (dialog ?? null) : deps.dialog
 
@@ -2037,6 +2262,29 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       )
     } catch (cause) {
       log.error('failed to subscribe to the cue engine', { cause })
+    }
+  }
+
+  // The health fan-out (BLUEPRINT.md §9). One feed, carrying the whole dashboard.
+  //
+  // This subscription is the difference between a dashboard and a form. A subsystem degrades on its
+  // own schedule — an RTMP link drops mid-sermon, Deepgram stops answering and the local recogniser
+  // takes over, the last browser source disconnects — and every one of those has to light up
+  // without anybody pressing anything. A panel that only learned about failures when the operator
+  // asked would be dark at exactly the moment it is needed.
+  //
+  // `HealthSnapshot` is pushed whole rather than as a per-subsystem delta, for the same reason the
+  // overlay and go-live feeds are: a control window that reloads mid-service is then one snapshot
+  // away from correct, and the `worst` roll-up can never disagree with the lights it rolls up.
+  if (health !== null) {
+    try {
+      registerUnsubscribe(
+        health.onSnapshot((snapshot) => {
+          broadcast(IpcEvent.healthSnapshot, snapshot)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the health service', { cause })
     }
   }
 
@@ -2790,6 +3038,165 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return resolveCall(scripture.listTranslations())
   })
 
+  // --- health and recovery (BLUEPRINT.md §9) -------------------------------
+  //
+  // Four channels over three seams: the aggregator observes, the checkpoint store rewinds, the
+  // watchdog reloads. The single most important thing about the block is what the two actions
+  // cannot do.
+  //
+  // No health seam here has a `stopStream`, a `stopRecord`, a `disconnect` or a `restart`, so
+  // neither `healthRestoreCheckpoint` nor `healthReloadOverlays` can reach an OBS output — not on
+  // its success path, and not on any error path, because there is no verb here to reach it with.
+  // That is the rule of this phase expressed as a type: **no recovery action may ever stop the
+  // stream or the recording.** A restore rewinds *automation* — the plan pointer and the overlay
+  // revision — and a reload asks browser sources to come back and re-sync from the cached snapshot.
+  // The broadcast carries on through both.
+  //
+  // Both actions are logged at `info` with who asked and when, *before* the attempt, exactly as
+  // GO LIVE / END and PANIC are. When someone asks afterwards why the plan jumped back three cues,
+  // the rolling log is where the answer is.
+
+  /**
+   * The dashboard.
+   *
+   * Never an `Err` — see `unavailableHealthSnapshot`. An operator looking at this panel is already
+   * dealing with something going wrong; the panel refusing to draw would make Verger part of the
+   * problem. So all three failure paths — no service, an `Err` from the service, an exception out
+   * of it — resolve with a renderable snapshot whose every light says what happened.
+   *
+   * The `try/catch` is here rather than only in `safeHandle` for the same reason `cuePanic` has
+   * one: `safeHandle` converts a throw into `Err(INTERNAL)`, which is right for every channel
+   * except the two that must always answer.
+   */
+  safeHandle(IpcChannel.healthGet, noArg, async () => currentHealth())
+
+  /**
+   * The retained automation checkpoints.
+   *
+   * An empty list with no service, rather than an `Err`: "there is nothing to restore" is a true
+   * and renderable answer, and the recovery dialog's job is to list what it has.
+   */
+  safeHandle(IpcChannel.healthListCheckpoints, noArg, async () => {
+    if (checkpoints === null) return ok([] as readonly Checkpoint[])
+    return resolveCall(checkpoints.list())
+  })
+
+  /**
+   * CTRL+D recovery — rewind automation to a named checkpoint.
+   *
+   * `docs/v2-notes/SHORTCUTS_AND_A11Y.md` describes this as the safe rewind after a wrong turn. It
+   * is a rewind of *automation* and of nothing else: `Checkpoint` carries a plan position, an
+   * overlay revision and a label, and has no field naming the stream or the recording, so there is
+   * nothing in the payload that could describe undoing a broadcast. The broadcast cannot be undone
+   * anyway — the congregation saw it — which is precisely why this must not try.
+   *
+   * An unknown id comes back as an ordinary `Err` from the store and is forwarded as-is. It is
+   * not a throw, not a crash and not a silent success: an operator whose rewind did not happen has
+   * to know it did not happen, because they are about to act on the assumption that it did.
+   *
+   * The rewind and the dashboard read are two different objects — the store acts, the aggregator
+   * observes — so the response is composed here rather than delegated: restore, then report the
+   * *resulting* dashboard, which is what the panel that called this is about to redraw.
+   */
+  safeHandle(IpcChannel.healthRestoreCheckpoint, checkpointIdArg, async ({ checkpointId }, event) => {
+    log.info('checkpoint restore requested', {
+      channel: IpcChannel.healthRestoreCheckpoint,
+      checkpointId,
+      who: describeSender(event),
+      at: new Date(now()).toISOString()
+    })
+
+    if (checkpoints === null) return healthActionUnavailable('checkpoint recovery')
+
+    const restored = await resolveCall(checkpoints.restore(checkpointId))
+    if (!restored.ok) {
+      log.warn('the checkpoint restore did not happen; nothing was changed', {
+        checkpointId,
+        code: restored.error.code,
+        message: restored.error.message
+      })
+      return restored
+    }
+
+    log.info('automation was rewound to a checkpoint', {
+      checkpointId,
+      planPosition: restored.value.planPosition,
+      // Said out loud in the log because it is the property that matters and the one a reader
+      // will want confirmed a week later.
+      note: 'automation only; the stream and the recording were not touched'
+    })
+    return currentHealth()
+  })
+
+  /**
+   * Force every attached overlay browser source to reload and re-sync.
+   *
+   * The blueprint's "overlay browser source crashes" row. A reload is the *safe* half of that
+   * recovery: the server holds the authoritative `OverlayState`, so a source that reconnects is
+   * sent the current snapshot and comes back showing exactly what it was showing — which is why
+   * the overlay contract has been state-based rather than event-based since Phase 2.
+   *
+   * It touches OBS not at all. The browser source is a page inside OBS; asking it to reload does
+   * not ask OBS to do anything, and cannot interrupt an encoder that is mid-stream.
+   */
+  safeHandle(IpcChannel.healthReloadOverlays, noArg, async (_arg, event) => {
+    log.info('overlay reload requested', {
+      channel: IpcChannel.healthReloadOverlays,
+      who: describeSender(event),
+      at: new Date(now()).toISOString()
+    })
+
+    if (overlayReload === null) return healthActionUnavailable('the overlay reload')
+
+    const result = await resolveCall(overlayReload.reloadNow())
+    if (!result.ok) {
+      log.warn('the overlay reload did not happen; the stream and recording are unaffected', {
+        code: result.error.code,
+        message: result.error.message,
+        detail: 'refresh the browser source from OBS if the overlay stays blank'
+      })
+      return result
+    }
+    return currentHealth()
+  })
+
+  /**
+   * The dashboard as it stands right now, for a recovery action to answer with.
+   *
+   * Never an `Err`, and that is the whole reason it exists as a helper. `healthGet` must always
+   * have something for the panel to draw — an operator reading this strip of lights is already
+   * dealing with something going wrong, and a panel that refuses to render would make Verger part
+   * of the problem. A recovery action must not turn a *successful* rewind into a failed one on the
+   * way back either, just because the aggregator that reports on it is itself unavailable.
+   *
+   * All three failure paths — no aggregator, an `Err` from it, an exception out of it — resolve
+   * with a renderable snapshot whose every light says what happened. The `try/catch` is here
+   * rather than only in `safeHandle` for the same reason `cuePanic` has its own: `safeHandle`
+   * converts a throw into `Err(INTERNAL)`, which is right for every channel except the ones that
+   * must always answer.
+   */
+  async function currentHealth(): Promise<Result<HealthSnapshot>> {
+    if (health === null) {
+      return ok(unavailableHealthSnapshot(now(), 'the health monitor is unavailable'))
+    }
+    try {
+      const snapshot = await resolveCall(health.getSnapshot())
+      if (snapshot.ok) return snapshot
+      log.warn('the health monitor could not report; showing every light as unknown', {
+        code: snapshot.error.code,
+        message: snapshot.error.message
+      })
+      return ok(unavailableHealthSnapshot(now(), snapshot.error.message))
+    } catch (cause) {
+      const error = toAppError(cause)
+      log.error('the health monitor threw while reporting; showing every light as unknown', {
+        code: error.code,
+        message: error.message
+      })
+      return ok(unavailableHealthSnapshot(now(), error.message))
+    }
+  }
+
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
 
   safeHandle(IpcChannel.logWrite, logRecordArg, async (record) => {
@@ -2905,7 +3312,10 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     plan: plan === null ? 'unavailable' : 'attached',
     asr: asr === null ? 'unavailable' : 'attached',
     cue: cue === null ? 'unavailable' : 'attached',
-    scripture: scripture === null ? 'unavailable' : 'attached'
+    scripture: scripture === null ? 'unavailable' : 'attached',
+    health: health === null ? 'unavailable' : 'attached',
+    checkpoints: checkpoints === null ? 'unavailable' : 'attached',
+    overlayReload: overlayReload === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -2925,7 +3335,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
 
     // Covers the OBS status/scene-list subscriptions, the overlay state/info ones, the camera
     // state one, the YouTube status one, the go-live state one, the plan state/import-progress
-    // pair, the ASR status/transcript pair and the cue state/suggestion pair alike: all of them
+    // pair, the ASR status/transcript pair, the cue state/suggestion pair and the health snapshot
+    // one alike: all of them
     // were pushed
     // onto `unsubscribers` by `registerUnsubscribe`, so no subsystem is left holding a listener
     // into a disposed bridge — a YouTube poll that outlived the bridge would keep pushing at dead

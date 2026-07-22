@@ -27,7 +27,8 @@
       "goLive": "송출 시작",
       "goLiveSettings": "송출 설정",
       "cameraSetup": "카메라 설정",
-      "asrSettings": "음성 설정"
+      "asrSettings": "음성 설정",
+      "status": "상태"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "버전 정보를 가져올 수 없습니다"
@@ -916,5 +917,61 @@
       "CRYPTO_ERROR": "비밀 저장소 오류"
     },
     "unknown": "문제가 발생했습니다."
+  },
+  "health": {
+    "title": "하위 시스템 상태",
+    "lightsLabel": "하위 시스템 표시등",
+    "serviceQuestion": "예배가 계속 송출되고 있나요?",
+    "serviceYes": "네 — 예배는 계속 나가고 있습니다.",
+    "serviceNo": "아니요 — 지금은 아무것도 나가지 않습니다.",
+    "serviceYesDetail": "송출과 로컬 녹화 중 최소 하나는 계속 돌아가고 있습니다. 이 화면에 빨간불이 있더라도 성도들에게는 그대로 전달되고 있으니, 확인하려고 아무것도 중단하지 마세요.",
+    "serviceNoDetail": "송출도 로컬 녹화도 돌아가지 않습니다. 예배를 멈추고 확인할 만한 유일한 상황입니다.",
+    "attentionLabel": "확인이 필요한 항목",
+    "attentionNone": "확인이 필요한 항목이 없습니다. \"미설정\"으로 표시된 항목은 고장이 아니라 사용하지 않는 상태입니다.",
+    "stillWorks": "그래도 정상: {{text}}",
+    "forDuration": "{{duration}} 동안",
+    "bridgeUnavailable": "Verger가 자체 메인 프로세스에 연결하지 못해 표시등이 갱신되지 않습니다. 앱을 다시 시작하세요. OBS는 영향을 받지 않고 송출과 녹화를 계속합니다.",
+    "duration": {
+      "seconds": "{{value}}초",
+      "minutes": "{{value}}분",
+      "hours": "{{value}}시간"
+    },
+    "level": {
+      "ok": "정상",
+      "not-configured": "미설정",
+      "degraded": "설정과 다르게 동작 중",
+      "down": "중단됨"
+    },
+    "subsystem": {
+      "obs": "OBS",
+      "overlay": "오버레이",
+      "asr": "음성 인식",
+      "youtube": "유튜브",
+      "recording": "녹화",
+      "stream": "송출",
+      "automation": "자동화"
+    },
+    "light": {
+      "accessibleName": "{{subsystem}}: {{level}}. {{detail}}",
+      "accessibleNameTimed": "{{subsystem}}: {{duration}} 동안 {{level}}. {{detail}}"
+    },
+    "recovery": {
+      "label": "복구",
+      "noBroadcastImpact": "이 화면의 어떤 동작도 송출이나 녹화를 멈추지 않습니다. 두 가지 모두 그대로 계속됩니다.",
+      "reloadOverlays": "오버레이 다시 불러오기",
+      "reloadOverlaysDetail": "연결된 OBS 브라우저 소스를 모두 새로 고쳐 Verger의 상태와 다시 맞춥니다. 오버레이가 멈췄거나 비어 있을 때 사용하세요. 카메라 화면과 송출에는 영향이 없습니다.",
+      "reloadDone": "오버레이를 다시 불러와 상태를 맞췄습니다.",
+      "reloadFailed": "오버레이를 다시 불러오지 못했습니다. 다른 것은 바뀌지 않았습니다.",
+      "restoreDone": "자동화를 {{label}} 시점으로 되돌렸습니다.",
+      "restoreFailed": "해당 체크포인트로 되돌리지 못했습니다. 자동화는 그대로 유지되었습니다."
+    },
+    "checkpoint": {
+      "legend": "체크포인트로 자동화 되돌리기",
+      "detail": "자동화가 마지막으로 제대로 동작하던 시점을 고르세요. 최신 순입니다.",
+      "none": "아직 기록된 체크포인트가 없습니다.",
+      "position": "진행표 {{position}}번째",
+      "restore": "자동화 되돌리기",
+      "nonEffects": "자동화만 되돌립니다 — 진행표 위치와 Verger가 다음에 할 동작입니다. 송출은 건드리지 않고, 녹화도 건드리지 않습니다. 성도들이 보고 있는 화면은 그대로입니다."
+    }
   }
 }

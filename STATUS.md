@@ -619,3 +619,73 @@ speech → transcript → suggestion latency, are both unproven.
 ### Remaining delta
 
 Phases 9-10.
+
+---
+
+## Cycle 9 — Phase 9: Resilience & safeguards (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 1,738 tests / 59 files ·
+`electron-vite build` succeeds · app launches with 53 IPC channels.
+
+### Delta closed
+
+- **Health contract** (`src/shared/health.ts`) — seven subsystem lights, four levels, and
+  `isServiceStillGoingOut()`.
+- **HealthService** — seven pure mappers turning each subsystem's own vocabulary into a level plus
+  a `detail` and a `stillWorks`, published through a trailing-edge throttle (~4/s) so a burst of
+  OBS reconnect chatter never floods the UI but the *last* state always arrives.
+- **Checkpoint ring** — automation-only rewind, bounded at `MAX_CHECKPOINTS`.
+- **Overlay watchdog** — high-water-mark client tracking with a 6 s grace period, because an OBS
+  scene change drops and re-adds a source in well under a second and a watchdog that cries wolf
+  gets ignored by the third Sunday.
+- **Failure-injection suite** — one test per BLUEPRINT.md §9 row, simulating the actual failure.
+- **Status dashboard** — the lights, plus the one question that matters mid-service answered in
+  plain words at the top.
+
+### Amber means something
+
+`degraded` is reserved for "working, but not as configured" — ASR fell back to local, RTMP
+reconnecting, dropped frames above 5%. A subsystem with no key is `not-configured`, **never
+amber**. YouTube signed-out maps to `not-configured` too: a church that signs in on Sunday morning
+would otherwise stare at amber for six days, and a permanently amber light teaches operators to
+ignore amber.
+
+`stillWorks` is filled in for every degraded and down state, because it is the most valuable
+string on the dashboard: *"stream reconnecting — the local recording is unaffected"* is the
+difference between an operator staying calm and stopping the service to investigate. A red OBS
+light while the stream is fine explicitly reads as **"the service is still going out"** — OBS
+keeps streaming without Verger, which is the entire architecture.
+
+### Recovery never touches the broadcast — enforced structurally
+
+The overlay watchdog's seam **exposes no `send`**, so "the watchdog blanked the overlay" is
+impossible rather than merely avoided. The checkpoint store is handed `stopStream` / `stopRecord`
+seams whose production implementations actively **refuse with an `Err`**, and a test scans
+`checkpoints.ts` for any call site. Restore rewinds the plan pointer via `back()`, which fires
+nothing.
+
+### The wiring test — and proof that it works
+
+Four times this build produced a component that was fully unit-tested and connected to nothing
+(Phase 2's unstarted overlay server, Phase 4's unrestored session, Phase 5's unwired re-attach,
+Phase 8's earless engine). `src/main/wiring.test.ts` now exercises the **real composition root**:
+every `IPC_CHANNEL_VALUES` entry has a handler under production defaults; no channel answers
+`Err(INTERNAL)` on an unconfigured machine (unconfigured is a *designed* state, not an error);
+the overlay server binds and serves `pageUrl` with HTTP 200; the cue engine reaches the ASR
+singleton and holds a detector; go-live adopts an already-streaming OBS; and every production
+factory stays zero-arg callable.
+
+**I verified the test actually catches the bug rather than merely existing**: I reintroduced the
+Phase 8 defect (engine built with no ASR source) and the suite failed on
+*"reaches the ASR service for transcripts and holds a scripture detector"*. Reverted, green again.
+A regression test is worth exactly what it catches.
+
+### Not verified
+
+Every failure is *simulated* through injected seams and loopback sockets. No real internet drop,
+no real OBS crash, no real browser-source failure has been observed — OBS is still not installed.
+The fallbacks are proven against the model of the failure, not the failure itself.
+
+### Remaining delta
+
+Phase 10.

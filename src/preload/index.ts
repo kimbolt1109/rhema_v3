@@ -38,6 +38,7 @@ import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
 import type { CueEngineSettings, CueEngineState, CueSuggestion } from '@shared/cue'
 import type { GoLiveState } from '@shared/golive'
+import type { Checkpoint, HealthSnapshot } from '@shared/health'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
@@ -379,6 +380,41 @@ const api: VergerApi = {
       subscribe<CueEngineState>(IpcEvent.cueState, callback),
     onSuggestion: (callback: (suggestion: CueSuggestion) => void): Unsubscribe =>
       subscribe<CueSuggestion>(IpcEvent.cueSuggestion, callback)
+  },
+
+  /**
+   * Subsystem health and the two recovery actions (BLUEPRINT.md §9).
+   *
+   * This is the group an operator looks at when something has already gone wrong, so read it for
+   * what it deliberately cannot do:
+   *
+   *  - **There is no `stop`, no `restart`, no `disconnect` anywhere in it.** The two verbs are
+   *    `restoreCheckpoint` — which rewinds *automation* state (plan position, overlay revision) and
+   *    nothing else — and `reloadOverlays`, which tells attached browser sources to reload and
+   *    re-sync from the server's cached snapshot. Neither can reach OBS, the stream or the local
+   *    recording, because no type on this bridge names them. A recovery action that could take a
+   *    congregation's service off the air would be worse than the failure it was recovering from.
+   *  - **`HealthSnapshot` is the whole dashboard in one value**, and `get()` plus `onSnapshot` are
+   *    the same contract every other group here holds: a control window that reloads mid-service
+   *    recovers with one call rather than replaying a change log.
+   *  - **`stillWorks` rides on every subsystem light.** "Stream reconnecting — the local recording
+   *    is unaffected" is the string that keeps an operator from stopping a service to investigate,
+   *    and it is part of the payload rather than something the renderer has to infer from a level.
+   *
+   * `degraded` here means "working, but not as configured". A subsystem that is simply not set up
+   * reports `not-configured`, which is a resting state — an amber light that is always on is an
+   * amber light nobody reads.
+   */
+  health: {
+    get: (): Promise<Result<HealthSnapshot>> => ipcRenderer.invoke(IpcChannel.healthGet),
+    listCheckpoints: (): Promise<Result<readonly Checkpoint[]>> =>
+      ipcRenderer.invoke(IpcChannel.healthListCheckpoints),
+    restoreCheckpoint: (options: { checkpointId: string }): Promise<Result<HealthSnapshot>> =>
+      ipcRenderer.invoke(IpcChannel.healthRestoreCheckpoint, options),
+    reloadOverlays: (): Promise<Result<HealthSnapshot>> =>
+      ipcRenderer.invoke(IpcChannel.healthReloadOverlays),
+    onSnapshot: (callback: (snapshot: HealthSnapshot) => void): Unsubscribe =>
+      subscribe<HealthSnapshot>(IpcEvent.healthSnapshot, callback)
   },
 
   config: {
