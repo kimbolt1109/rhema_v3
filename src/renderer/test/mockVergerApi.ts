@@ -12,6 +12,8 @@
  * runtime into the renderer bundle.
  */
 
+import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
+import { defaultCameraConfig, findBinding, slotForScene } from '@shared/camera'
 import type { ConfigSummary } from '@shared/config'
 import { emptyConfiguredMap } from '@shared/config'
 import type {
@@ -53,6 +55,24 @@ export interface MockResponses {
    */
   overlaySend: Result<OverlayState> | null
   overlayGetServerInfo: Result<OverlayServerInfo>
+  cameraGetConfig: Result<CameraConfig>
+  /**
+   * What `camera.setConfig` resolves with.
+   *
+   * `null` — the default — means "behave like the real service": adopt the supplied configuration,
+   * re-derive which slot the live scene now belongs to, and hand the configuration back.
+   */
+  cameraSetConfig: Result<CameraConfig> | null
+  cameraGetState: Result<CameraState>
+  /**
+   * What `camera.select` resolves with.
+   *
+   * `null` — the default — means "behave like the real service": look the slot up in the fake's own
+   * configuration, refuse an unbound slot with `INVALID_ARG`, and otherwise move the program scene.
+   * Critically, this path touches **nothing** in the overlay snapshot: the mock enforces the
+   * independence guarantee rather than merely not violating it by accident.
+   */
+  cameraSelect: Result<CameraState> | null
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -69,6 +89,11 @@ export interface MockCalls {
   /** Every command the UI sent, in order. The layer-independence assertions read this. */
   readonly overlaySend: OverlayCommand[]
   readonly overlayGetServerInfo: number[]
+  readonly cameraGetConfig: number[]
+  readonly cameraSetConfig: CameraConfig[]
+  readonly cameraGetState: number[]
+  /** Every camera switch the UI asked for, in order. The decoupling assertions read this. */
+  readonly cameraSelect: CameraSlot[]
 }
 
 export interface MockVergerApi {
@@ -163,6 +188,58 @@ export function mockOverlayState(overrides: Partial<OverlayState> = {}): Overlay
   }
 }
 
+/**
+ * The scene each camera slot is bound to in the fixtures.
+ *
+ * Fully mapped on purpose: a *usable* console is the ordinary case, so tests describe it in one
+ * word and spell out the exceptional unmapped case explicitly via {@link mockCameraConfig}.
+ */
+export const MOCK_CAMERA_SCENES: Readonly<Record<CameraSlot, string>> = {
+  cam1: 'Cam 1',
+  cam2: 'Cam 2',
+  wide: 'Wide',
+  pulpit: 'Pulpit',
+}
+
+/** Transitions a stock OBS install reports. The settings picker is populated from these. */
+export const MOCK_TRANSITIONS: readonly string[] = ['Cut', 'Fade', 'Stinger']
+
+/**
+ * A camera configuration.
+ *
+ * `scenes` overrides individual slots — pass `{ pulpit: null }` for the unmapped-button case,
+ * which must render as disabled and explain itself rather than firing at a scene that is not there.
+ */
+export function mockCameraConfig(
+  scenes: Partial<Record<CameraSlot, string | null>> = {},
+): CameraConfig {
+  const base = defaultCameraConfig()
+  return {
+    bindings: base.bindings.map((binding) => ({
+      ...binding,
+      sceneName:
+        binding.slot in scenes
+          ? (scenes[binding.slot] ?? null)
+          : MOCK_CAMERA_SCENES[binding.slot],
+    })),
+  }
+}
+
+/** A live camera state: OBS is on CAM 1's scene, with the stock transitions available. */
+export function mockCameraState(overrides: Partial<CameraState> = {}): CameraState {
+  return {
+    currentProgramScene: MOCK_CAMERA_SCENES.cam1,
+    activeSlot: 'cam1',
+    availableTransitions: MOCK_TRANSITIONS,
+    ...overrides,
+  }
+}
+
+/** Nothing observed yet: no program scene, no active slot, no transitions listed. */
+export function emptyCameraState(): CameraState {
+  return { currentProgramScene: null, activeSlot: null, availableTransitions: [] }
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -176,6 +253,10 @@ function defaultResponses(): MockResponses {
     overlayGetState: ok(emptyOverlayState()),
     overlaySend: null,
     overlayGetServerInfo: ok(mockOverlayServerInfo()),
+    cameraGetConfig: ok(mockCameraConfig()),
+    cameraSetConfig: null,
+    cameraGetState: ok(mockCameraState()),
+    cameraSelect: null,
   }
 }
 
@@ -203,6 +284,10 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     overlayGetState: [],
     overlaySend: [],
     overlayGetServerInfo: [],
+    cameraGetConfig: [],
+    cameraSetConfig: [],
+    cameraGetState: [],
+    cameraSelect: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -210,6 +295,16 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let overlaySnapshot: OverlayState = responses.overlayGetState.ok
     ? responses.overlayGetState.value
     : emptyOverlayState()
+
+  // The camera half of the same idea, and a deliberately separate pair of variables: nothing in
+  // the camera methods below may read or write `overlaySnapshot`, and nothing in the overlay
+  // methods may read or write these. That is the independence guarantee, enforced by construction.
+  let cameraConfig: CameraConfig = responses.cameraGetConfig.ok
+    ? responses.cameraGetConfig.value
+    : defaultCameraConfig()
+  let cameraSnapshot: CameraState = responses.cameraGetState.ok
+    ? responses.cameraGetState.value
+    : emptyCameraState()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -272,6 +367,53 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onState: (callback) => on(IpcEvent.overlayState, callback),
       onServerInfo: (callback) => on(IpcEvent.overlayServerInfo, callback),
+    },
+    camera: {
+      getConfig: () => {
+        calls.cameraGetConfig.push(calls.cameraGetConfig.length)
+        if (responses.cameraGetConfig.ok) cameraConfig = responses.cameraGetConfig.value
+        return Promise.resolve(responses.cameraGetConfig)
+      },
+      setConfig: (config) => {
+        calls.cameraSetConfig.push(config)
+        const scripted = responses.cameraSetConfig
+        if (scripted !== null) return Promise.resolve(scripted)
+        cameraConfig = config
+        // Re-mapping a scene can make the live scene belong to a different button — or to none.
+        cameraSnapshot = {
+          ...cameraSnapshot,
+          activeSlot: slotForScene(config, cameraSnapshot.currentProgramScene),
+        }
+        return Promise.resolve(ok(config))
+      },
+      getState: () => {
+        calls.cameraGetState.push(calls.cameraGetState.length)
+        if (responses.cameraGetState.ok) cameraSnapshot = responses.cameraGetState.value
+        return Promise.resolve(responses.cameraGetState)
+      },
+      select: (slot) => {
+        calls.cameraSelect.push(slot)
+        const scripted = responses.cameraSelect
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const binding = findBinding(cameraConfig, slot)
+        if (binding === null || binding.sceneName === null || binding.sceneName.length === 0) {
+          // The UI is supposed to make this unreachable by disabling the button. The fake refuses
+          // it anyway, so a regression shows up as a failing assertion rather than as a silent
+          // scene switch to nowhere.
+          return Promise.resolve(
+            err(ErrorCode.INVALID_ARG, `camera slot ${slot} has no scene bound`),
+          )
+        }
+
+        cameraSnapshot = {
+          currentProgramScene: binding.sceneName,
+          activeSlot: slot,
+          availableTransitions: cameraSnapshot.availableTransitions,
+        }
+        return Promise.resolve(ok(cameraSnapshot))
+      },
+      onState: (callback) => on(IpcEvent.cameraState, callback),
     },
     config: {
       get: () => {

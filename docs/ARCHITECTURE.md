@@ -31,8 +31,9 @@ explains the shape of the system and records the contracts each phase must satis
 > | §5 OBS-is-the-engine | **Binding rule**, from `BLUEPRINT.md` §2 / Standing Rule 2. |
 > | §6 Overlay layer | **Mixed — see the status box in §6.** The protocol, network constants, and IPC surface were read directly from `src/shared/{overlay,net,ipc}.ts` and are verified. The main-process server and the overlay page were being written in parallel and were **not on disk** when this section was written. |
 > | §7 Phases 2–10 module layout | **Planned. NOT YET BUILT.** |
+> | §8 Cameras and the action dispatcher | **Mixed — see the status box in §8.** The shared contract (`src/shared/{camera,actions,ipc}.ts`) was read directly and is verified. The main-process `CameraService`, the renderer dispatcher, and the OBS write allowlist were being built in parallel and were **not on disk**. |
 >
-> Nothing in this file describes a running feature except where §1, §2, and §6 say "verified".
+> Nothing in this file describes a running feature except where §1, §2, §6, and §8 say "verified".
 
 ---
 
@@ -588,6 +589,8 @@ src/
     ipc/        Phase 1  safeHandle + per-domain handler registration
     overlay/    Phase 2  NOT YET BUILT — express + ws server on 127.0.0.1;
                          per-layer last-known-state cache, re-sent on reconnect
+    camera/     Phase 3  NOT YET BUILT — slot→scene bindings, SetCurrentProgramScene,
+                         CameraState derived from OBS's own program scene (§8)
     youtube/    Phase 4  NOT YET BUILT — OAuth (PKCE + loopback), refresh token in
                          safeStorage, broadcast/stream lifecycle, GO LIVE / END
     asr/        Phase 7  NOT YET BUILT — provider interface with a Deepgram (cloud)
@@ -627,3 +630,209 @@ Design commitments already fixed for those phases, so they are not re-litigated 
 Out of scope and not to be reintroduced: a plugin SDK, DMX lighting, PTZ camera AI, multi-campus
 sync, biometrics, and a native compositor. Those belong to the prior project and are post-1.0
 extensions at best.
+
+---
+
+## 8. Cameras and the action dispatcher (Phase 3)
+
+> **Status.** Verified by reading the files on disk: [`src/shared/camera.ts`](../src/shared/camera.ts)
+> (slots, bindings, config, state, Zod schemas, the four pure lookups),
+> [`src/shared/actions.ts`](../src/shared/actions.ts) (the action vocabulary, the gesture model, the
+> four threshold constants, `DEFAULT_KEY_BINDINGS`, `isSafeBinding`), and the `camera*` entries in
+> [`src/shared/ipc.ts`](../src/shared/ipc.ts). Those are the Phase-3 contract and they typecheck.
+>
+> **Also verified, and it is the thing to re-check first:** as read,
+> [`src/main/obs/ObsClient.ts`](../src/main/obs/ObsClient.ts) `isReadOnlyRequest()` is
+> `requestType.startsWith('Get')` — i.e. the client on disk refuses **every** write, including
+> `SetCurrentProgramScene`. §8.3 describes the widening Phase 3 requires. Until that lands, a camera
+> select cannot reach OBS; the refusal is logged and returned as `INVALID_ARG`.
+>
+> **Not verified:** `src/main/camera/`, the renderer's camera panel and dispatcher, and the
+> independence tests did **not exist** when this section was written — they were being built in
+> parallel. Statements about those modules are requirements placed on them by the shared contract,
+> not observations of code. Correct any path here that landed elsewhere rather than leaving two
+> answers on the page.
+
+`BLUEPRINT.md` §6 is one sentence long in effect: **each camera is an OBS scene, and the app has
+four plain buttons.** No mixer, no compositor, no PTZ automation. The value of the phase is not the
+switching — OBS already switches — it is that switching is now *independent of the overlay*, which
+is what ends the transparent-PowerPoint workaround (`BLUEPRINT.md` §1, problem 3).
+
+### 8.1 The path a camera press takes
+
+```mermaid
+sequenceDiagram
+    participant K as Key / pedal / Stream Deck
+    participant D as Action dispatcher (renderer)
+    participant B as Preload bridge
+    participant C as CameraService (main)
+    participant O as ObsClient
+    participant X as OBS Studio
+
+    K->>D: keydown "2" -> keyup within MAX_TAP_MS
+    D->>D: match DEFAULT_KEY_BINDINGS -> { action:'camera.select', param:'cam2' }
+    D->>B: window.verger.camera.select('cam2')
+    B->>C: invoke verger:camera:select { slot:'cam2' }
+    C->>C: findBinding(config,'cam2'); isBindingUsable(binding)?
+    alt no scene mapped
+        C-->>B: err(NOT_CONFIGURED) — no OBS request is issued at all
+    else mapped
+        C->>O: SetCurrentProgramScene { sceneName }
+        O->>X: obs-websocket request
+        X-->>O: CurrentProgramSceneChanged event
+        O->>C: program scene changed
+        C-->>B: Result<CameraState> + push verger:camera:state
+    end
+```
+
+Four properties of that path are load-bearing:
+
+- **Buttons and keys are the same path.** The UI button does not call IPC directly; it dispatches
+  `camera.select` with a `param`, exactly as the keyboard does. `src/shared/actions.ts` explains why:
+  a foot pedal and a Stream Deck are keyboard-HID devices, so if every operator intent is a *named
+  action* and keys are merely one trigger for it, pedal support is free the day the keyboard works
+  and Phase 10 adds a remap UI rather than a second input path.
+- **An unmapped slot never reaches OBS.** `CameraBinding.sceneName` is `null` until the operator
+  picks a scene, `isBindingUsable()` is the gate, and the button renders disabled with the reason.
+  Verger does not send a request for a scene that does not exist and then explain the error
+  afterwards.
+- **Nothing throws across the boundary.** Every `camera:*` channel resolves `Result<T>` through
+  `safeHandle` (§3.3): `Result<CameraConfig>`, `Result<CameraState>`.
+- **The gesture state machine lives in the renderer, above IPC.** Tap-vs-hold discrimination
+  (`MAX_TAP_MS = 300`, `PANIC_HOLD_MS = 3000`, `DISABLE_AI_HOLD_MS = 2000`) is a UI-timing concern;
+  main receives an already-decided action. That keeps `MIN_DESTRUCTIVE_HOLD_MS` enforcement and the
+  `isSafeBinding()` check in one place — see §8.5 and [`SHORTCUTS.md`](./SHORTCUTS.md).
+
+### 8.2 The IPC surface (verified against `src/shared/ipc.ts`)
+
+| Kind | Channel | Payload → result |
+|---|---|---|
+| request | `verger:camera:get-config` | `void` → `Result<CameraConfig>` |
+| request | `verger:camera:set-config` | `CameraConfig` → `Result<CameraConfig>` |
+| request | `verger:camera:get-state` | `void` → `Result<CameraState>` |
+| request | `verger:camera:select` | `{ slot: CameraSlot }` → `Result<CameraState>` |
+| event | `verger:camera:state` | `CameraState` |
+
+`select` resolves with the **resulting `CameraState`**, not an ack — the same "state is the only
+currency" property the overlay bus has (§6.4). `CameraConfig` is validated with
+`cameraConfigSchema` at the boundary; the schemas in `src/shared/camera.ts` *are* the types, so
+there is no second hand-written shape to drift.
+
+### 8.3 The OBS write allowlist — Standing Rule 2, made structural
+
+Standing Rule 2 says OBS is the resilient engine and Verger is a convenience layer. Phase 1 turned
+that into code rather than intent: `ObsClient.request()` checks `isReadOnlyRequest()` *before* the
+socket is touched, and refuses anything that is not a read with `INVALID_ARG` and an error log. It
+was written as a **prefix whitelist** (`Get*`) rather than a blacklist of `Set*` precisely so that
+`StartStream`, `StopRecord`, `CreateInput` and every other mutating request are refused too, without
+anyone having to remember to add them.
+
+Phase 3 is the first phase that needs Verger to write to OBS at all, so it is the first phase that
+widens the allowlist — and the widening is **an explicit, enumerated list, never a relaxation of the
+rule**.
+
+| Request | Read/write | Permitted from | Why |
+|---|---|---|---|
+| `Get*` (all) | read | Phase 1 | Version, scene list, current program scene, transitions. Verger adopts OBS's state on connect and never imposes one. |
+| `SetCurrentProgramScene` | **write** | **Phase 3** | The camera buttons. This is the entire camera feature. |
+| `SetCurrentSceneTransition` | **write** | **Phase 3** | Only when a binding names a `transition`. Verger selects a transition **by name**; it never creates or configures one. |
+| `SetCurrentSceneTransitionDuration` | **write** | **Phase 3** | Only when a binding sets `transitionDurationMs`. `null` means "use whatever OBS is configured for", which is the default. |
+
+Everything else stays refused, and specifically:
+
+- **No stream or recording control here.** `StartStream` / `StopStream` / `StartRecord` /
+  `StopRecord` remain refused after Phase 3. They belong to the GO LIVE orchestration (Phase 5) and
+  must be widened there, deliberately, in a commit that also updates this table. This is not
+  bureaucracy: it is what makes the PANIC invariant in [`SHORTCUTS.md`](./SHORTCUTS.md) §3
+  structurally true rather than merely intended — the camera path cannot stop the broadcast because
+  the camera path has no permission to.
+- **No scene creation, renaming, or deletion, ever.** Verger never reshapes the operator's OBS.
+  If a bound scene has been renamed inside OBS, the correct behaviour is to surface it as unmapped,
+  not to recreate it.
+- **The allowlist is a list, not a prefix, once it contains a write.** `startsWith('Set')` would
+  re-open exactly what the original prefix whitelist was designed to close.
+
+Adding a request to the allowlist and adding the row above is one commit, not two.
+
+### 8.4 OBS stays the source of truth
+
+`CameraState` is derived, not remembered:
+
+```ts
+interface CameraState {
+  currentProgramScene: string | null
+  activeSlot: CameraSlot | null
+  availableTransitions: readonly string[]
+}
+```
+
+- `currentProgramScene` is **OBS's** program scene, whatever set it — a Verger button, OBS's own UI,
+  an OBS hotkey, or a Stream Deck talking to OBS directly. `ObsClient` already publishes program
+  scene changes (`publishSceneList` folds the current program scene into `ObsStatus`), and
+  `CameraService` recomputes `CameraState` from that and pushes `verger:camera:state`.
+- `activeSlot` is `slotForScene(config, currentProgramScene)` — a pure function, and `null` when the
+  live scene is not one Verger has a button for. That is a routine condition, not an error: the
+  operator switching scenes inside OBS must show up as *no button lit*, never as a stale button
+  still claiming to be live. Verger reflects; it does not pretend.
+- `availableTransitions` is read from OBS for the settings picker. Transitions are configured once in
+  OBS and reused (`BLUEPRINT.md` §6); Verger picks one by name and never defines one.
+
+The consequence that matters on a Sunday: **Verger crashing mid-service changes nothing on the
+broadcast.** OBS keeps streaming and recording, the operator keeps switching scenes in OBS by hand,
+and when Verger relaunches it reads the program scene back and lights whichever button matches —
+because it never believed it owned that state in the first place (§5).
+
+### 8.5 The independence guarantee, and where it is proven
+
+The Phase-3 claim is narrow and testable:
+
+> Switching cameras does not touch overlay state. Showing or hiding a lower-third does not touch the
+> camera.
+
+It holds for a structural reason, not a diligence reason: **the two controls travel over different
+transports to different processes and share no state.**
+
+| | Camera | Lower-third |
+|---|---|---|
+| Transport | Electron IPC → obs-websocket | Electron IPC → local WebSocket on 7320 |
+| Terminates at | OBS Studio | The OBS browser source page |
+| State object | `CameraState` (`src/shared/camera.ts`) | `OverlayState` (`src/shared/overlay.ts`) |
+| Mutation point | `SetCurrentProgramScene` | `applyOverlayCommand()` — pure reducer |
+
+`src/shared/camera.ts` states the invariant in its own header: nothing in the camera module
+references the overlay, and nothing in `src/shared/overlay.ts` references cameras. There is no
+import edge between them, so there is no code path along which one could disturb the other. Inside
+OBS the same separation is physical: the Overlays browser source is shared into every camera scene,
+so a scene change re-composites without reloading the page (`OBS_SETUP.md` §1–2, including the two
+browser-source options that must be OFF because they destroy and recreate the page on a scene
+change).
+
+**A guarantee asserted in a comment is worth nothing, so it is asserted in tests** — Standing Rule
+"this is asserted by tests, not by convention", at two levels:
+
+1. **Service level.** A camera select against a mock OBS leaves `OverlayState` byte-identical
+   (including `revision` — an unchanged revision is the strong form of the claim), and an overlay
+   command issues **zero** obs-websocket requests. Expected at
+   `src/main/camera/CameraService.test.ts`.
+2. **UI level.** Pressing a camera button in the renderer dispatches no overlay IPC, and the
+   lower-third controls dispatch no camera IPC. Expected alongside the camera panel under
+   `src/renderer/`.
+
+The reducer-level half of the same property — every `lowerThird.*` command leaving `scripture` and
+`slide` untouched — is §6.5's `src/main/overlay/reducer.test.ts`. Phase 3 extends that guarantee
+across transports; §6.5 established it within one.
+
+Neither Phase-3 test file existed when this section was written (see the status box). If they landed
+under different names, fix the two references above rather than adding a third answer.
+
+### 8.6 What Phase 3 deliberately does not do
+
+- **No PTZ, no camera AI, no auto-framing.** Out of scope, permanently (`CLAUDE.md`).
+- **No scene authoring.** Verger maps buttons to scenes the operator already made.
+- **No remap UI.** `DEFAULT_KEY_BINDINGS` is the wiring until Phase 10, which must run every
+  candidate binding through `isSafeBinding()` — a destructive action on a tap, or on a hold shorter
+  than `MIN_DESTRUCTIVE_HOLD_MS = 1500`, is rejected by the settings screen. That function exists
+  specifically so the v2 regression (instant-clear ESC) cannot be reintroduced through a remap.
+- **No fifth camera.** `CAMERA_SLOTS` is fixed at four. A one-operator booth wants four
+  unambiguous targets, not a list to hunt through mid-service; which scene each one selects is the
+  part that is configurable.

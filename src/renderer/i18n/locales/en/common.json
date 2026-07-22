@@ -17,7 +17,9 @@
     "sectionsLabel": "Console sections",
     "section": {
       "connection": "Connection",
-      "overlay": "Overlay"
+      "camera": "Cameras",
+      "overlay": "Overlay",
+      "cameraSetup": "Camera setup"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
@@ -173,6 +175,61 @@
       "title": "Clear everything",
       "description": "Blanks all three layers at once. It sits away from the SHOW buttons on purpose, and it only fires after a deliberate hold — a slip of the hand must never blank the congregation's screen.",
       "label": "Clear all overlays"
+    }
+  },
+
+  "camera": {
+    "title": "Cameras",
+    "subtitle": "Four buttons, one live scene. Switching a camera never touches the lower third, and showing a lower third never touches the camera.",
+    "buttonsLabel": "Camera buttons",
+    "slot": {
+      "cam1": "CAM 1",
+      "cam2": "CAM 2",
+      "wide": "WIDE",
+      "pulpit": "PULPIT"
+    },
+    "live": "LIVE",
+    "standby": "Standby",
+    "liveNow": "{{camera}} is live.",
+    "noneLive": "None of these four buttons is live.",
+    "shortcut": "Key {{key}}",
+    "shortcutLabel": "Keyboard shortcut {{key}}",
+    "unmapped": {
+      "badge": "No scene",
+      "hint": "Assign a scene in Camera setup before this button can be used."
+    },
+    "programScene": "OBS program scene",
+    "programSceneUnknown": "Not reported yet",
+    "unmappedProgramScene": "OBS is showing \"{{scene}}\", which none of these four buttons maps to. No button is lit on purpose — Verger reports what OBS is doing, it does not pretend.",
+    "disconnected": {
+      "title": "Not connected to OBS",
+      "body": "Camera switching needs a live obs-websocket connection. Open the Connection screen and connect; these buttons come back the moment OBS answers."
+    },
+    "bridgeUnavailable": {
+      "title": "The privileged bridge did not load",
+      "body": "Verger cannot reach its own main process, so cameras cannot be switched. Restart the app; if this persists, the log file will say why."
+    },
+    "settings": {
+      "title": "Camera setup",
+      "subtitle": "Map each button to a scene OBS actually has. The scene list comes from OBS itself, so a typo can never produce a button that fires at a scene that is not there.",
+      "formLabel": "Camera scene mapping",
+      "sceneLabel": "{{camera}} scene",
+      "sceneNone": "— not mapped —",
+      "sceneHint": "Not mapped means the button stays disabled in the Cameras screen.",
+      "transitionLabel": "{{camera}} transition",
+      "transitionDefault": "Use whatever OBS is set to",
+      "transitionHint": "Blank means Verger changes nothing: OBS uses its own current transition. Transitions are created and tuned in OBS; Verger only picks one by name.",
+      "durationLabel": "{{camera}} transition duration (ms)",
+      "durationHint": "Blank uses the duration configured in OBS.",
+      "durationInvalid": "Enter a whole number of milliseconds from 0 to 20000, or leave it blank.",
+      "invalidMapping": "That mapping was rejected. Check the transition duration and try again.",
+      "save": "Save camera mapping",
+      "saved": "Camera mapping saved.",
+      "noScenes": {
+        "title": "Scenes cannot be listed until OBS connects",
+        "body": "Verger only offers scenes that OBS has reported. Connect to OBS on the Connection screen and the pickers below will fill in with your real scene names."
+      },
+      "noTransitions": "OBS has not reported any transitions, so only \"use whatever OBS is set to\" is offered."
     }
   },
 

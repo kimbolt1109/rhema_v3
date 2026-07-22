@@ -1,13 +1,17 @@
 /**
  * The app shell.
  *
- * Three pieces of chrome and two views:
+ * Three pieces of chrome and four views:
  *
  *  - a title bar carrying the product name and the runtime versions (the first thing anyone asks
  *    for in a bug report);
  *  - a **subsystem status strip**;
  *  - a **section tablist**, and
- *  - the Connection screen or the Overlay panel.
+ *  - the Connection screen, the Camera panel, the Overlay panel, or Camera setup.
+ *
+ * Cameras and overlays are separate tabs rather than one combined "production" screen, and that is
+ * a deliberate echo of BLUEPRINT.md §6: they are independent layers, and a single screen that
+ * drove both would be the first place that independence quietly eroded.
  *
  * The strip is structured as a list of subsystem descriptors rather than as hard-coded markup,
  * because it is going to grow: recording and YouTube (Phases 4–5) and speech (Phase 7) each need a
@@ -33,6 +37,8 @@ import type { AppVersions } from '@shared/ipc'
 import type { ObsConnectionState } from '@shared/obs'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { CameraPanel } from './screens/CameraPanel'
+import { CameraSettings } from './screens/CameraSettings'
 import { ConnectionScreen } from './screens/ConnectionScreen'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { useObsStore } from './store/obsStore'
@@ -41,7 +47,11 @@ import { useOverlayStore } from './store/overlayStore'
 /** The console sections a tab can select. */
 const SECTIONS = [
   { id: 'connection', labelKey: 'app.section.connection' },
+  // Cameras sit ahead of Overlay because they are the busiest live surface, and Camera setup sits
+  // last because it is a soundcheck task, not a service one.
+  { id: 'camera', labelKey: 'app.section.camera' },
   { id: 'overlay', labelKey: 'app.section.overlay' },
+  { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -282,6 +292,20 @@ function useOverlaySubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
+function SectionView({ section }: { section: SectionId }): React.JSX.Element {
+  switch (section) {
+    case 'connection':
+      return <ConnectionScreen />
+    case 'camera':
+      return <CameraPanel />
+    case 'overlay':
+      return <OverlayPanel />
+    case 'cameraSetup':
+      return <CameraSettings />
+  }
+}
+
 function TitleBar(): React.JSX.Element {
   const { t } = useTranslation()
   const versions = useAppVersions()
@@ -331,13 +355,7 @@ export function App(): React.JSX.Element {
               {/* Unmounted rather than merely hidden: the Overlay panel owns IPC subscriptions,
                   and a hidden-but-live panel would double every listener for no benefit. The
                   subsystem light keeps its own subscription via `useOverlaySubsystem`. */}
-              {entry.id === section ? (
-                entry.id === 'connection' ? (
-                  <ConnectionScreen />
-                ) : (
-                  <OverlayPanel />
-                )
-              ) : null}
+              {entry.id === section ? <SectionView section={entry.id} /> : null}
             </div>
           ))}
         </main>

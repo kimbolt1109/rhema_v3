@@ -181,3 +181,78 @@ complete state the instant it opens.
 ### Remaining delta
 
 Phases 3-10.
+
+---
+
+## Cycle 3 — Phase 3: Cameras, lower-thirds, and the action dispatcher (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 437 tests / 20 files ·
+`electron-vite build` succeeds · app launches with 15 IPC channels and the overlay still served.
+
+After this phase the operator can run a service manually: cameras and overlays are two
+independent controls, and the transparent-PowerPoint hack is dead.
+
+### Delta closed
+
+- **Camera contract** (`src/shared/camera.ts`) — four fixed slots (CAM 1 / CAM 2 / WIDE /
+  PULPIT), each bound to an OBS scene chosen in settings. `sceneName: null` means unmapped, so a
+  button can never fire a request for a scene that does not exist.
+- **Action vocabulary** (`src/shared/actions.ts`) — every operator intent is a named action, and
+  keys are merely one way to trigger one. A foot pedal and a Stream Deck are keyboard-HID
+  devices, so they work the moment the keyboard does; Phase 10 adds only a remap UI.
+- **CameraService** — drives OBS, and subscribes back so a scene switched *inside* OBS updates
+  `activeSlot`. When the live scene maps to no button, no button lights and OBS is never
+  "corrected".
+- **Action dispatcher + keyboard hook** — the tap/hold state machine that lets SPACE be both
+  advance (tap) and PANIC (hold 3s) on one key.
+- **Camera UI** — four `min-h-touch-xl` buttons, live state never signalled by colour alone,
+  plus a settings screen that picks scenes from OBS's live list rather than free text.
+
+### The OBS write allowlist — widened deliberately
+
+Phase 1 locked the OBS client to `Get*` requests so Standing Rule 2 was structural. Phase 3
+needs to write, so the guard is now an explicit allowlist of exactly three names:
+`SetCurrentProgramScene`, `SetCurrentSceneTransition`, `SetCurrentSceneTransitionDuration`.
+Everything else — `StartStream`, `StopRecord`, `SetSceneItemEnabled`, and the rest — stays
+refused before it reaches the socket, and six new tests assert that. A future edit cannot
+quietly widen this: it would have to add a line to that list.
+
+Phase 5 will need `StartStream`/`StartRecord`/`StopStream`/`StopRecord`. That is the next
+deliberate widening, and it should arrive with its own tests.
+
+### The independence guarantee, proven twice
+
+- **Service level**: `select()` issues exactly the scene/transition requests and nothing else,
+  and `CameraService.test.ts` reads its own source from disk to assert the module cannot even
+  *import* anything overlay-related.
+- **UI level**: pressing CAM 2 sends `camera.select('cam2')` and **zero** overlay commands; the
+  mirror test asserts hiding the lower-third selects no camera.
+
+### Safety model implemented
+
+SPACE tap (<300ms) advances; SPACE held 3s is PANIC. ESC held 2s disables automation and is
+**non-destructive** — whatever is live stays live; a bare ESC tap does nothing at all. SHIFT+ESC
+dismisses only the lower-third. Nothing destructive fires under 1500ms, and `isSafeBinding()`
+rejects any remap that would violate that — the guard against reintroducing v2's
+instant-clear-ESC regression. Shortcuts are ignored while focus is in a text field, so typing a
+name into the lower-third cannot black the output.
+
+### Judgement calls worth knowing about
+
+- An agent added a public `call()` to `ObsClient` (it had none, and the camera seam needs it).
+  It routes through the same guard, so it grants no authority beyond the three allowlisted
+  writes — and it disclosed the deviation rather than hiding it.
+- `setConfig()` applies a new mapping in memory *before* persisting, and reports `IO_ERROR` if
+  the write fails. The operator keeps working buttons for the rest of the service; the
+  alternative leaves them with no buttons mid-service.
+- A failed transition-set is logged and the scene switch proceeds anyway: the operator pressed
+  CAM 2 and gets CAM 2, possibly with the wrong wipe. A failed scene-set propagates.
+
+### Not verified
+
+Still no live OBS on this machine, so every camera switch is exercised against a mock. Nothing
+here has moved a real program scene.
+
+### Remaining delta
+
+Phases 4-10.

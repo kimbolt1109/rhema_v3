@@ -17,7 +17,9 @@
     "sectionsLabel": "콘솔 화면",
     "section": {
       "connection": "연결",
-      "overlay": "오버레이"
+      "camera": "카메라",
+      "overlay": "오버레이",
+      "cameraSetup": "카메라 설정"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "버전 정보를 가져올 수 없습니다"
@@ -172,6 +174,61 @@
       "title": "전체 지우기",
       "description": "세 레이어를 한 번에 지웁니다. 표시 버튼과 일부러 멀리 떨어뜨려 두었고, 길게 눌러야만 실행됩니다. 손이 미끄러져 회중 화면이 꺼지는 일은 없어야 합니다.",
       "label": "오버레이 전체 지우기"
+    }
+  },
+
+  "camera": {
+    "title": "카메라",
+    "subtitle": "버튼 네 개, 송출은 하나. 카메라를 바꿔도 하단 자막은 그대로 있고, 하단 자막을 띄워도 카메라는 바뀌지 않습니다.",
+    "buttonsLabel": "카메라 버튼",
+    "slot": {
+      "cam1": "카메라 1",
+      "cam2": "카메라 2",
+      "wide": "전체",
+      "pulpit": "강단"
+    },
+    "live": "송출 중",
+    "standby": "대기",
+    "liveNow": "{{camera}} 송출 중입니다.",
+    "noneLive": "네 버튼 중 송출 중인 것이 없습니다.",
+    "shortcut": "{{key}} 키",
+    "shortcutLabel": "단축키 {{key}}",
+    "unmapped": {
+      "badge": "장면 없음",
+      "hint": "카메라 설정에서 장면을 지정해야 이 버튼을 쓸 수 있습니다."
+    },
+    "programScene": "OBS 송출 장면",
+    "programSceneUnknown": "아직 보고되지 않음",
+    "unmappedProgramScene": "OBS가 \"{{scene}}\" 장면을 송출 중입니다. 네 버튼 중 어디에도 연결되지 않은 장면이라 일부러 아무 버튼도 켜지 않았습니다. Verger는 OBS의 실제 상태만 표시합니다.",
+    "disconnected": {
+      "title": "OBS에 연결되지 않았습니다",
+      "body": "카메라 전환에는 obs-websocket 연결이 필요합니다. 연결 화면에서 OBS에 연결하면 버튼이 곧바로 다시 활성화됩니다."
+    },
+    "bridgeUnavailable": {
+      "title": "내부 브리지를 불러오지 못했습니다",
+      "body": "Verger가 자체 메인 프로세스에 접근할 수 없어 카메라를 전환할 수 없습니다. 앱을 다시 시작하세요. 계속되면 로그 파일에 원인이 기록됩니다."
+    },
+    "settings": {
+      "title": "카메라 설정",
+      "subtitle": "각 버튼을 OBS에 실제로 있는 장면에 연결하세요. 목록은 OBS에서 직접 가져오므로, 오타 때문에 존재하지 않는 장면을 부르는 버튼이 생길 일이 없습니다.",
+      "formLabel": "카메라 장면 연결",
+      "sceneLabel": "{{camera}} 장면",
+      "sceneNone": "— 연결 안 함 —",
+      "sceneHint": "연결하지 않으면 카메라 화면에서 해당 버튼이 비활성 상태로 남습니다.",
+      "transitionLabel": "{{camera}} 전환 효과",
+      "transitionDefault": "OBS 설정 그대로 사용",
+      "transitionHint": "비워 두면 Verger는 아무것도 바꾸지 않고 OBS의 현재 전환 효과를 그대로 씁니다. 전환 효과는 OBS에서 만들고 조정하며, Verger는 이름으로 고르기만 합니다.",
+      "durationLabel": "{{camera}} 전환 시간 (ms)",
+      "durationHint": "비워 두면 OBS에 설정된 시간을 사용합니다.",
+      "durationInvalid": "0에서 20000 사이의 정수(ms)를 입력하거나 비워 두세요.",
+      "invalidMapping": "이 설정은 저장할 수 없습니다. 전환 시간을 확인한 뒤 다시 시도하세요.",
+      "save": "카메라 설정 저장",
+      "saved": "카메라 설정을 저장했습니다.",
+      "noScenes": {
+        "title": "OBS에 연결해야 장면 목록을 볼 수 있습니다",
+        "body": "Verger는 OBS가 보고한 장면만 제시합니다. 연결 화면에서 OBS에 연결하면 아래 목록이 실제 장면 이름으로 채워집니다."
+      },
+      "noTransitions": "OBS가 보고한 전환 효과가 없어 \"OBS 설정 그대로 사용\"만 선택할 수 있습니다."
     }
   },
 

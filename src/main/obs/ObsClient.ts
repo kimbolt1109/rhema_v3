@@ -4,10 +4,14 @@
  * Standing Rule 2 is the whole design brief: **OBS is the resilient engine; Verger is a
  * convenience layer.** Concretely, in this file that means:
  *
- *  - **The client only ever READS.** Every request it issues is a `Get*`. There is a hard
- *    structural guard ({@link isReadOnlyRequest}) that refuses any `Set*` request, so a future
- *    edit cannot quietly turn the connection routine into something that imposes state on OBS.
- *    On connect it asks OBS what version it is and what scenes it has — nothing else.
+ *  - **The client reads freely and writes only from an allowlist.** Every `Get*` request is
+ *    permitted; every other request is refused by a hard structural guard
+ *    ({@link isAllowedRequest}) unless it appears, by name, in {@link ALLOWED_WRITE_REQUESTS} —
+ *    currently the three requests a camera button needs and nothing else. So a future edit
+ *    cannot quietly turn this into something that imposes state on OBS: it would have to add a
+ *    line to that list and justify it. `StartStream`, `StopRecord`, `SetSceneItemEnabled` and
+ *    every other mutating request stay refused. On connect the client still asks OBS only what
+ *    version it is and what scenes it has — the connect routine writes nothing at all.
  *  - **Nothing throws.** Every public method returns a {@link Result}; every callback and every
  *    socket interaction is wrapped. A crash in here must never take the booth UI down, and an
  *    exception can never cross the IPC boundary (see `src/shared/result.ts`).
@@ -306,6 +310,37 @@ export class ObsClient {
   }
 
   // -------------------------------------------------------------------------
+  // The general request seam
+  // -------------------------------------------------------------------------
+
+  /**
+   * Issue one arbitrary OBS request.
+   *
+   * Subject to exactly the same guard as everything else in this class: any `Get*`, plus the
+   * enumerated {@link ALLOWED_WRITE_REQUESTS}. Anything else is refused with `INVALID_ARG`
+   * before it reaches the socket, so exposing this method does not widen what Verger can do to
+   * OBS — it only lets another module (Phase 3's camera service) use the authority this class
+   * already has.
+   *
+   * Returns `NOT_CONNECTED` rather than throwing or queueing when OBS is down: a camera button
+   * pressed while OBS is closed must fail visibly and immediately, not silently later.
+   */
+  async call(
+    requestType: string,
+    requestData?: Record<string, unknown>
+  ): Promise<Result<unknown>> {
+    const socket = this.connectedSocket()
+    if (socket === null) {
+      return err(
+        ErrorCode.NOT_CONNECTED,
+        `cannot send "${requestType}" to OBS while disconnected`,
+        this.status.state
+      )
+    }
+    return this.request(socket, requestType, requestData)
+  }
+
+  // -------------------------------------------------------------------------
   // Dialling
   // -------------------------------------------------------------------------
 
@@ -562,15 +597,16 @@ export class ObsClient {
   /**
    * Issue one OBS request, bounded by {@link callTimeoutMs}.
    *
-   * Refuses anything that is not a read (Standing Rule 2). This is a structural guarantee, not a
-   * convention: no code path in this class can send OBS a `Set*`.
+   * Refuses anything that is neither a read nor an explicitly allowlisted write (Standing
+   * Rule 2). This is a structural guarantee, not a convention: no code path in this class can
+   * send OBS a request that is not on {@link ALLOWED_WRITE_REQUESTS} or prefixed `Get`.
    */
   private async request(
     socket: OBSWebSocketLike,
     requestType: string,
     requestData?: Record<string, unknown>
   ): Promise<Result<unknown>> {
-    if (!isReadOnlyRequest(requestType)) {
+    if (!isAllowedRequest(requestType)) {
       this.log.error('refused a non-read OBS request', { requestType })
       return err(
         ErrorCode.INVALID_ARG,
@@ -728,14 +764,47 @@ function notConnected(what: string): Result<never> {
 }
 
 /**
- * Standing Rule 2, enforced structurally: Verger reads OBS's state and never imposes it.
+ * The read side of the guard: every `Get*` request is permitted.
  *
- * Anything that is not a `Get*` request is refused before it reaches the socket. Deliberately a
- * whitelist by prefix rather than a blacklist of `Set*`, so `StartStream`, `CreateInput` and
- * every other mutating request are refused too.
+ * Deliberately a whitelist by prefix rather than a blacklist of `Set*`, so `StartStream`,
+ * `CreateInput`, `TriggerHotkeyByName` and every other mutating request fall outside it by
+ * default rather than by enumeration.
  */
 export function isReadOnlyRequest(requestType: string): boolean {
   return requestType.startsWith('Get')
+}
+
+/**
+ * The write side of the guard: the ONLY non-`Get*` requests Verger may ever send OBS.
+ *
+ * Standing Rule 2 still holds — Verger reads OBS's state and does not impose it. These three are
+ * the narrow, enumerated exception, and every one of them fires only because the operator
+ * physically pressed a camera button; nothing in Verger sends them on its own initiative.
+ *
+ * Adding an entry here is a deliberate act, reviewed on its own merits, and every entry names
+ * the phase that needs it. What is NOT here is the point of the list: `StartStream`,
+ * `StopStream`, `StartRecord`, `StopRecord`, `SetSceneItemEnabled`, `CreateInput`,
+ * `SetVideoSettings` and the rest of the obs-websocket surface stay refused, so Verger can never
+ * take the broadcast down or rearrange the operator's OBS — which is exactly the guarantee that
+ * makes it safe to leave OBS running when this app crashes.
+ */
+export const ALLOWED_WRITE_REQUESTS: readonly string[] = [
+  // Phase 3 — camera switching. The CAM 1 / CAM 2 / WIDE / PULPIT buttons are this request.
+  'SetCurrentProgramScene',
+  // Phase 3 — per-button transitions. Selects a transition the operator already configured in
+  // OBS by NAME; Verger never defines or edits a transition.
+  'SetCurrentSceneTransition',
+  // Phase 3 — per-button transitions. The duration, in milliseconds, of the above.
+  'SetCurrentSceneTransitionDuration'
+]
+
+/**
+ * Whether a request may reach the socket at all: a read, or an allowlisted write.
+ *
+ * The single gate every request in this class passes through.
+ */
+export function isAllowedRequest(requestType: string): boolean {
+  return isReadOnlyRequest(requestType) || ALLOWED_WRITE_REQUESTS.includes(requestType)
 }
 
 /** obs-websocket-js reports a rejected password as close code 4009 on the error's `code`. */

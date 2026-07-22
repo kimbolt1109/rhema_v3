@@ -2,7 +2,7 @@
  * Main-process IPC registration — the trusted half of the process bridge.
  *
  * This module owns exactly one `ipcMain.handle` per `IpcChannel` value and the fan-out of
- * OBS and overlay events to every open window. `registerIpc` returns a disposer; calling it
+ * OBS, overlay and camera events to every open window. `registerIpc` returns a disposer; calling it
  * removes every handler and every subscription, so a hot reload or a quit cannot leave a
  * second generation of handlers wired to a dead client.
  *
@@ -44,14 +44,23 @@
  *    `overlayState` event pushes a full snapshot to every window, which is the same contract
  *    the overlay server holds with the browser source. Resync is not a special case here
  *    either.
+ *  - **BLUEPRINT.md §6 — cameras and overlays are independent.** The `camera:*` handlers and the
+ *    `overlay:*` handlers share no dependency, no payload type and no state object: `select`
+ *    reaches only `CameraServiceLike`, `send` reaches only `OverlayServerLike`, and neither seam
+ *    can name the other's types. Switching cameras therefore cannot disturb a lower-third, and
+ *    showing a lower-third cannot disturb the camera — asserted in `register.test.ts` rather
+ *    than asserted in this comment.
  */
 
 import { BrowserWindow, app, ipcMain } from 'electron'
 import { z } from 'zod'
 
+import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getOverlayServer } from '@main/overlay'
 import { getSecretsStore } from '@main/secrets/secrets'
+import { CAMERA_SLOTS, cameraConfigSchema } from '@shared/camera'
+import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
 import { obsConfigSchema } from '@shared/config'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
@@ -168,6 +177,31 @@ export interface OverlayServerLike {
   onInfo(listener: (info: OverlayServerInfo) => void): Unsubscribe | void
 }
 
+/**
+ * The minimum this module needs from the camera service (`src/main/camera`).
+ *
+ * Structural, and deliberately *narrow*: five methods, all of which speak only in `CameraConfig`
+ * and `CameraState`. There is no overlay verb here and no overlay type in any signature, which
+ * is the independence guarantee of BLUEPRINT.md §6 expressed as a type rather than as a comment.
+ * A future edit that made `select()` able to touch a lower-third would have to widen this
+ * interface first — and the tests below assert that a camera call leaves the overlay server
+ * untouched, so widening it silently is not possible either.
+ *
+ * Note what this seam does *not* do: it does not check whether a slot is bound to a scene.
+ * The service owns the config, so the service is the only place that can answer that; the IPC
+ * layer would have to keep a second copy to duplicate the check, and a second copy is how the
+ * two drift apart.
+ */
+export interface CameraServiceLike {
+  getConfig(): ClientCall<CameraConfig>
+  /** Persist a new binding set and resolve with what was actually stored. */
+  setConfig(config: CameraConfig): ClientCall<CameraConfig>
+  getState(): ClientCall<CameraState>
+  /** Switch the program camera. Resolves with the resulting state. */
+  select(slot: CameraSlot): ClientCall<CameraState>
+  onState(listener: (state: CameraState) => void): Unsubscribe | void
+}
+
 /** The slice of `SecretsStore` used by `obsSetConfig`. */
 export interface SecretsStoreLike {
   setSecret(key: string, value: string): Result<void>
@@ -196,6 +230,17 @@ export interface RegisterIpcDeps {
    * Pass `null` to say "there is no overlay server" explicitly and skip the default lookup.
    */
   readonly overlay?: OverlayServerLike | null
+  /**
+   * The camera service.
+   *
+   * Optional for exactly the reason `overlay` is: `src/main/index.ts` calls
+   * `registerIpc({ config, logger, obs, overlay })` and a required fifth key would fail to
+   * compile. Defaults to the process-wide singleton from `@main/camera`; if that cannot be
+   * resolved the four camera handlers degrade to `Err(NOT_CONNECTED)` rather than throwing.
+   *
+   * Pass `null` to say "there is no camera service" explicitly and skip the default lookup.
+   */
+  readonly camera?: CameraServiceLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -254,6 +299,26 @@ const obsConfigArg: ArgValidator<ObsConnectionConfig> = zodArg(obsConfigSchema)
  * a command that gets broadcast to every attached browser source.
  */
 const overlayCommandArg: ArgValidator<OverlayCommand> = zodArg(overlayCommandSchema)
+
+/**
+ * The camera binding set, validated at the process boundary as well as inside the service.
+ *
+ * Same argument as `overlayCommandArg`: this is the trust boundary and the service is not. A
+ * `sceneName` of the wrong type reaching the service would eventually reach OBS's
+ * `SetCurrentProgramScene`, and `cameraConfigSchema` is what stops it here.
+ */
+const cameraConfigArg: ArgValidator<CameraConfig> = zodArg(cameraConfigSchema)
+
+/**
+ * `cameraSelect`'s envelope.
+ *
+ * `z.enum(CAMERA_SLOTS)` is the load-bearing part: the renderer cannot ask for a fifth camera,
+ * and it cannot smuggle an arbitrary string toward OBS by way of the slot field. An unknown
+ * slot is `Err(INVALID_ARG)` and the service is never called at all.
+ */
+const cameraSelectArg: ArgValidator<{ slot: CameraSlot }> = zodArg(
+  z.object({ slot: z.enum(CAMERA_SLOTS) })
+)
 
 const logRecordSchema = z.object({
   ts: z.number(),
@@ -374,6 +439,17 @@ function offlineOverlayInfo(detail: string): OverlayServerInfo {
   }
 }
 
+/**
+ * The answer every camera channel gives when there is no camera service object at all.
+ *
+ * `NOT_CONNECTED`, not `INTERNAL`, for the same reason the overlay uses it: a camera service
+ * that could not be constructed is a recoverable subsystem state (Standing Rule 5), and the
+ * camera panel's job is to show the buttons as unavailable and say why — not to crash.
+ */
+function cameraUnavailable(): Result<never> {
+  return err('NOT_CONNECTED', 'the camera service is not available')
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -420,6 +496,28 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       return getOverlayServer()
     } catch (cause) {
       log.warn('the overlay server is unavailable; overlay IPC will report NOT_CONNECTED', {
+        cause
+      })
+      return null
+    }
+  }
+
+  /**
+   * The camera service, or `null` if there is not one. Resolved once, like the overlay server.
+   *
+   * These are two separate objects resolved by two separate lookups, and neither is passed to
+   * the other. A camera service that fails to construct leaves the overlay channels fully
+   * working, and vice versa — which is what lets an operator keep firing lower-thirds through a
+   * service where OBS never came up.
+   */
+  const camera: CameraServiceLike | null = resolveCameraService()
+
+  function resolveCameraService(): CameraServiceLike | null {
+    if (deps.camera !== undefined) return deps.camera
+    try {
+      return getCameraService()
+    } catch (cause) {
+      log.warn('the camera service is unavailable; camera IPC will report NOT_CONNECTED', {
         cause
       })
       return null
@@ -538,6 +636,22 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
+  // The camera fan-out is a *separate* subscription pushing a *separate* payload type on a
+  // *separate* channel. Nothing here reads or writes overlay state, so a scene change — whether
+  // Verger asked for it or the operator hit a hotkey inside OBS — moves `activeSlot` and
+  // literally nothing else. That is the independence guarantee, wired.
+  if (camera !== null) {
+    try {
+      registerUnsubscribe(
+        camera.onState((state) => {
+          broadcast(IpcEvent.cameraState, state)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the camera service', { cause })
+    }
+  }
+
   // --- handlers ------------------------------------------------------------
 
   safeHandle(IpcChannel.obsGetStatus, noArg, async () => resolveCall(deps.obs.getStatus()))
@@ -599,6 +713,41 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     if (overlay === null) return ok(offlineOverlayInfo('the overlay server was never created'))
     const info = await resolveCall(overlay.getInfo())
     return info.ok ? info : ok(offlineOverlayInfo(info.error.message))
+  })
+
+  // --- camera (BLUEPRINT.md §6) --------------------------------------------
+
+  safeHandle(IpcChannel.cameraGetConfig, noArg, async () => {
+    if (camera === null) return cameraUnavailable()
+    return resolveCall(camera.getConfig())
+  })
+
+  safeHandle(IpcChannel.cameraSetConfig, cameraConfigArg, async (config) => {
+    if (camera === null) return cameraUnavailable()
+    return resolveCall(camera.setConfig(config))
+  })
+
+  safeHandle(IpcChannel.cameraGetState, noArg, async () => {
+    if (camera === null) return cameraUnavailable()
+    return resolveCall(camera.getState())
+  })
+
+  /**
+   * The one-tap camera switch.
+   *
+   * Three lines, and every one of them matters. `cameraSelectArg` has already rejected any slot
+   * outside `CAMERA_SLOTS`, so the service is only ever handed one of four known ids. Whether
+   * that slot is *bound* to a scene is the service's call — it holds the config, and firing
+   * `SetCurrentProgramScene` for a scene that does not exist is the failure this contract's
+   * `isBindingUsable()` exists to prevent.
+   *
+   * And note the absence: no overlay lookup, no `overlay.send`, no clearing of anything. A
+   * camera switch resolves with a `CameraState` and leaves every overlay layer exactly where the
+   * operator put it.
+   */
+  safeHandle(IpcChannel.cameraSelect, cameraSelectArg, async ({ slot }) => {
+    if (camera === null) return cameraUnavailable()
+    return resolveCall(camera.select(slot))
   })
 
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
@@ -672,7 +821,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
 
   log.debug('registered IPC handlers', {
     channels: registeredChannels.length,
-    overlay: overlay === null ? 'unavailable' : 'attached'
+    overlay: overlay === null ? 'unavailable' : 'attached',
+    camera: camera === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -690,8 +840,9 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
     registeredChannels.length = 0
 
-    // Covers the OBS status/scene-list subscriptions and the overlay state/info ones alike:
-    // both were pushed onto `unsubscribers` by `registerUnsubscribe`.
+    // Covers the OBS status/scene-list subscriptions, the overlay state/info ones and the
+    // camera state one alike: all of them were pushed onto `unsubscribers` by
+    // `registerUnsubscribe`, so no subsystem is left holding a listener into a disposed bridge.
     for (const unsubscribe of unsubscribers) {
       try {
         unsubscribe()

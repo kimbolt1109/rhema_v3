@@ -10,6 +10,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { CAMERA_SLOTS, findBinding, isBindingUsable, slotForScene } from '@shared/camera'
+import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type { IpcChannelValue } from '@shared/ipc'
@@ -20,7 +22,7 @@ import { initialObsStatus } from '@shared/obs'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
-import { ok } from '@shared/result'
+import { err, ok } from '@shared/result'
 import type { Result } from '@shared/result'
 
 vi.mock('electron', () => ({
@@ -46,9 +48,22 @@ vi.mock('@main/overlay', () => ({
   }
 }))
 
+/**
+ * Same treatment as the overlay singleton, and for the same reason: the real camera service
+ * reaches an OBS client that does not exist here. Making it throw lets one test assert that
+ * `registerIpc` still registers every channel — including the four camera ones — when the
+ * subsystem cannot be constructed at all.
+ */
+vi.mock('@main/camera', () => ({
+  getCameraService: () => {
+    throw new Error('the camera service singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
+  type CameraServiceLike,
   type IpcInvokeEventLike,
   type IpcMainLike,
   type ObsClientLike,
@@ -261,6 +276,102 @@ function createFakeOverlayServer(): FakeOverlayServer {
   return server
 }
 
+// ---------------------------------------------------------------------------
+// Camera fake (BLUEPRINT.md §6)
+// ---------------------------------------------------------------------------
+
+const AVAILABLE_TRANSITIONS: readonly string[] = ['Cut', 'Fade', 'Stinger']
+
+/**
+ * Three slots bound, one deliberately not.
+ *
+ * `pulpit` has no scene on purpose: an unmapped button is the ordinary state of a fresh install,
+ * and the contract says it must be refused rather than fired at OBS as a scene that does not
+ * exist. The fake enforces that below, so a regression in the IPC layer shows up as a passing
+ * call rather than as a comment nobody reads.
+ */
+const BOUND_CAMERA_CONFIG: CameraConfig = {
+  bindings: [
+    { slot: 'cam1', label: 'CAM 1', sceneName: 'Cam 1', transition: 'Cut', transitionDurationMs: null },
+    { slot: 'cam2', label: 'CAM 2', sceneName: 'Cam 2', transition: 'Fade', transitionDurationMs: 300 },
+    { slot: 'wide', label: 'WIDE', sceneName: 'Wide', transition: null, transitionDurationMs: null },
+    { slot: 'pulpit', label: 'PULPIT', sceneName: null, transition: null, transitionDurationMs: null }
+  ]
+}
+
+interface FakeCameraService extends CameraServiceLike {
+  emitState(state: CameraState): void
+  /** Every slot that actually reached the service. Must stay empty for rejected input. */
+  readonly selected: CameraSlot[]
+  /** Every config that actually reached the service. Same rule. */
+  readonly configWrites: CameraConfig[]
+  readonly stateUnsubscribed: () => number
+}
+
+function createFakeCameraService(): FakeCameraService {
+  let listener: ((state: CameraState) => void) | null = null
+  let unsubscribes = 0
+  let config: CameraConfig = BOUND_CAMERA_CONFIG
+  let programScene: string | null = 'Cam 1'
+  const selected: CameraSlot[] = []
+  const configWrites: CameraConfig[] = []
+
+  // Built from the shared contract's own `slotForScene`, so `activeSlot` here follows exactly
+  // the rule the renderer's live indicator will follow.
+  const snapshot = (): CameraState => ({
+    currentProgramScene: programScene,
+    activeSlot: slotForScene(config, programScene),
+    availableTransitions: AVAILABLE_TRANSITIONS
+  })
+
+  const service: FakeCameraService = {
+    selected,
+    configWrites,
+    stateUnsubscribed: () => unsubscribes,
+
+    // A bare value, not a Result — the seam normalises either, and mixing the two shapes across
+    // the fake's methods is what keeps `resolveCall` honest.
+    getConfig: () => config,
+    setConfig: (next) => {
+      configWrites.push(next)
+      config = next
+      return ok(config)
+    },
+    getState: () => snapshot(),
+    select: (slot) => {
+      selected.push(slot)
+      const binding = findBinding(config, slot)
+      // `isBindingUsable` is the contract's answer; the two extra clauses are only there to
+      // narrow `sceneName` for the compiler, which cannot see through a boolean helper.
+      //
+      // The code is `NOT_FOUND` here purely so it is distinguishable from the `INVALID_ARG`
+      // that `safeHandle`'s validator produces — this file is testing the IPC layer, and the
+      // discriminator that actually matters is whether `selected` grew. The real
+      // `CameraService` refuses an unmapped slot with its own code; which one it picks is its
+      // business, and asserting it here would couple these tests to another module's wording.
+      if (binding === null || !isBindingUsable(binding) || binding.sceneName === null) {
+        return err('NOT_FOUND', 'that camera button is not mapped to a scene', `slot=${slot}`)
+      }
+      programScene = binding.sceneName
+      const state = snapshot()
+      listener?.(state)
+      return ok(state)
+    },
+    onState: (next) => {
+      listener = next
+      return () => {
+        unsubscribes += 1
+        listener = null
+      }
+    },
+
+    emitState: (state) => {
+      listener?.(state)
+    }
+  }
+  return service
+}
+
 /** Standing Rule 4: no verse text is ever authored in this repo, fixtures included. */
 const SCRIPTURE_TEXT_PLACEHOLDER = 'VERSE TEXT PLACEHOLDER'
 
@@ -298,6 +409,7 @@ interface Harness {
   readonly ipc: FakeIpcMain
   readonly obs: FakeObsClient
   readonly overlay: FakeOverlayServer
+  readonly camera: FakeCameraService
   readonly windows: FakeWindow[]
   readonly secrets: SecretsStoreLike & { readonly writes: Array<[string, string]> }
   readonly dispose: () => void
@@ -309,6 +421,7 @@ function setup(options: { windows?: number } = {}): Harness {
   const ipc = createFakeIpcMain()
   const obs = createFakeObsClient()
   const overlay = createFakeOverlayServer()
+  const camera = createFakeCameraService()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
     createFakeWindow()
   )
@@ -326,6 +439,7 @@ function setup(options: { windows?: number } = {}): Harness {
   const dispose = registerIpc({
     obs,
     overlay,
+    camera,
     config: CONFIG,
     logger: createSilentLogger(),
     ipcMain: ipc,
@@ -339,6 +453,7 @@ function setup(options: { windows?: number } = {}): Harness {
     ipc,
     obs,
     overlay,
+    camera,
     windows,
     secrets,
     dispose,
@@ -578,7 +693,7 @@ describe('registerIpc', () => {
     ).toBe('INVALID_ARG')
   })
 
-  it('dispose removes every handler and unsubscribes from both subsystems', () => {
+  it('dispose removes every handler and unsubscribes from all three subsystems', () => {
     expect(harness.ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
 
     harness.dispose()
@@ -589,18 +704,27 @@ describe('registerIpc', () => {
     expect(harness.obs.sceneListUnsubscribed()).toBe(1)
     expect(harness.overlay.stateUnsubscribed()).toBe(1)
     expect(harness.overlay.infoUnsubscribed()).toBe(1)
+    // The camera subscription is disposed on exactly the same path — a listener left behind
+    // here would keep pushing scene changes into a dead bridge for the rest of the process.
+    expect(harness.camera.stateUnsubscribed()).toBe(1)
 
     // Idempotent — a second dispose must not double-unsubscribe or re-remove.
     harness.dispose()
     expect(harness.ipc.removeCalls).toHaveLength(IPC_CHANNEL_VALUES.length)
     expect(harness.obs.statusUnsubscribed()).toBe(1)
     expect(harness.overlay.stateUnsubscribed()).toBe(1)
+    expect(harness.camera.stateUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
     harness.dispose()
     harness.obs.emitStatus(initialObsStatus('connected', 6_000))
     harness.overlay.emitState(emptyOverlayState())
+    harness.camera.emitState({
+      currentProgramScene: 'Wide',
+      activeSlot: 'wide',
+      availableTransitions: AVAILABLE_TRANSITIONS
+    })
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -828,6 +952,352 @@ describe('registerIpc', () => {
       expect(() => {
         dispose()
       }).not.toThrow()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Camera (BLUEPRINT.md §6)
+  // -------------------------------------------------------------------------
+
+  describe('camera channels', () => {
+    it('returns the binding set and the live state', async () => {
+      const config = (await harness.invoke(IpcChannel.cameraGetConfig)) as Result<CameraConfig>
+      expect(config.ok).toBe(true)
+      if (!config.ok) return
+      expect(config.value).toEqual(BOUND_CAMERA_CONFIG)
+
+      const state = (await harness.invoke(IpcChannel.cameraGetState)) as Result<CameraState>
+      expect(state.ok).toBe(true)
+      if (!state.ok) return
+      expect(state.value).toEqual({
+        currentProgramScene: 'Cam 1',
+        activeSlot: 'cam1',
+        availableTransitions: AVAILABLE_TRANSITIONS
+      })
+    })
+
+    it('switches the program camera and resolves with the new active slot', async () => {
+      const result = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'wide'
+      })) as Result<CameraState>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(harness.camera.selected).toEqual(['wide'])
+      expect(result.value.currentProgramScene).toBe('Wide')
+      expect(result.value.activeSlot).toBe('wide')
+    })
+
+    it('accepts every slot the contract defines', async () => {
+      for (const slot of CAMERA_SLOTS) {
+        const result = (await harness.invoke(IpcChannel.cameraSelect, { slot })) as Result<unknown>
+        // `pulpit` is unbound in the fixture, so the *service* refuses it with NOT_FOUND — but
+        // it got that far, which is the point: validation did not eat a legitimate slot.
+        if (!result.ok) expect(result.error.code).toBe('NOT_FOUND')
+      }
+      expect(harness.camera.selected).toEqual([...CAMERA_SLOTS])
+    })
+
+    it('rejects an unknown slot with Err(INVALID_ARG) and never calls the service', async () => {
+      const rejected: unknown[] = [
+        { slot: 'cam5' },
+        { slot: 'CAM1' },
+        { slot: 3 },
+        { slot: null },
+        {},
+        'cam1',
+        undefined
+      ]
+
+      for (const arg of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.cameraSelect, arg)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      // The load-bearing assertion. A slot that failed validation must never have reached the
+      // service, because the next thing the service does is hand a scene name to OBS.
+      expect(harness.camera.selected).toHaveLength(0)
+
+      // And nothing moved: the program scene is still whatever it was.
+      const state = (await harness.invoke(IpcChannel.cameraGetState)) as Result<CameraState>
+      expect(state.ok).toBe(true)
+      if (!state.ok) return
+      expect(state.value.activeSlot).toBe('cam1')
+    })
+
+    it('rejects a malformed camera config with Err(INVALID_ARG) and never calls the service', async () => {
+      const rejected: unknown[] = [
+        // Not an object.
+        'bindings',
+        // `bindings` is not an array.
+        { bindings: 'cam1' },
+        // A binding missing every field but the slot.
+        { bindings: [{ slot: 'cam1' }] },
+        // An unknown slot inside an otherwise well-formed binding.
+        {
+          bindings: [
+            {
+              slot: 'cam9',
+              label: 'CAM 9',
+              sceneName: 'Nope',
+              transition: null,
+              transitionDurationMs: null
+            }
+          ]
+        },
+        // An empty label — `z.string().min(1)`; a blank button is unusable in a dark booth.
+        {
+          bindings: [
+            {
+              slot: 'cam1',
+              label: '',
+              sceneName: 'Cam 1',
+              transition: null,
+              transitionDurationMs: null
+            }
+          ]
+        },
+        // A negative transition duration.
+        {
+          bindings: [
+            {
+              slot: 'cam1',
+              label: 'CAM 1',
+              sceneName: 'Cam 1',
+              transition: 'Fade',
+              transitionDurationMs: -1
+            }
+          ]
+        },
+        // More bindings than there are slots.
+        {
+          bindings: [...BOUND_CAMERA_CONFIG.bindings, ...BOUND_CAMERA_CONFIG.bindings]
+        }
+      ]
+
+      for (const arg of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.cameraSetConfig, arg)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      expect(harness.camera.configWrites).toHaveLength(0)
+
+      // The stored config is untouched — a rejected write must not half-apply.
+      const config = (await harness.invoke(IpcChannel.cameraGetConfig)) as Result<CameraConfig>
+      expect(config.ok).toBe(true)
+      if (!config.ok) return
+      expect(config.value).toEqual(BOUND_CAMERA_CONFIG)
+    })
+
+    it('stores a well-formed config', async () => {
+      const next: CameraConfig = {
+        bindings: [
+          {
+            slot: 'pulpit',
+            label: 'PULPIT',
+            sceneName: 'Pulpit Close',
+            transition: 'Fade',
+            transitionDurationMs: 250
+          }
+        ]
+      }
+
+      const result = (await harness.invoke(
+        IpcChannel.cameraSetConfig,
+        next
+      )) as Result<CameraConfig>
+      expect(result.ok).toBe(true)
+      expect(harness.camera.configWrites).toEqual([next])
+    })
+
+    it('refuses a slot with no scene bound rather than firing at OBS', async () => {
+      // `pulpit` is unmapped in the fixture. The button is disabled in the UI, but the channel
+      // must also refuse it — a disabled button is not a security boundary.
+      const error = expectErr(await harness.invoke(IpcChannel.cameraSelect, { slot: 'pulpit' }))
+      expect(error.code).toBe('NOT_FOUND')
+
+      const state = (await harness.invoke(IpcChannel.cameraGetState)) as Result<CameraState>
+      expect(state.ok).toBe(true)
+      if (!state.ok) return
+      expect(state.value.currentProgramScene).toBe('Cam 1')
+    })
+
+    it('fans camera state out to every window', () => {
+      const many = setup({ windows: 3 })
+      const state: CameraState = {
+        // Scene changed inside OBS to something Verger has no button for — `activeSlot` is
+        // `null` and the live indicator must show that rather than a stale highlight.
+        currentProgramScene: 'Slides',
+        activeSlot: null,
+        availableTransitions: AVAILABLE_TRANSITIONS
+      }
+
+      many.camera.emitState(state)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([{ channel: IpcEvent.cameraState, payload: state }])
+      }
+    })
+
+    it('degrades to NOT_CONNECTED when there is no camera service at all', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      expect(expectErr(await call(IpcChannel.cameraGetConfig)).code).toBe('NOT_CONNECTED')
+      expect(expectErr(await call(IpcChannel.cameraGetState)).code).toBe('NOT_CONNECTED')
+      expect(expectErr(await call(IpcChannel.cameraSelect, { slot: 'cam1' })).code).toBe(
+        'NOT_CONNECTED'
+      )
+      expect(expectErr(await call(IpcChannel.cameraSetConfig, BOUND_CAMERA_CONFIG)).code).toBe(
+        'NOT_CONNECTED'
+      )
+    })
+
+    it('survives a camera singleton that cannot be constructed', async () => {
+      // `camera` is omitted entirely, so `registerIpc` falls back to `getCameraService()` —
+      // which the module mock at the top of this file makes throw.
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      const handler = ipc.handlers.get(IpcChannel.cameraGetState)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      expect(expectErr(await handler(eventFrom(window), undefined)).code).toBe('NOT_CONNECTED')
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates a camera service whose subscription returns nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: CameraServiceLike = {
+        getConfig: () => BOUND_CAMERA_CONFIG,
+        setConfig: (config) => config,
+        getState: () => ({
+          currentProgramScene: null,
+          activeSlot: null,
+          availableTransitions: []
+        }),
+        select: () => ({
+          currentProgramScene: 'Cam 1',
+          activeSlot: 'cam1',
+          availableTransitions: []
+        }),
+        onState: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Independence (BLUEPRINT.md §6 — the whole point of Phase 3)
+  //
+  // The claim these two tests defend is the one that lets an operator retire the
+  // transparent-PowerPoint hack: cameras and overlays are two state machines that never read
+  // each other. Asserted here at the IPC boundary, where a careless future handler would be
+  // most tempted to "helpfully" clear a lower-third on a camera cut.
+  // -------------------------------------------------------------------------
+
+  describe('camera and overlay independence', () => {
+    it('a camera switch leaves the overlay snapshot byte-identical', async () => {
+      const shown = (await harness.invoke(
+        IpcChannel.overlaySend,
+        SHOW_LOWER_THIRD
+      )) as Result<OverlayState>
+      expect(shown.ok).toBe(true)
+      if (!shown.ok) return
+
+      const cam2 = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'cam2'
+      })) as Result<CameraState>
+      const wide = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'wide'
+      })) as Result<CameraState>
+      expect(cam2.ok).toBe(true)
+      expect(wide.ok).toBe(true)
+
+      const after = (await harness.invoke(IpcChannel.overlayGetState)) as Result<OverlayState>
+      expect(after.ok).toBe(true)
+      if (!after.ok) return
+
+      // Byte-identical, `revision` included. A revision bump would mean *something* touched the
+      // overlay reducer, even if the visible fields happened to land the same.
+      expect(after.value).toEqual(shown.value)
+      expect(after.value.lowerThird.visible).toBe(true)
+      expect(after.value.revision).toBe(1)
+
+      // And no overlay command was manufactured behind the operator's back.
+      expect(harness.overlay.sent).toEqual([SHOW_LOWER_THIRD])
+    })
+
+    it('an overlay command leaves the camera state byte-identical', async () => {
+      const selected = (await harness.invoke(IpcChannel.cameraSelect, {
+        slot: 'cam2'
+      })) as Result<CameraState>
+      expect(selected.ok).toBe(true)
+      if (!selected.ok) return
+
+      for (const command of [
+        SHOW_LOWER_THIRD,
+        { channel: 'command', name: 'lowerThird.hide', payload: {} },
+        { channel: 'command', name: 'clearAll', payload: {} }
+      ]) {
+        const result = (await harness.invoke(IpcChannel.overlaySend, command)) as Result<unknown>
+        expect(result.ok).toBe(true)
+      }
+
+      const after = (await harness.invoke(IpcChannel.cameraGetState)) as Result<CameraState>
+      expect(after.ok).toBe(true)
+      if (!after.ok) return
+
+      expect(after.value).toEqual(selected.value)
+      expect(after.value.activeSlot).toBe('cam2')
+
+      // `clearAll` is the most destructive overlay verb there is, and it still did not touch a
+      // camera: the service was called exactly once, by the operator, for `cam2`.
+      expect(harness.camera.selected).toEqual(['cam2'])
     })
   })
 

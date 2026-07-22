@@ -789,6 +789,122 @@ describe('ObsClient — OBS events', () => {
   })
 })
 
+describe('ObsClient — the write allowlist', () => {
+  /** Every non-`Get` request Phase 3's camera buttons legitimately need. */
+  const ALLOWED = [
+    'SetCurrentProgramScene',
+    'SetCurrentSceneTransition',
+    'SetCurrentSceneTransitionDuration'
+  ] as const
+
+  /** A representative slice of what must stay refused: output control and OBS surgery. */
+  const REFUSED = [
+    'SetSceneItemEnabled',
+    'StartStream',
+    'StopStream',
+    'StopRecord',
+    'CreateInput',
+    'SetVideoSettings',
+    'TriggerHotkeyByName',
+    'RemoveScene'
+  ] as const
+
+  async function connected(): Promise<Harness> {
+    const harness = createHarness()
+    harness.setSocketSetup((socket) => {
+      for (const name of ALLOWED) socket.responses.set(name, {})
+      for (const name of REFUSED) socket.responses.set(name, {})
+    })
+    await harness.client.connect(CONFIG)
+    return harness
+  }
+
+  it('permits each allowlisted write, and it reaches the socket', async () => {
+    const harness = await connected()
+    const socket = harness.sockets[0]
+
+    const results = [
+      await harness.client.call('SetCurrentProgramScene', { sceneName: 'Camera 2' }),
+      await harness.client.call('SetCurrentSceneTransition', { transitionName: 'Fade' }),
+      await harness.client.call('SetCurrentSceneTransitionDuration', { transitionDuration: 300 })
+    ]
+
+    for (const result of results) expect(result.ok).toBe(true)
+    expect(socket?.requests).toEqual(['GetVersion', 'GetSceneList', ...ALLOWED])
+  })
+
+  it('still REFUSES every other write, and none of them reaches the socket', async () => {
+    const harness = await connected()
+    const socket = harness.sockets[0]
+    const before = [...(socket?.requests ?? [])]
+
+    for (const requestType of REFUSED) {
+      const result = await harness.client.call(requestType, { enabled: false })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.INVALID_ARG)
+        expect(result.error.message).toContain(requestType)
+        expect(result.error.message).toContain('never imposes it')
+      }
+    }
+
+    // Not one of them was written to the wire.
+    expect(socket?.requests).toEqual(before)
+    expect(harness.client.getStatus().state).toBe('connected')
+  })
+
+  it('refuses a request that merely looks allowlisted', async () => {
+    const harness = await connected()
+
+    const nearMiss = await harness.client.call('SetCurrentProgramSceneCollection')
+    const casing = await harness.client.call('setCurrentProgramScene')
+
+    expect(nearMiss.ok).toBe(false)
+    expect(casing.ok).toBe(false)
+    expect(harness.sockets[0]?.requests).toEqual(['GetVersion', 'GetSceneList'])
+  })
+
+  it('reports NOT_CONNECTED for an allowlisted write while OBS is down', async () => {
+    const harness = createHarness()
+
+    const result = await harness.client.call('SetCurrentProgramScene', { sceneName: 'Camera 2' })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe(ErrorCode.NOT_CONNECTED)
+    expect(harness.sockets).toHaveLength(0)
+  })
+
+  it('surfaces an OBS-side rejection of an allowlisted write as OBS_ERROR', async () => {
+    const harness = await connected()
+    harness.sockets[0]?.failures.set(
+      'SetCurrentProgramScene',
+      new MockObsWebSocketError(600, 'ResourceNotFound')
+    )
+
+    const result = await harness.client.call('SetCurrentProgramScene', { sceneName: 'Ghost' })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe(ErrorCode.OBS_ERROR)
+    // A refused scene switch is not a dropped connection.
+    expect(harness.client.getStatus().state).toBe('connected')
+  })
+
+  it('exposes the allowlist as exactly those three names', async () => {
+    const { ALLOWED_WRITE_REQUESTS, isAllowedRequest, isReadOnlyRequest } = await import(
+      '@main/obs/ObsClient'
+    )
+
+    expect([...ALLOWED_WRITE_REQUESTS]).toEqual([...ALLOWED])
+    for (const name of ALLOWED) {
+      expect(isAllowedRequest(name)).toBe(true)
+      expect(isReadOnlyRequest(name)).toBe(false)
+    }
+    for (const name of REFUSED) expect(isAllowedRequest(name)).toBe(false)
+    expect(isAllowedRequest('GetSceneTransitionList')).toBe(true)
+  })
+})
+
 describe('getObsClient', () => {
   it('is callable with no arguments, is a singleton, and dials nothing on construction', async () => {
     // `src/main/index.ts` calls this exactly this way, before any window exists.

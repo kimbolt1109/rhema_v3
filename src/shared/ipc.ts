@@ -18,6 +18,7 @@
 import type { ConfigSummary, ObsConfig } from './config'
 import type { LogRecord } from './log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
+import type { CameraConfig, CameraSlot, CameraState } from './camera'
 import type { OverlayCommand, OverlayState } from './overlay'
 import type { Result } from './result'
 
@@ -56,6 +57,10 @@ export const IpcChannel = {
   overlayGetState: 'verger:overlay:get-state',
   overlaySend: 'verger:overlay:send',
   overlayGetServerInfo: 'verger:overlay:get-server-info',
+  cameraGetConfig: 'verger:camera:get-config',
+  cameraSetConfig: 'verger:camera:set-config',
+  cameraGetState: 'verger:camera:get-state',
+  cameraSelect: 'verger:camera:select',
 } as const
 
 /** Union of every request channel string. */
@@ -72,6 +77,7 @@ export const IpcEvent = {
   logRecord: 'verger:log:record',
   overlayState: 'verger:overlay:state',
   overlayServerInfo: 'verger:overlay:server-info',
+  cameraState: 'verger:camera:state',
 } as const
 
 /** Union of every event channel string. */
@@ -109,6 +115,10 @@ export interface IpcRequest {
   [IpcChannel.overlayGetState]: void
   [IpcChannel.overlaySend]: OverlayCommand
   [IpcChannel.overlayGetServerInfo]: void
+  [IpcChannel.cameraGetConfig]: void
+  [IpcChannel.cameraSetConfig]: CameraConfig
+  [IpcChannel.cameraGetState]: void
+  [IpcChannel.cameraSelect]: { slot: CameraSlot }
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -124,6 +134,10 @@ export interface IpcResponse {
   [IpcChannel.overlayGetState]: Result<OverlayState>
   [IpcChannel.overlaySend]: Result<OverlayState>
   [IpcChannel.overlayGetServerInfo]: Result<OverlayServerInfo>
+  [IpcChannel.cameraGetConfig]: Result<CameraConfig>
+  [IpcChannel.cameraSetConfig]: Result<CameraConfig>
+  [IpcChannel.cameraGetState]: Result<CameraState>
+  [IpcChannel.cameraSelect]: Result<CameraState>
 }
 
 /** The payload pushed on each event channel. */
@@ -133,6 +147,7 @@ export interface IpcEventPayload {
   [IpcEvent.logRecord]: LogRecord
   [IpcEvent.overlayState]: OverlayState
   [IpcEvent.overlayServerInfo]: OverlayServerInfo
+  [IpcEvent.cameraState]: CameraState
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -168,6 +183,15 @@ export interface VergerApi {
     onState(callback: (state: OverlayState) => void): Unsubscribe
     /** Subscribe to server up/down and client-count changes. */
     onServerInfo(callback: (info: OverlayServerInfo) => void): Unsubscribe
+  }
+  readonly camera: {
+    getConfig(): Promise<Result<CameraConfig>>
+    setConfig(config: CameraConfig): Promise<Result<CameraConfig>>
+    getState(): Promise<Result<CameraState>>
+    /** Switch the program camera. Resolves with the resulting camera state. */
+    select(slot: CameraSlot): Promise<Result<CameraState>>
+    /** Subscribe to camera state changes, including scene switches made inside OBS. */
+    onState(callback: (state: CameraState) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

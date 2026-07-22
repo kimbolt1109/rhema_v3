@@ -33,6 +33,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 
+import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
@@ -118,6 +119,33 @@ const api: VergerApi = {
       subscribe<OverlayState>(IpcEvent.overlayState, callback),
     onServerInfo: (callback: (info: OverlayServerInfo) => void): Unsubscribe =>
       subscribe<OverlayServerInfo>(IpcEvent.overlayServerInfo, callback)
+  },
+
+  /**
+   * The camera layer (BLUEPRINT.md §6).
+   *
+   * Note what this group does *not* contain: any overlay verb. `select` moves the program
+   * scene and resolves with a `CameraState`, whose three fields describe cameras and nothing
+   * else. There is structurally no way for a camera call made here to disturb a lower-third,
+   * and no way for an `overlay.send` above to disturb the camera — the two groups share no
+   * channel, no payload type and no state object. That independence is the whole point of the
+   * phase, and it is enforced by the shape of this file rather than by convention.
+   *
+   * `onState` also fires for scene changes made *inside OBS* or by an OBS hotkey, so the live
+   * indicator reflects reality rather than only what Verger last asked for (Standing Rule 2).
+   */
+  camera: {
+    getConfig: (): Promise<Result<CameraConfig>> => ipcRenderer.invoke(IpcChannel.cameraGetConfig),
+    setConfig: (config: CameraConfig): Promise<Result<CameraConfig>> =>
+      ipcRenderer.invoke(IpcChannel.cameraSetConfig, config),
+    getState: (): Promise<Result<CameraState>> => ipcRenderer.invoke(IpcChannel.cameraGetState),
+    // The slot is wrapped into `{ slot }` here rather than sent bare, because the main-side
+    // validator zod-parses an object. Keeping the renderer-facing signature a plain
+    // `CameraSlot` means a caller cannot accidentally send a differently-shaped envelope.
+    select: (slot: CameraSlot): Promise<Result<CameraState>> =>
+      ipcRenderer.invoke(IpcChannel.cameraSelect, { slot }),
+    onState: (callback: (state: CameraState) => void): Unsubscribe =>
+      subscribe<CameraState>(IpcEvent.cameraState, callback)
   },
 
   config: {
