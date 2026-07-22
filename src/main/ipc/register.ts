@@ -108,7 +108,7 @@ import { z } from 'zod'
 import { getAsrService } from '@main/asr'
 import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
-import { getCueEngine } from '@main/cue'
+import { getCueEngine, getScriptureResolver } from '@main/cue'
 import { getGoLiveService } from '@main/golive'
 import { getCheckpointStore, getHealthService } from '@main/health'
 import { getOverlayServer } from '@main/overlay'
@@ -1945,7 +1945,25 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
    * A `null` here is an ordinary configuration state, not a failure, and it is scoped to exactly
    * two channels. Nothing else in the cue block reads it.
    */
-  const scripture: ScriptureResolverLike | null = deps.scripture ?? null
+  // Defaulted, not left null. Passing `null` here meant `cueResolveScripture` answered
+  // NOT_CONFIGURED even with ESV_API_KEY present — a detected reference was offered with no text
+  // and nothing said why. The resolver reports its own not-configured state honestly, so wiring it
+  // unconditionally is strictly better than a hard-coded null. Pass `deps.scripture: null`
+  // explicitly to disable it.
+  const scripture: ScriptureResolverLike | null = resolveScriptureResolver()
+
+  function resolveScriptureResolver(): ScriptureResolverLike | null {
+    if (deps.scripture !== undefined) return deps.scripture
+    try {
+      return getScriptureResolver({ logger: deps.logger })
+    } catch (cause) {
+      // Same degradation as the cue engine: an unavailable resolver scopes to exactly two
+      // channels, which then answer NOT_CONFIGURED. It must never stop IPC registration — the
+      // other 51 channels have nothing to do with scripture.
+      log.warn('the scripture resolver is unavailable; verse text will not resolve', { cause })
+      return null
+    }
+  }
 
   /**
    * The health service, or `null` if there is not one. Resolved once, like the other six.

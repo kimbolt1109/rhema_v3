@@ -1,12 +1,28 @@
 # electron-builder configuration — Verger
 #
-# Phase 10 owns packaging in earnest. This file exists now so `npm run package`
-# is a valid, non-blocking command from day one.
+# Produces an **unsigned** Windows x64 NSIS installer.
 #
-# NOT SIGNED. No Windows Authenticode certificate is present in this repo, so
-# installers produced here will trip "unknown publisher" SmartScreen warnings.
-# Acquiring an EV code-signing cert is tracked in HUMAN_TASKS.md — do not add
-# signing credentials to this file.
+# ---------------------------------------------------------------------------
+# THE ARTIFACT IS NOT CODE-SIGNED. READ THIS BEFORE SHIPPING IT TO ANYONE.
+# ---------------------------------------------------------------------------
+# There is no Windows Authenticode certificate on this machine and none in this
+# repo, so:
+#   * SmartScreen will show "Windows protected your PC — unknown publisher" on
+#     first run of the installer, and the operator must click "More info → Run
+#     anyway". That warning is CORRECT. Do not tell users to ignore warnings as
+#     a habit; tell them this specific build is unsigned.
+#   * `electron-updater` on Windows verifies the *publisher name* on a
+#     downloaded installer against the installed app's signature. An unsigned
+#     build therefore cannot be safely auto-updated — which is one more reason
+#     `src/main/updater.ts` is off unless an update URL is explicitly set.
+# Obtaining an EV / Azure Trusted Signing certificate is a HUMAN_TASKS.md item.
+# Do NOT add `certificateFile`, `certificatePassword`, `signtoolOptions` or any
+# credential to this file — signing material belongs in a hardware-backed store
+# and in the release workflow, never in the repo (v2-notes OPS_AND_UPDATE §5,
+# PART 10.5).
+#
+# `forceCodeSigning: false` below is the deliberate, explicit statement of that
+# state rather than an accident of the default.
 
 appId: com.verger.app
 productName: Verger
@@ -16,27 +32,98 @@ directories:
   output: release/${version}
   # NOT electron-builder's default `build/` — .gitignore ignores `build/`, which would
   # silently exclude the app icon and installer art from the repo. This directory holds
-  # committed packaging assets (icon.ico, installer sidebar) and is created in Phase 10.
+  # committed packaging assets (icon.ico, installer sidebar); see build-resources/README.md.
+  # It is currently EMPTY, so this build uses the stock Electron icon and electron-builder
+  # logs "default Electron icon is used". Real brand art is a HUMAN_TASKS.md item.
   buildResources: build-resources
 
 # electron-vite emits main -> out/main, preload -> out/preload, renderer -> out/renderer.
-# package.json "main" is ./out/main/index.js, so out/ plus the manifest is all the
-# app bundle needs; runtime dependencies are pulled in by electron-builder from
-# package.json "dependencies" automatically.
+# package.json "main" is ./out/main/index.js, so out/ plus the manifest is all the app
+# bundle needs; runtime dependencies are pulled in from package.json "dependencies"
+# automatically.
+#
+# NOTE: `src/overlay` is deliberately NOT here. It is not a bundled module — the overlay
+# server serves it from disk as static files at runtime — so it ships as an extraResource
+# below, outside the asar, where a plain file path resolves.
 files:
   - out/**/*
   - package.json
   - '!**/*.map'
   - '!**/{.eslintrc,.editorconfig,.env,.env.*}'
   - '!**/{test,tests,__tests__,coverage}/**'
+  - '!**/*.{test,spec}.{js,ts,tsx,map}'
 
-# Unpacked payloads (ffmpeg, a faster-whisper sidecar, Whisper model files) get
-# added here in Phases 7/10. Nothing needs it yet.
-extraResources: []
+# Unpacked payloads. Everything here lands in `<install dir>/resources/<to>` and is
+# reachable at runtime via `process.resourcesPath`.
+#
+#  * `overlay`  — src/overlay/{overlay.html,overlay.css,overlay.js,protocol.js}. The OBS
+#                 browser source loads these over http from the local overlay server, which
+#                 resolves `join(process.resourcesPath, 'overlay')` when packaged
+#                 (see resolveOverlayStaticDir in src/main/overlay/OverlayServer.ts).
+#                 They must stay OUTSIDE the asar: express serves real files.
+#  * `asr`      — the faster-whisper sidecar script, resolved as
+#                 `join(process.resourcesPath, 'asr', 'whisper_sidecar.py')`
+#                 (see resolveWhisperRuntime in src/main/asr/WhisperProvider.ts).
+#
+# DELIBERATELY ABSENT: `resources/asr-venv`.
+# That directory is a ~290 MB machine-specific Python virtualenv (faster-whisper +
+# ctranslate2 + CUDA libs), it is gitignored, and it is bound to the GPU/driver of the
+# machine that created it. Shipping it would be wrong twice over — bloat, and a venv whose
+# absolute paths do not survive relocation. Its absence is a supported state: the packaged
+# app probes for the interpreter, fails to find it, and `resolveWhisperRuntime` returns
+# NOT_CONFIGURED, which surfaces as "local ASR unavailable" in the health strip. The app
+# still runs; only the local recogniser is missing (Standing Rule 5).
+extraResources:
+  # The third-party attribution bundle, generated by `node scripts/generate-notice.mjs`.
+  # MIT/BSD/ISC all require their notice to travel WITH the binary distribution, so it has to
+  # be in the installed directory, not merely in the repo. Lands at
+  # `<install dir>/resources/NOTICE.md`.
+  - from: NOTICE.md
+    to: NOTICE.md
+  - from: src/overlay
+    to: overlay
+    filter:
+      - '**/*'
+      - '!README.md'
+  - from: resources/asr
+    to: asr
+    filter:
+      - '**/*'
 
 asar: true
 npmRebuild: false
 forceCodeSigning: false
+
+# ---------------------------------------------------------------------------
+# Auto-update publishing
+# ---------------------------------------------------------------------------
+# There is no update server. No Cloudflare R2 bucket, no CDN, nothing to publish to.
+#
+# `publish: null` is REQUIRED, not decorative. Left unset, electron-builder infers a GitHub
+# provider from the package author/repo name and bakes
+# `resources/app-update.yml` = `provider: github, owner: kimbolt1109, repo: rhema_v3` into the
+# installed app — a feed pointing at a repository that does not exist. Any future code that
+# called `autoUpdater.checkForUpdates()` without first calling `setFeedURL` would then hit
+# GitHub and fail in a confusing way. Declaring no publisher makes the shipped app carry no
+# feed at all, which is the truth.
+#
+# `src/main/updater.ts` therefore reads its feed URL from configuration and stays entirely
+# inert when that is unset: it never constructs the electron-updater engine, so a build
+# with no update server never makes a network call (Standing Rule 5).
+#
+# When a real update host exists, DELETE the `publish: null` line below and uncomment the
+# block, then re-release. electron-builder will emit `latest.yml` next to the installer;
+# upload BOTH to `<url>` (prefer a versioned path per v2-notes OPS_AND_UPDATE §5.2 so old
+# installers stay retrievable for rollback). Do not enable this before the build is signed —
+# electron-updater cannot verify an unsigned installer's publisher on Windows:
+#
+# publish:
+#   - provider: generic
+#     url: https://updates.example.invalid/verger/stable
+#     channel: latest
+#     # Never let a published build auto-update itself without the operator's say-so.
+#     publishAutoUpdate: false
+publish: null
 
 win:
   target:
@@ -44,6 +131,8 @@ win:
       arch:
         - x64
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # No `certificateFile` / `signtoolOptions` — see the header. rcedit still stamps the
+  # version resources into the exe; that is metadata, not a signature.
 
 nsis:
   oneClick: false
@@ -52,6 +141,9 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Verger
-  # Operator settings, service plans and logs live in userData. Never wipe them
-  # on uninstall without an explicit choice.
+  # Operator settings, service plans and logs live in userData. Never wipe them on
+  # uninstall without an explicit choice.
   deleteAppDataOnUninstall: false
+  # Art is optional and currently absent (build-resources/ is empty). Do not add
+  # `installerIcon` / `installerSidebar` / `uninstallerIcon` keys until the files exist —
+  # electron-builder fails the build on a missing referenced asset.

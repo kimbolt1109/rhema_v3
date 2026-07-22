@@ -22,16 +22,21 @@
  * They are therefore defaulted alongside `plan` and `overlay`. Overriding them is still possible
  * and is what the tests do; omitting them now yields a working engine rather than an inert one.
  *
- * ## The resolver is still injected, and that is deliberate
+ * ## The resolver is defaulted too, as of Phase 10
  *
- * It reaches the network and reads a translation catalogue, so `src/main/ipc/register.ts` supplies
- * it when one is configured. Standing Rule 5: a build with no ESV / API.Bible key and no verified
- * public-domain translation on disk must still run. Without a resolver, references are detected
- * and offered for confirmation, and `canAutoShow()` simply never lets one show itself — which is
- * exactly the gate that rule wants.
+ * It was left for a caller to inject and, predictably, nobody injected it — so a detected
+ * reference was offered with no text and `Resolve scripture` answered *not configured* even with
+ * a key present. `getScriptureResolver()` is now the default.
+ *
+ * Standing Rule 5 still holds: with no ESV / API.Bible key and no downloaded public-domain
+ * translation, the resolver resolves nothing — but it *says* `NOT_CONFIGURED`, a designed state
+ * the UI renders, and `canAutoShow()` keeps an unresolved reference from ever showing itself.
+ * That is a configured absence, not an unconnected wire.
  */
 
 import { getAsrService } from '@main/asr'
+import { loadConfigFromDisk } from '@main/config/env'
+import type { AppConfig } from '@main/config/env'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
 import { createNullLogger } from '@main/logging/logger'
@@ -40,6 +45,7 @@ import type { Logger } from '@shared/log'
 import type { ScriptureReference } from '@shared/scripture'
 
 import { CueEngine } from './CueEngine'
+import { ScriptureResolver } from './ScriptureResolver'
 import { detect as detectScripture } from './scriptureDetector'
 import type {
   CueAsrLike,
@@ -109,6 +115,38 @@ export interface GetCueEngineOptions {
   readonly timers?: CueTimers
 }
 
+let resolverSingleton: ScriptureResolver | null = null
+
+/**
+ * The process-wide scripture resolver.
+ *
+ * Defaulted rather than left to a caller, because "left to a caller" is how this build produced
+ * five subsystems that were built, tested, and connected to nothing. Without it a detected
+ * reference is offered with no text and `Resolve scripture` answers *not configured* even when
+ * `ESV_API_KEY` is present — a silent gap that no unit test sees, since every resolver test
+ * constructs its own.
+ *
+ * With no key and no downloaded public-domain translation it still resolves nothing — but it
+ * says so as `NOT_CONFIGURED`, which is a designed state the UI renders, rather than a wire that
+ * was never connected.
+ */
+export function getScriptureResolver(
+  options: { readonly logger?: Logger; readonly config?: AppConfig } = {},
+): ScriptureResolver {
+  if (resolverSingleton !== null) return resolverSingleton
+  const logger = options.logger ?? createNullLogger()
+  resolverSingleton = new ScriptureResolver({
+    config: options.config ?? loadConfigFromDisk(),
+    logger,
+  })
+  return resolverSingleton
+}
+
+/** Drop the resolver singleton. Tests use this; nothing in production does. */
+export function resetScriptureResolver(): void {
+  resolverSingleton = null
+}
+
 let singleton: CueEngine | null = null
 
 /**
@@ -135,10 +173,7 @@ export function getCueEngine(options: GetCueEngineOptions = {}): CueEngine {
   // goes entirely off-script. Left unwired it is silently inert, and no test catches that because
   // every engine test injects a detector explicitly.
   //
-  // The detector is pure and free to construct. The RESOLVER is not defaulted here: it reaches the
-  // network and reads a translation catalogue, so `src/main/ipc/register.ts` supplies it when one
-  // is configured. Without a resolver, references are still detected and offered for confirmation
-  // — `canAutoShow()` simply never lets one show itself, which is exactly the intended gate.
+  // The detector is pure and free to construct. The resolver is defaulted just below.
   const scripture: CueScriptureDetectorLike = options.scripture ?? {
     detect: (text: string, now?: number): readonly ScriptureReference[] =>
       detectScripture(text, { now: now ?? Date.now() })
@@ -150,7 +185,7 @@ export function getCueEngine(options: GetCueEngineOptions = {}): CueEngine {
     logger,
     asr,
     scripture,
-    ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+    resolver: options.resolver ?? getScriptureResolver({ logger }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.timers === undefined ? {} : { timers: options.timers }),
     now: options.now ?? Date.now

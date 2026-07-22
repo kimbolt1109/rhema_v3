@@ -28,7 +28,8 @@
       "goLiveSettings": "Go Live settings",
       "cameraSetup": "Camera setup",
       "asrSettings": "Speech settings",
-      "status": "Status"
+      "status": "Status",
+      "shortcuts": "Shortcuts"
     },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
@@ -291,6 +292,19 @@
         "error": "Blocks going live",
         "warning": "Warning"
       },
+      "code": {
+        "youtube": {
+          "not-configured": "YouTube is not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env, then restart Verger.",
+          "signed-out": "Not signed in to YouTube. Sign in once on the Go Live screen; later services are silent.",
+          "authorizing": "Sign-in is still in progress. Finish it in the browser window that opened.",
+          "no-persistent-stream": "No persistent ingest stream is available yet, so a broadcast cannot be bound to one.",
+          "stream-unhealthy": "YouTube reports the ingest as unhealthy. Check the bitrate and the network before going live.",
+          "privacy-public": "This broadcast will be PUBLIC — visible to everyone and announced to subscribers. Use \"unlisted\" unless publishing publicly is intended; a public broadcast cannot be un-published after the fact."
+        },
+        "legal": {
+          "ccli-streaming-licence-missing": "No CCLI Streaming Licence number is recorded. Streaming worship music needs a CCLI Streaming Licence — this is separate from the Church Copyright Licence. Record it in settings. (Verger is not affiliated with or endorsed by CCLI.)"
+        }
+      },
       "blocksNote": "Anything marked \"blocks going live\" has to be fixed before the GO LIVE button will run. Warnings are shown and left to your judgement.",
       "ccliNote": "The CCLI Streaming Licence check is a legal gate, not a reminder: streaming worship music needs a Streaming Licence in addition to the ordinary church copyright licence, and the required attribution has to go out with the stream."
     },
@@ -501,6 +515,42 @@
     "subtitle": "The order of service, as a list of cues. Every cue here is fired by hand — this screen works with no microphone, no cue engine and no network, and it is what everything later falls back to.",
     "unsaved": "Unsaved changes",
     "saved": "Saved",
+    "untitledService": "Untitled service",
+    "modeLabel": "Mode",
+    "mode": {
+      "assist": "Assist",
+      "auto": "Auto",
+      "manual": "Manual"
+    },
+    "now": "Now",
+    "notStarted": "Not started. Press SPACE to fire the first cue.",
+    "next": "Next",
+    "endOfPlan": "End of the plan. Nothing follows.",
+    "advance": "Advance (SPACE)",
+    "back": "Back",
+    "lastFired": "Last fired",
+    "cueListLabel": "Service cues",
+    "fired": "Fired",
+    "runner": {
+      "label": "Plan runner"
+    },
+    "empty": {
+      "title": "No cues in this service plan yet.",
+      "body": "Author the order of service in the plan editor — or import a PowerPoint deck — then come back here to run it.",
+      "noBridge": "Verger cannot reach its main process, so no plan can be loaded. Restart the app.",
+      "openEditor": "Open the plan editor"
+    },
+    "preview": {
+      "malformed": "This cue’s settings do not match its type. Fix it in the plan editor.",
+      "empty": "Nothing here.",
+      "slideUnavailable": "Slide image unavailable.",
+      "template": "Template",
+      "scriptureResolved": "Verse text is fetched when the cue fires.",
+      "scene": "OBS scene",
+      "asset": "File",
+      "obsInput": "OBS input",
+      "action": "Action"
+    },
     "file": {
       "label": "Plan file",
       "untitled": "Untitled service",
@@ -973,6 +1023,119 @@
       "position": "Plan position {{position}}",
       "restore": "Rewind automation",
       "nonEffects": "This rewinds automation only — the plan pointer and what Verger will do next. It does NOT touch the stream and it does NOT touch the recording. Nothing the congregation is watching changes."
+    }
+  },
+  "shortcuts": {
+    "title": "Shortcuts, foot pedals & Stream Deck",
+    "subtitle": "Every operator action can be triggered by a key. Changes apply as soon as you save.",
+    "tableCaption": "Actions and the keys bound to them",
+    "repaired": "Some saved shortcuts could not be read and were put back to their defaults.",
+    "destructive": "Hold only",
+    "unbound": "Not bound",
+    "rebind": "Rebind",
+    "rebindFor": "Rebind {{action}}",
+    "cancelCaptureFor": "Cancel rebinding {{action}}",
+    "gestureFor": "Gesture for {{action}}",
+    "holdFor": "Hold duration for {{action}} in milliseconds",
+    "holdRange": "min {{floor}}, max {{max}}",
+    "conflict": "Conflict: {{chord}} is bound to {{actions}}. Only the first one will fire.",
+    "save": "Save shortcuts",
+    "saved": "Shortcuts saved.",
+    "reset": "Reset all shortcuts to defaults",
+    "printableCard": "Printable card",
+    "pedal": {
+      "title": "Foot pedals and Stream Decks",
+      "body": "A foot pedal or Stream Deck is just a keyboard: it sends an ordinary key code. So there is nothing extra to install — choose an action below, press Rebind, and then press the pedal or the Stream Deck button itself. Verger records whatever key it sends. If your pedal has configuration software, set it to send a key nothing else uses, such as F13."
+    },
+    "capture": {
+      "prompt": "Press the key, foot pedal or Stream Deck button you want. Press Tab to cancel.",
+      "waiting": "Press a key…"
+    },
+    "column": {
+      "action": "Action",
+      "key": "Key",
+      "gesture": "Gesture",
+      "hold": "Hold (ms)",
+      "status": "Notes"
+    },
+    "gesture": {
+      "tap": "Tap",
+      "hold": "Hold"
+    },
+    "reject": {
+      "destructiveTap": "{{action}} can blank the output, so it must be a hold, never a tap.",
+      "holdTooShort": "{{action}} can blank the output, so it must be held for at least {{ms}} ms.",
+      "badHold": "Enter a hold between {{floor}} and {{max}} milliseconds."
+    },
+    "card": {
+      "title": "Shortcut card",
+      "body": "Print this and tape it to the booth keyboard. The blueprint asks for it by name: the key that hands control back to the human must be readable without opening the app.",
+      "hold": "{{chord}} — hold {{seconds}}s",
+      "tap": "{{chord}} — tap",
+      "print": "Print this card"
+    },
+    "action": {
+      "advance": "Advance",
+      "back": "Back",
+      "camera_select": "Camera",
+      "output_black": "Black out program",
+      "output_logo": "Show logo slate",
+      "output_freeze": "Freeze frame",
+      "overlay_lowerThird_dismiss": "Dismiss lower third",
+      "overlay_clearAll": "Clear all overlays",
+      "ai_disable": "Disable AI — take over",
+      "ai_panic": "PANIC — stop all automation",
+      "suggestion_confirm": "Confirm suggestion",
+      "suggestion_dismiss": "Dismiss suggestion"
+    }
+  },
+  "tuning": {
+    "title": "Confidence tuning",
+    "subtitle": "These numbers decide how sure Verger has to be before it does anything on its own. Every one of them is a trade: raise it and the console asks you more often, lower it and the system will act on less certainty.",
+    "save": "Save tuning",
+    "reset": "Reset to recommended",
+    "saved": "Tuning saved.",
+    "saveFailed": "The tuning was not saved.",
+    "fixedHint": "Fixed at {{value}} in this build — changing it is a code change, not a setting.",
+    "recommendedHint": "Recommended: {{value}}.",
+    "scope": {
+      "title": "What this screen changes",
+      "body": "Only the default auto-fire threshold is saved in this build. The scripture bands, the plan anchor threshold and the auto-fire gap are compiled into Verger and are shown here read-only, at their real values, so you can see what the system is actually working to."
+    },
+    "autoFire": {
+      "legend": "Auto-fire",
+      "label": "Default auto-fire threshold",
+      "plain": "In auto mode, a cue may fire itself only when the match is at least this confident. Cues below it are offered to you instead.",
+      "consequence": "Lower this and the system will act on less certainty: more cues fire without you, and more of the ones that fire will be wrong — on the congregation screen, where you cannot take them back.",
+      "looseWarning": "This is looser than recommended. Verger will act on less certainty than the setting this build was tested with."
+    },
+    "scripture": {
+      "legend": "Scripture confidence bands",
+      "exactLabel": "Exact reference band",
+      "exactPlain": "At or above this, a spoken reference is treated as exact. Only an exact reference is ever allowed to show itself, and only once its text has actually been fetched.",
+      "exactConsequence": "Lower this and the system will act on less certainty: a near-miss gets treated as a certainty, so the wrong passage can go up while the right one is being read.",
+      "fuzzyLabel": "Offered reference band",
+      "fuzzyPlain": "Between this and the exact band, a reference is offered to you flagged as uncertain. Below it, the guess is discarded rather than shown.",
+      "fuzzyConsequence": "Lower this and the system will act on less certainty: the panel fills with weak guesses, and a panel full of noise is a panel you stop reading — which is worse than missing one reference."
+    },
+    "plan": {
+      "legend": "Following the plan",
+      "anchorLabel": "Anchor match threshold",
+      "anchorPlain": "How closely what was said must match a cue’s anchor phrase before the plan pointer moves to it. Deliberately stricter than the scripture bands.",
+      "anchorConsequence": "Lower this and the system will act on less certainty: the follower jumps on a loose resemblance, which is how a service ends up three slides ahead of the preacher.",
+      "gapLabel": "Minimum gap between auto-fires",
+      "gapPlain": "The floor between two automatic fires, in milliseconds. It is also the window you have to veto one.",
+      "gapConsequence": "Lower this and the system will act faster than you can stop it: a burst of transcript can fire three cues in a second and the congregation watches the slides flicker past."
+    },
+    "overrides": {
+      "title": "Per-cue overrides",
+      "hint": "Cues in the open plan that set their own rules. These are authored in the plan editor and saved in the plan file — this list is here so you can see them all in one place.",
+      "empty": "No cue in this plan overrides the service default.",
+      "listLabel": "Cues with their own rules",
+      "inherits": "Uses the service default threshold.",
+      "threshold": "Auto-fire threshold {{value}}",
+      "confirmAlways": "Always asks first. This cue can never fire on its own, whatever the mode.",
+      "looseWarning": "Looser than the service default — this cue will act on less certainty than the rest of the service."
     }
   }
 }

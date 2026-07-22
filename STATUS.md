@@ -689,3 +689,90 @@ The fallbacks are proven against the model of the failure, not the failure itsel
 ### Remaining delta
 
 Phase 10.
+
+---
+
+## Cycle 10 — Phase 10: Polish, packaging, e2e — COMPLETE (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` **1,925 tests / 65 files** ·
+`electron-vite build` succeeds · **8/8 Playwright e2e tests pass against the real app** ·
+`i18n-audit` exits 0 · **a Windows installer is produced: `release/0.1.0/Verger-0.1.0-x64-setup.exe`,
+93 MB**.
+
+### Delta closed
+
+- **Foot pedal / Stream Deck + remap UI** — persistence and remapping over the existing keyboard
+  path, no native HID dependency, because both device classes enumerate as keyboard HID. Capture
+  records whatever code the pedal sends. `isSafeBinding()` is enforced on save, so a destructive
+  action can never be remapped onto a tap.
+- **Weekly templates and confidence tuning** — sliders seeded from the real constants, each
+  explaining the consequence of lowering it.
+- **i18n completion** — an audit script that finds missing, unused and divergent keys, a
+  pseudo-locale, and tests asserting EN/KO key parity and matching interpolation placeholders.
+- **Packaging** — electron-builder NSIS installer, plus `NOTICE.md` (249 KB) generated from the
+  production dependency tree, and an updater that will not install during a service.
+- **Playwright e2e** — 8 tests driving the real built Electron app.
+- **Docs** — `GETTING_STARTED.md`, `RUNBOOK.md`, a rewritten `README.md`, and a finalised
+  `HUMAN_TASKS.md` grouped by what each item unblocks.
+
+### The single most valuable e2e assertion
+
+Test 4 — *"a lower third fired in the control window appears in the overlay page"* — opens the
+overlay URL in a second page and checks the DOM after firing from the control UI. That is the
+whole renderer → IPC → overlay server → browser-source path proven end to end, in the real app.
+It is the one thing this machine can genuinely prove about the product, and it now passes.
+
+### Two more instances of the recurring wiring bug — the fifth and sixth
+
+Both were **reported honestly by the agents that wrote them**, which is why they were fixed:
+
+- **`ShortcutSettings` was unreachable.** Built, 64 tests passing, and never rendered — not even
+  in the Vite bundle graph. `App.tsx` still passed a hardcoded binding list. Now the app owns the
+  binding state and feeds both the keyboard hook and the settings screen.
+- **The scripture resolver was never connected.** `registerIpc` hard-coded `scripture: null`, so
+  `cueResolveScripture` answered NOT_CONFIGURED *even with `ESV_API_KEY` set* — a detected
+  reference was offered with no text and nothing said why. Now defaulted via
+  `getScriptureResolver()`, with `scripture: null` still available to disable it explicitly.
+
+The Phase 9 wiring test did not catch either: one is renderer-side, and the other looked like a
+legitimately-optional dependency. The lesson generalises — **"optional dependency" and
+"unconnected wire" are indistinguishable from inside a unit test.**
+
+### Two tests caught my own mistakes during integration
+
+- The **e2e** failed on `toHaveCount(11)` after I added a 12th tab. Correct behaviour; updated to
+  12 with a comment explaining the brittleness is deliberate.
+- The **i18n audit** failed on `app.section.shortcuts`, missing from both locales — I had added
+  the tab and not its strings. Added (`Shortcuts` / `단축키`), audit now exits 0.
+
+### FINAL STATE
+
+All ten prompts complete. 1,925 unit tests, 8 e2e tests, both typechecks clean, a working
+installer, and every phase pushed to `github.com/kimbolt1109/rhema_v3`.
+
+### What has never been verified — read this before trusting anything
+
+This build has **never connected to a real OBS, YouTube, or Deepgram**, because none exists on
+this machine and none was obtainable. Specifically unproven:
+
+- **No camera has ever been switched, no stream started, no recording made.** All OBS behaviour is
+  covered against a hand-written mock.
+- **No YouTube broadcast has been created.** OAuth and the API are mock-tested with zero network.
+- **No real speech has been transcribed.** The local faster-whisper sidecar genuinely runs
+  (model loads in 0.8 s, inference 0.12 s, CUDA visible) but has only ever been fed synthesised
+  tones. Deepgram has never been contacted.
+- **No real `.pptx` has been converted** — LibreOffice cannot be installed here.
+- **No overlay has been composited over live video** in an OBS Browser Source; the page has been
+  fetched and driven, not broadcast.
+- **The installer is unsigned** — no code-signing certificate exists, so Windows SmartScreen will
+  warn.
+- **No foot pedal or Stream Deck has been attached.** That they work is an inference from both
+  being keyboard-HID, plus a test proving capture records an arbitrary key code.
+
+The failure-mode work in Phase 9 is proven against *models* of each failure, not the failures
+themselves. `HUMAN_TASKS.md` lists the verification still owed, in the order a real operator
+would need it.
+
+## Cycle 10 — COMPLETE
+
+Blueprint achieved across all ten prompts. Awaiting human review and a real-environment dry run.

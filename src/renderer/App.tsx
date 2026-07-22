@@ -27,12 +27,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { ActionId, DEFAULT_KEY_BINDINGS } from '@shared/actions'
+import { ActionId } from '@shared/actions'
+import type { KeyBinding } from '@shared/actions'
 import type { AppVersions } from '@shared/ipc'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { TrustDial } from './components/TrustDial'
 import { createActionDispatcher } from './input/ActionDispatcher'
+import { loadBindings } from './input/bindings'
 import { useKeyboardActions } from './input/useKeyboardActions'
 import { AsrSettings } from './screens/AsrSettings'
 import { HotPhraseEditor } from './screens/HotPhraseEditor'
@@ -44,6 +46,7 @@ import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { PlanEditor } from './screens/PlanEditor'
+import { ShortcutSettings } from './screens/ShortcutSettings'
 import { StatusDashboard, StatusStrip } from './screens/StatusDashboard'
 import { TranscriptPanel } from './screens/TranscriptPanel'
 import { useAsrStore } from './store/asrStore'
@@ -82,6 +85,7 @@ const SECTIONS = [
   { id: 'goLiveSettings', labelKey: 'app.section.goLiveSettings' },
   { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
   { id: 'asrSettings', labelKey: 'app.section.asrSettings' },
+  { id: 'shortcuts', labelKey: 'app.section.shortcuts' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -316,7 +320,13 @@ function AutomationSection(): React.JSX.Element {
 }
 
 /** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
-function SectionView({ section }: { section: SectionId }): React.JSX.Element {
+function SectionView({
+  section,
+  onBindingsChange
+}: {
+  section: SectionId
+  onBindingsChange: (next: readonly KeyBinding[]) => void
+}): React.JSX.Element {
   switch (section) {
     case 'connection':
       return <ConnectionScreen />
@@ -340,6 +350,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <CameraSettings />
     case 'asrSettings':
       return <AsrSettings />
+    case 'shortcuts':
+      return <ShortcutSettings onChange={onBindingsChange} />
   }
 }
 
@@ -366,19 +378,6 @@ function TitleBar(): React.JSX.Element {
   )
 }
 
-/**
- * The two suggestion keys, and deliberately only those two.
- *
- * `DEFAULT_KEY_BINDINGS` also carries SPACE (advance / PANIC-hold), ESC, the camera digits and the
- * rest. Those belong to handlers that do not exist yet, and binding a key whose action nothing
- * listens for would swallow the keypress and teach the operator that the key is broken. Y and N
- * have a handler — the suggestion panel registers them — so they are wired and the others wait for
- * the phase that owns them.
- */
-const SUGGESTION_KEY_BINDINGS = DEFAULT_KEY_BINDINGS.filter(
-  (binding) => binding.action === ActionId.confirm || binding.action === ActionId.dismiss,
-)
-
 export function App(): React.JSX.Element {
   const { t } = useTranslation()
   useDocumentLanguage()
@@ -394,7 +393,22 @@ export function App(): React.JSX.Element {
   // One dispatcher for the session. Created here rather than inside the panel so a pedal or a
   // Stream Deck added in Phase 10 has a single object to bind against.
   const dispatcher = useMemo(() => createActionDispatcher(), [])
-  useKeyboardActions({ dispatcher, bindings: SUGGESTION_KEY_BINDINGS })
+
+  // The operator's remapped keymap, loaded once and held here so it feeds BOTH the live keyboard
+  // handler and the settings screen. Loading it into a screen that nothing renders is how the
+  // remap UI would have shipped inert.
+  const [bindings, setBindings] = useState<readonly KeyBinding[]>(() => loadBindings().bindings)
+
+  // Only the actions that actually have a handler are handed to the keyboard hook. Binding a key
+  // nothing listens for would swallow the press and teach the operator that the key is broken.
+  const activeBindings = useMemo(
+    () =>
+      bindings.filter(
+        (binding) => binding.action === ActionId.confirm || binding.action === ActionId.dismiss
+      ),
+    [bindings]
+  )
+  useKeyboardActions({ dispatcher, bindings: activeBindings })
 
   return (
     <ErrorBoundary>
@@ -420,7 +434,9 @@ export function App(): React.JSX.Element {
               {/* Unmounted rather than merely hidden: the Overlay panel owns IPC subscriptions,
                   and a hidden-but-live panel would double every listener for no benefit. The
                   subsystem light keeps its own subscription via `useOverlaySubsystem`. */}
-              {entry.id === section ? <SectionView section={entry.id} /> : null}
+              {entry.id === section ? (
+                <SectionView section={entry.id} onBindingsChange={setBindings} />
+              ) : null}
             </div>
           ))}
         </main>

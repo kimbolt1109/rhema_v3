@@ -162,6 +162,12 @@ vi.mock('@main/asr', () => ({
 vi.mock('@main/cue', () => ({
   getCueEngine: () => {
     throw new Error('the cue engine singleton is unavailable under vitest')
+  },
+  // Throws like the other singletons. `registerIpc` now DEFAULTS the scripture resolver instead
+  // of hard-coding `null` (so `cueResolveScripture` works in production), and it catches a
+  // failure here and degrades to no resolver — which is exactly what these tests then assert.
+  getScriptureResolver: () => {
+    throw new Error('the scripture resolver singleton is unavailable under vitest')
   }
 }))
 
