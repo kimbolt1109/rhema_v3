@@ -39,14 +39,18 @@ import type { GoLiveState } from '@shared/golive'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
+  DeckImportProgress,
+  DeckImporterStatus,
   IpcEventValue,
   OverlayServerInfo,
+  PlanState,
   Unsubscribe,
   VergerApi
 } from '@shared/ipc'
 import type { LogRecord } from '@shared/log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
+import type { ServicePlan } from '@shared/plan'
 import type { Result } from '@shared/result'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
@@ -210,6 +214,59 @@ const api: VergerApi = {
     end: (): Promise<Result<GoLiveState>> => ipcRenderer.invoke(IpcChannel.goLiveEnd),
     onState: (callback: (state: GoLiveState) => void): Unsubscribe =>
       subscribe<GoLiveState>(IpcEvent.goLiveState, callback)
+  },
+
+  /**
+   * The Service Plan (BLUEPRINT.md §7).
+   *
+   * Read this group as the **manual** slide/media driver first and the automation seam second.
+   * `advance()` and `back()` take no argument and `fireCue` takes only an id: an operator holding
+   * SPACE can drive an entire service through these three methods with no ASR, no cue engine and
+   * no network. Phase 8's plan-follower will move the same pointer through the same channels —
+   * it gets no privileged path of its own, which is what makes "a manual move always wins"
+   * implementable rather than aspirational.
+   *
+   * Three shapes here are load-bearing:
+   *
+   *  - **Every method resolves with a whole `PlanState`** — plan, position, path, dirty flag and
+   *    the last-fired cue in one snapshot. A control window that reloads mid-service recovers
+   *    with one `getState()`, exactly as the overlay, camera and go-live panels do, and `onState`
+   *    pushes the same snapshot after every change rather than a per-cue delta.
+   *  - **`open`, `save` and `importDeck` take an *optional* path.** Omitting it is the normal
+   *    case: the main process opens the native file dialog, because a renderer that could only
+   *    act on paths it already knew would have no way to reach a file the operator has not
+   *    previously named. A cancelled dialog resolves with the unchanged state and `ok: true` —
+   *    backing out of a file picker is not an error and must never raise a toast.
+   *  - **A path sent from here is a *request*, not an instruction.** The renderer is the
+   *    less-trusted side; `src/main/ipc/register.ts` validates any supplied path (absolute,
+   *    expected extension, really a file) before the plan service is allowed to touch it.
+   *
+   * `onImportProgress` exists because converting a deck is slow enough that a frozen-looking
+   * window is a real failure mode. It is a progress feed only — `DeckImportProgress` carries a
+   * stage, two counters and a message, and has no field for slide content. Imported slides are
+   * opaque images end to end (Standing Rule 4); no slide text crosses this bridge because there
+   * is no type here that could carry it.
+   */
+  plan: {
+    getState: (): Promise<Result<PlanState>> => ipcRenderer.invoke(IpcChannel.planGet),
+    set: (plan: ServicePlan): Promise<Result<PlanState>> =>
+      ipcRenderer.invoke(IpcChannel.planSet, plan),
+    open: (options: { path?: string }): Promise<Result<PlanState>> =>
+      ipcRenderer.invoke(IpcChannel.planOpen, options),
+    save: (options: { path?: string }): Promise<Result<PlanState>> =>
+      ipcRenderer.invoke(IpcChannel.planSave, options),
+    importDeck: (options: { path?: string }): Promise<Result<PlanState>> =>
+      ipcRenderer.invoke(IpcChannel.planImportDeck, options),
+    fireCue: (options: { cueId: string }): Promise<Result<PlanState>> =>
+      ipcRenderer.invoke(IpcChannel.planFireCue, options),
+    advance: (): Promise<Result<PlanState>> => ipcRenderer.invoke(IpcChannel.planAdvance),
+    back: (): Promise<Result<PlanState>> => ipcRenderer.invoke(IpcChannel.planBack),
+    getImporterStatus: (): Promise<Result<DeckImporterStatus>> =>
+      ipcRenderer.invoke(IpcChannel.planGetImporterStatus),
+    onState: (callback: (state: PlanState) => void): Unsubscribe =>
+      subscribe<PlanState>(IpcEvent.planState, callback),
+    onImportProgress: (callback: (progress: DeckImportProgress) => void): Unsubscribe =>
+      subscribe<DeckImportProgress>(IpcEvent.planImportProgress, callback)
   },
 
   config: {

@@ -12,6 +12,9 @@
  * Standing Rule 4: no verse text is authored here. Scripture `text` is a placeholder.
  */
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,7 +23,7 @@ import { WebSocket } from 'ws'
 
 import { createNullLogger } from '@main/logging/logger'
 import type { OverlayServerInfo } from '@shared/ipc'
-import { LOOPBACK_ADDRESS, OVERLAY_SOCKET_PATH, WILDCARD_ADDRESS } from '@shared/net'
+import { LOOPBACK_ADDRESS, OVERLAY_SOCKET_PATH, WILDCARD_ADDRESS, overlayAssetUrl } from '@shared/net'
 import { emptyOverlayState } from '@shared/overlay'
 import type { OverlayCommand, OverlayServerMessage, OverlayState } from '@shared/overlay'
 import { ErrorCode } from '@shared/result'
@@ -608,6 +611,68 @@ describe('OverlayServer — client count', () => {
     expect(html).toContain('lower-third')
     expect(html).toContain('scripture')
     expect(html).toContain('slide')
+  })
+
+  it('SERVES PLAN SLIDE IMAGES over HTTP from /assets', async () => {
+    // Regression. Slide assets were handed to the overlay as `file://` URLs. Chromium — and an
+    // OBS Browser Source is Chromium — refuses `file:` subresources inside an `http:` document,
+    // and the overlay page's CSP is `img-src 'self' data:`, which rejects them too. The result
+    // was that every imported slide silently failed to appear on the congregation screen while
+    // every unit test passed.
+    //
+    // Serving the plan's asset folder from the SAME origin fixes both constraints at once.
+    const assetDir = await mkdtemp(join(tmpdir(), 'verger-assets-'))
+    // A one-pixel PNG; the bytes only need to survive the round trip.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    )
+    await writeFile(join(assetDir, 'slide-001.png'), png)
+
+    const server = makeServer({ staticDir: OVERLAY_SOURCE_DIR })
+    await server.start()
+    server.setAssetRoot(assetDir)
+
+    const { port } = server.getInfo()
+    const response = await fetch(overlayAssetUrl('slide-001.png', LOOPBACK_ADDRESS, port))
+
+    expect(response.status).toBe(200)
+    expect(Buffer.from(await response.arrayBuffer()).equals(png)).toBe(true)
+
+    await rm(assetDir, { recursive: true, force: true })
+  })
+
+  it('404s the asset route when no plan is open, rather than serving a stale folder', async () => {
+    const server = makeServer({ staticDir: OVERLAY_SOURCE_DIR })
+    await server.start()
+    const { port } = server.getInfo()
+
+    const response = await fetch(overlayAssetUrl('slide-001.png', LOOPBACK_ADDRESS, port))
+
+    expect(response.status).toBe(404)
+  })
+
+  it('refuses to serve an asset outside the plan folder', async () => {
+    // The asset folder holds files extracted from an untrusted .pptx. A traversal out of it
+    // would turn the overlay server into an arbitrary-file-read endpoint on loopback.
+    const assetDir = await mkdtemp(join(tmpdir(), 'verger-assets-'))
+    const secretDir = await mkdtemp(join(tmpdir(), 'verger-secret-'))
+    await writeFile(join(secretDir, 'secret.txt'), 'NOT FOR THE CONGREGATION')
+
+    const server = makeServer({ staticDir: OVERLAY_SOURCE_DIR })
+    await server.start()
+    server.setAssetRoot(assetDir)
+    const { port } = server.getInfo()
+
+    for (const attempt of ['../', '..%2f', '%2e%2e%2f']) {
+      const response = await fetch(
+        `http://${LOOPBACK_ADDRESS}:${port}/assets/${attempt}${'secret.txt'}`
+      )
+      expect(response.status, `traversal "${attempt}" must not be served`).not.toBe(200)
+    }
+
+    await rm(assetDir, { recursive: true, force: true })
+    await rm(secretDir, { recursive: true, force: true })
   })
 
   it('serves the overlay page assets alongside it', async () => {

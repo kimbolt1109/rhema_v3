@@ -65,15 +65,31 @@
  *  - **The app must never wedge the broadcast.** No handler and no disposal path in this file
  *    stops an OBS output. `goLiveEnd` is the only thing here that ends anything, and it runs
  *    only when the operator invokes it.
+ *  - **Standing Rule 4 / BLUEPRINT.md §7 — no copyrighted text crosses this boundary.**
+ *    `servicePlanArg` does not pass a parsed plan through; it *rebuilds* every cue payload from
+ *    `cuePayloadSchemas`, so fields that no payload type declares — a `text` smuggled onto a
+ *    scripture cue, slide text pasted into a slide payload — are dropped at the process boundary
+ *    rather than persisted into a plan file. `DeckImportProgress` has no content field either, so
+ *    the import feed cannot carry slide text even while a deck is being converted.
+ *  - **Untrusted file paths are checked before the plan service sees them.** The renderer is the
+ *    less-trusted side, and `planOpen`/`planSave`/`planImportDeck` name files on disk. A supplied
+ *    path must be absolute, carry the expected extension and (for a read) actually be a file;
+ *    with no path at all the *main* process opens the native dialog, because the trusted side is
+ *    the side that should be choosing. A cancelled dialog is an ordinary `Ok` carrying the
+ *    unchanged state — never an exception, never an error toast.
  */
 
-import { BrowserWindow, app, ipcMain } from 'electron'
+import { statSync } from 'node:fs'
+import { extname, isAbsolute, resolve as resolvePath } from 'node:path'
+
+import { BrowserWindow, app, dialog, ipcMain } from 'electron'
 import { z } from 'zod'
 
 import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getGoLiveService } from '@main/golive'
 import { getOverlayServer } from '@main/overlay'
+import { getPlanService } from '@main/plan'
 import { getSecretsStore } from '@main/secrets/secrets'
 import { getYouTubeService } from '@main/youtube'
 import { CAMERA_SLOTS, cameraConfigSchema } from '@shared/camera'
@@ -84,11 +100,14 @@ import type { GoLiveState } from '@shared/golive'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
+  DeckImportProgress,
+  DeckImporterStatus,
   IpcChannelValue,
   IpcEventValue,
   IpcRequest,
   IpcResponse,
   OverlayServerInfo,
+  PlanState,
   Unsubscribe
 } from '@shared/ipc'
 import type { LogRecord } from '@shared/log'
@@ -97,6 +116,8 @@ import { LOOPBACK_ADDRESS, OVERLAY_SERVER_PORT, overlayPageUrl } from '@shared/n
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import { overlayCommandSchema } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
+import { cuePayloadSchemas, servicePlanSchema } from '@shared/plan'
+import type { Cue, CueOptions, CuePayload, CueTrigger, CueType, ServicePlan } from '@shared/plan'
 import { err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
 import { broadcastTemplateSchema, createBroadcastSchema } from '@shared/youtube'
@@ -299,6 +320,108 @@ export interface GoLiveServiceLike {
   onState(listener: (state: GoLiveState) => void): Unsubscribe | void
 }
 
+/**
+ * The minimum this module needs from the plan service (`src/main/plan`).
+ *
+ * The Service Plan is BLUEPRINT.md §7, and this seam is deliberately shaped around the **manual**
+ * driver rather than around the automation that Phase 8 will layer on top:
+ *
+ *  - `advance()` and `back()` take no argument and `fireCue()` takes only an id, so an operator
+ *    holding SPACE can drive an entire service through three methods with no ASR, no cue engine
+ *    and no network. That path is the fallback everything else degrades to, so it is the path
+ *    this boundary is built for.
+ *  - Every verb resolves with a whole `PlanState` — plan, position, file path, dirty flag and the
+ *    last-fired cue — for the same reason the overlay and go-live seams do: a boolean cannot say
+ *    "the plan advanced but the asset was missing", and a control window that reloads mid-service
+ *    must recover from one snapshot.
+ *  - `open`/`save`/`importDeck` take a path that has **already been chosen and validated** by the
+ *    handlers below. The service is never handed a raw renderer string, and it is never asked to
+ *    open a dialog: dialogs belong to the process that owns the windows.
+ *
+ * Note what the seam cannot express: there is no method that returns slide *text*. A deck import
+ * yields slide cues whose payloads name image assets, and `DeckImportProgress` carries a stage and
+ * two counters. Standing Rule 4 holds here because no type crossing this boundary has a field for
+ * slide or verse content.
+ */
+export interface PlanServiceLike {
+  /** The current snapshot. Cheap and never fails — the panel renders this on every change. */
+  getState(): ClientCall<PlanState>
+  /** Replace the authored plan wholesale (the editor's save path). */
+  setPlan(plan: ServicePlan): ClientCall<PlanState>
+  /** Load a plan from an absolute, already-validated path. */
+  open(path: string): ClientCall<PlanState>
+  /** Write the plan to an absolute, already-validated path. */
+  save(path: string): ClientCall<PlanState>
+  /** Convert a .pptx at an absolute, already-validated path into one slide cue per slide. */
+  importDeck(path: string): ClientCall<PlanState>
+  /** Fire one cue by id. The operator's out-of-order override. */
+  fireCue(cueId: string): ClientCall<PlanState>
+  /** Fire the next cue. The SPACE key. */
+  advance(): ClientCall<PlanState>
+  /** Step back one cue. The one-tap undo for a mis-fire. */
+  back(): ClientCall<PlanState>
+  /** Whether a deck converter exists on this machine, and what to install if not. */
+  getImporterStatus(): ClientCall<DeckImporterStatus>
+  onState(listener: (state: PlanState) => void): Unsubscribe | void
+  onImportProgress(listener: (progress: DeckImportProgress) => void): Unsubscribe | void
+}
+
+/** The slice of Electron's `OpenDialogReturnValue` used here. */
+export interface OpenDialogResultLike {
+  readonly canceled: boolean
+  readonly filePaths: readonly string[]
+}
+
+/** The slice of Electron's `SaveDialogReturnValue` used here. */
+export interface SaveDialogResultLike {
+  readonly canceled: boolean
+  readonly filePath?: string
+}
+
+/**
+ * The slice of Electron's `dialog` module used by the three path-bearing plan channels.
+ *
+ * Structural for the usual reason — no test in this repo may need an Electron runtime, and a
+ * modal dialog is the one thing a headless test can never dismiss — but also because it makes the
+ * *cancelled* branch trivially reachable in a test, and cancelling is the common case rather than
+ * the exceptional one. An operator who opens the file picker and changes their mind must get a
+ * plain unchanged state back, not an error toast in the middle of a service.
+ *
+ * Option fields are the subset Verger sets, typed loosely enough that Electron's real `dialog`
+ * satisfies this interface without a cast.
+ */
+export interface DialogLike {
+  showOpenDialog(options: {
+    title?: string
+    defaultPath?: string
+    buttonLabel?: string
+    filters?: { name: string; extensions: string[] }[]
+    properties?: 'openFile'[]
+  }): Awaitable<OpenDialogResultLike>
+  showSaveDialog(options: {
+    title?: string
+    defaultPath?: string
+    buttonLabel?: string
+    filters?: { name: string; extensions: string[] }[]
+  }): Awaitable<SaveDialogResultLike>
+}
+
+/** What is at a path right now. `missing` also covers "we could not tell". */
+export type PathKind = 'file' | 'directory' | 'missing'
+
+/**
+ * The filesystem probe used to check a path before the plan service sees it.
+ *
+ * A path is the one argument on this boundary that names something *outside* the process, so it
+ * gets checked against the real filesystem rather than only against a regex. Injectable so the
+ * tests can prove the acceptance rules — absolute, right extension, really a file — without
+ * writing to disk.
+ */
+export interface FilePathProbeLike {
+  /** Never throws. A permission error, a broken symlink and an absent file all read `missing`. */
+  kind(path: string): PathKind
+}
+
 /** The slice of `SecretsStore` used by `obsSetConfig`. */
 export interface SecretsStoreLike {
   setSecret(key: string, value: string): Result<void>
@@ -364,10 +487,33 @@ export interface RegisterIpcDeps {
    * Pass `null` to say "there is no go-live service" explicitly and skip the default lookup.
    */
   readonly goLive?: GoLiveServiceLike | null
+  /**
+   * The Service Plan service (BLUEPRINT.md §7).
+   *
+   * Optional for exactly the reason the other four are: `src/main/index.ts` calls
+   * `registerIpc({ config, logger, obs, overlay, youtube, goLive })` and a required eighth key
+   * would fail to compile. Defaults to the process-wide singleton from `@main/plan`; if that
+   * cannot be resolved the nine plan handlers degrade to `Err(NOT_CONNECTED)` and the rest of
+   * Verger is untouched — cameras still switch, overlays still fire, OBS still streams
+   * (Standing Rule 5).
+   *
+   * Pass `null` to say "there is no plan service" explicitly and skip the default lookup.
+   */
+  readonly plan?: PlanServiceLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
   readonly ipcMain?: IpcMainLike
+  /**
+   * The native file dialogs used by `planOpen` / `planSave` / `planImportDeck`.
+   *
+   * Defaults to Electron's `dialog`. Pass `null` to say there is no dialog at all — the three
+   * channels then require an explicit path and report `NOT_CONFIGURED` without one, rather than
+   * hanging on a modal that will never appear.
+   */
+  readonly dialog?: DialogLike | null
+  /** Defaults to a `node:fs` probe. Injectable so path acceptance is testable without disk. */
+  readonly filePaths?: FilePathProbeLike
   /** Defaults to the process-wide `safeStorage`-backed store. */
   readonly secrets?: SecretsStoreLike
   /** Monotonic-enough clock for the log rate limiter. Injectable for deterministic tests. */
@@ -490,6 +636,177 @@ const logRecordArg: ArgValidator<LogRecord> = (raw) => {
   }
   const { ts, level, scope, msg, data } = parsed.data
   return ok(data === undefined ? { ts, level, scope, msg } : { ts, level, scope, msg, data })
+}
+
+// ---------------------------------------------------------------------------
+// Plan argument validation (BLUEPRINT.md §7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Rebuild one cue payload from the type-specific schema's *output*.
+ *
+ * This function is the Standing Rule 4 enforcement point on the IPC boundary, and it has to
+ * exist as written rather than as a straight `servicePlanSchema.parse`. `cueSchema` types
+ * `payload` as `z.record(z.string(), z.unknown())` and checks it against `cuePayloadSchemas` in a
+ * `superRefine` — a refinement *validates* and hands the original object back, so unknown keys
+ * survive a plain parse. A hand-edited or maliciously-authored plan carrying
+ * `payload.text` on a scripture cue would therefore pass validation and reach the service with
+ * the verse text still attached.
+ *
+ * Rebuilding field by field from `cuePayloadSchemas[type]`'s parsed output makes that
+ * unrepresentable: `ScripturePayload` has `reference` and `translation` and no third field, so
+ * there is nothing here to copy verse text into. A plan carrying scripture text does not fail
+ * validation — it simply arrives without it.
+ *
+ * The field-by-field rebuild is also what satisfies `exactOptionalPropertyTypes`: zod emits
+ * `sourceSlide?: number | undefined`, which is not assignable to `SlidePayload`'s
+ * `sourceSlide?: number`. Omitting the key is the only assignable form, and it is also the form
+ * that round-trips cleanly through `JSON.stringify`.
+ *
+ * @returns the rebuilt payload, or `null` when it does not match its cue type.
+ */
+function rebuildCuePayload(type: CueType, raw: Record<string, unknown>): CuePayload | null {
+  switch (type) {
+    case 'scene': {
+      const parsed = cuePayloadSchemas.scene.safeParse(raw)
+      return parsed.success ? { scene: parsed.data.scene } : null
+    }
+    case 'slide': {
+      const parsed = cuePayloadSchemas.slide.safeParse(raw)
+      if (!parsed.success) return null
+      const { asset, sourceSlide } = parsed.data
+      return sourceSlide === undefined ? { asset } : { asset, sourceSlide }
+    }
+    case 'media': {
+      const parsed = cuePayloadSchemas.media.safeParse(raw)
+      if (!parsed.success) return null
+      const { asset, obsInputName } = parsed.data
+      return obsInputName === undefined ? { asset } : { asset, obsInputName }
+    }
+    case 'scripture': {
+      const parsed = cuePayloadSchemas.scripture.safeParse(raw)
+      if (!parsed.success) return null
+      // A reference and a translation code. There is deliberately no third field to copy — see
+      // the note above, and `ScripturePayload` in `@shared/plan`.
+      const { reference, translation } = parsed.data
+      return translation === undefined ? { reference } : { reference, translation }
+    }
+    case 'lowerthird': {
+      const parsed = cuePayloadSchemas.lowerthird.safeParse(raw)
+      if (!parsed.success) return null
+      const { line1, line2, template } = parsed.data
+      const rebuilt: { line1: string; line2?: string; template?: string } = { line1 }
+      if (line2 !== undefined) rebuilt.line2 = line2
+      if (template !== undefined) rebuilt.template = template
+      return rebuilt
+    }
+    case 'action': {
+      const parsed = cuePayloadSchemas.action.safeParse(raw)
+      return parsed.success ? { action: parsed.data.action } : null
+    }
+  }
+}
+
+/** Rebuild one cue. `null` when its payload does not match its type. */
+function rebuildCue(raw: z.output<typeof servicePlanSchema>['cues'][number]): Cue | null {
+  const payload = rebuildCuePayload(raw.type, raw.payload)
+  if (payload === null) return null
+
+  const trigger: CueTrigger =
+    raw.trigger.text === undefined
+      ? { mode: raw.trigger.mode }
+      : { mode: raw.trigger.mode, text: raw.trigger.text }
+
+  const cue: {
+    id: string
+    type: CueType
+    label: string
+    trigger: CueTrigger
+    payload: CuePayload
+    options?: CueOptions
+    note?: string
+  } = { id: raw.id, type: raw.type, label: raw.label, trigger, payload }
+
+  if (raw.options !== undefined) {
+    const options: { autoFireThreshold?: number; confirmAlways?: boolean } = {}
+    if (raw.options.autoFireThreshold !== undefined) {
+      options.autoFireThreshold = raw.options.autoFireThreshold
+    }
+    if (raw.options.confirmAlways !== undefined) options.confirmAlways = raw.options.confirmAlways
+    cue.options = options
+  }
+  if (raw.note !== undefined) cue.note = raw.note
+
+  return cue
+}
+
+/**
+ * `planSet`'s payload: a whole authored plan.
+ *
+ * Validated at the process boundary as well as inside the plan service, for the same reason
+ * `overlayCommandArg` is: this is the trust boundary and the service is not. A plan reaching the
+ * service is a plan that gets written to disk and driven at a congregation, so it is parsed with
+ * `servicePlanSchema` and then *rebuilt* rather than passed through — see `rebuildCuePayload`.
+ */
+const servicePlanArg: ArgValidator<ServicePlan> = (raw) => {
+  const parsed = servicePlanSchema.safeParse(raw)
+  if (!parsed.success) {
+    return err('INVALID_ARG', 'the service plan failed validation', describeIssues(parsed.error))
+  }
+
+  const cues: Cue[] = []
+  for (const rawCue of parsed.data.cues) {
+    const cue = rebuildCue(rawCue)
+    // Unreachable in practice — `cueSchema`'s superRefine has already matched every payload to
+    // its type — but a `null` here must never silently drop a cue out of a service order.
+    if (cue === null) {
+      return err(
+        'INVALID_ARG',
+        'the service plan failed validation',
+        `cues.${cues.length}.payload: does not match cue type "${rawCue.type}"`
+      )
+    }
+    cues.push(cue)
+  }
+
+  return ok({
+    schemaVersion: 1,
+    service: parsed.data.service,
+    defaultMode: parsed.data.defaultMode,
+    cues,
+    assetDir: parsed.data.assetDir
+  })
+}
+
+/**
+ * `planFireCue`'s envelope.
+ *
+ * Bounded at 64 characters to match `cueSchema`'s own `id` bound: an id that could not appear in
+ * a valid plan is refused here rather than turned into a fruitless lookup in the service.
+ */
+const fireCueArg: ArgValidator<{ cueId: string }> = zodArg(
+  z.object({ cueId: z.string().min(1).max(64) })
+)
+
+const optionalPathSchema = z
+  .object({ path: z.string().min(1).max(1024).optional() })
+  .optional()
+
+/**
+ * The envelope for `planOpen` / `planSave` / `planImportDeck`.
+ *
+ * The path is *optional* and omitting it is the normal case — the handler then opens a native
+ * dialog. Rebuilt rather than passed through, so `{ path: undefined }` never reaches a request
+ * type declaring `path?: string` under `exactOptionalPropertyTypes`, and so "the renderer sent no
+ * path" and "the renderer sent an undefined path" collapse into the same, single branch.
+ */
+const optionalPathArg: ArgValidator<{ path?: string }> = (raw) => {
+  const parsed = optionalPathSchema.safeParse(raw)
+  if (!parsed.success) {
+    return err('INVALID_ARG', 'the request payload failed validation', describeIssues(parsed.error))
+  }
+  const path = parsed.data?.path
+  return ok(path === undefined ? {} : { path })
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +954,106 @@ function goLiveUnavailable(): Result<never> {
   )
 }
 
+/**
+ * The answer every plan channel gives when there is no plan service object at all.
+ *
+ * `NOT_CONNECTED` with a detail that tells the operator the rest of the app still works. A plan
+ * service that failed to construct costs the operator their authored cue list — it does not cost
+ * them the service. Cameras still switch, lower-thirds still fire, and slides can still be driven
+ * from OBS by hand (Standing Rule 5).
+ */
+function planUnavailable(): Result<never> {
+  return err(
+    'NOT_CONNECTED',
+    'the service plan is not available',
+    'cameras, overlays and OBS are unaffected; drive slides from OBS directly'
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Plan file paths
+//
+// A path is the only argument on this boundary that names something outside the process, and
+// `planOpen` / `planImportDeck` hand it to code that reads the file. A .pptx in particular is an
+// arbitrary file a stranger may have produced. Two separate defences apply, and this is the first
+// of them: a path is accepted here only if it is absolute, carries the expected extension, and
+// really is a file. The second lives in the importer, which parses in a bounded child process.
+//
+// `..` needs no special handling: `path.resolve` collapses it, and the collapsed result still has
+// to pass the extension and stat checks. There is no allow-listed root to escape from — the
+// operator is expected to be able to open a plan from anywhere on their own machine — so the
+// property being defended is "this is a real file of the right kind", not "this is inside a jail".
+// ---------------------------------------------------------------------------
+
+/** Extensions `planOpen` / `planSave` accept. Service plans are plain JSON on disk. */
+const PLAN_FILE_EXTENSIONS: readonly string[] = ['.json']
+
+/** Extensions `planImportDeck` accepts. */
+const DECK_FILE_EXTENSIONS: readonly string[] = ['.pptx']
+
+/** The real filesystem. Every failure mode — missing, unreadable, broken link — reads `missing`. */
+const nodeFilePathProbe: FilePathProbeLike = {
+  kind: (target) => {
+    try {
+      const stats = statSync(target)
+      if (stats.isDirectory()) return 'directory'
+      return stats.isFile() ? 'file' : 'missing'
+    } catch {
+      return 'missing'
+    }
+  }
+}
+
+/** How a chosen path will be used, which decides whether it has to exist yet. */
+type PathUse = 'read' | 'write'
+
+/**
+ * Accept a path, or explain why not.
+ *
+ * The error `detail` names the *expected* extensions and never the rejected path. Paths are not
+ * secrets, but they routinely contain a person's name, and this file's rule is that a validation
+ * failure never echoes the value that caused it.
+ */
+function acceptPath(
+  candidate: string,
+  extensions: readonly string[],
+  use: PathUse,
+  probe: FilePathProbeLike
+): Result<string> {
+  const expected = extensions.join(', ')
+
+  // A NUL truncates the path inside libuv, so what gets opened is not what was checked.
+  if (candidate.includes('\0')) {
+    return err('INVALID_ARG', 'the file path is not usable', 'the path contains a NUL byte')
+  }
+  if (!isAbsolute(candidate)) {
+    return err('INVALID_ARG', 'the file path is not usable', 'the path must be absolute')
+  }
+
+  const resolved = resolvePath(candidate)
+  if (!extensions.includes(extname(resolved).toLowerCase())) {
+    return err('INVALID_ARG', 'the file path is not usable', `expected one of: ${expected}`)
+  }
+
+  const kind = probe.kind(resolved)
+  if (use === 'read') {
+    // `NOT_FOUND` rather than `INVALID_ARG`: the request was well-formed and the file simply is
+    // not there. The renderer renders those two differently — one is "pick another file", the
+    // other is "this build has a bug".
+    if (kind !== 'file') {
+      return err('NOT_FOUND', 'the file does not exist', `expected one of: ${expected}`)
+    }
+    return ok(resolved)
+  }
+
+  // Writing: the file need not exist yet, but a directory sitting on the target path would make
+  // the write fail deep inside the service instead of here.
+  if (kind === 'directory') {
+    return err('INVALID_ARG', 'the file path is not usable', 'the path is a directory')
+  }
+  return ok(resolved)
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -754,6 +1171,30 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       return null
     }
   }
+
+  /**
+   * The Service Plan service, or `null` if there is not one. Resolved once, like the other four.
+   *
+   * Separate from every other lookup, so a plan service that fails to construct leaves the
+   * cameras, the overlay and the go-live orchestrator fully working — and vice versa. That
+   * independence is the difference between "we lost the cue list" and "we lost the service".
+   */
+  const plan: PlanServiceLike | null = resolvePlanService()
+
+  function resolvePlanService(): PlanServiceLike | null {
+    if (deps.plan !== undefined) return deps.plan
+    try {
+      return getPlanService()
+    } catch (cause) {
+      log.warn('the plan service is unavailable; plan IPC will report NOT_CONNECTED', { cause })
+      return null
+    }
+  }
+
+  /** Native file dialogs. `null` means "no dialog here" — the plan channels then need a path. */
+  const dialogs: DialogLike | null = deps.dialog === undefined ? (dialog ?? null) : deps.dialog
+
+  const filePaths: FilePathProbeLike = deps.filePaths ?? nodeFilePathProbe
 
   // --- sender validation ---------------------------------------------------
 
@@ -920,6 +1361,32 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       )
     } catch (cause) {
       log.error('failed to subscribe to the go-live service', { cause })
+    }
+  }
+
+  // The plan fan-out. `PlanState` is a whole snapshot — the authored plan, the position, the file
+  // path, the dirty flag and the last-fired cue — pushed on every change, so a second window (or a
+  // control window that reloaded mid-service) is always one snapshot away from correct rather than
+  // replaying a delta log.
+  //
+  // The import-progress feed is separate because it is *not* state: converting a deck can take
+  // minutes and the window must not look frozen while it does. `DeckImportProgress` carries a
+  // stage, two counters and a message — and no slide content, because imported slides are opaque
+  // images (Standing Rule 4) and there is no field on this event that could carry their text.
+  if (plan !== null) {
+    try {
+      registerUnsubscribe(
+        plan.onState((state) => {
+          broadcast(IpcEvent.planState, state)
+        })
+      )
+      registerUnsubscribe(
+        plan.onImportProgress((progress) => {
+          broadcast(IpcEvent.planImportProgress, progress)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the plan service', { cause })
     }
   }
 
@@ -1161,6 +1628,203 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return result
   })
 
+  // --- service plan (BLUEPRINT.md §7) --------------------------------------
+  //
+  // Nine channels, and the thing to notice about them is how ordinary they are. `planAdvance`
+  // takes no argument, `planBack` takes no argument, `planFireCue` takes an id: an operator
+  // holding SPACE drives an entire service through this block with no ASR, no cue engine and no
+  // network attached. Phase 8's plan-follower will move the same pointer through the same three
+  // channels rather than acquiring a private path of its own, which is what makes "a manual move
+  // always wins" (Standing Rule 1) an implementable claim.
+  //
+  // The three path-bearing channels are the trust-sensitive ones. A `.pptx` is an arbitrary file
+  // a stranger may have produced — zip bombs, `../../etc/passwd` in the entry names, ten-thousand
+  // slide decks are all real — so the path is accepted only after `acceptPath` has checked it,
+  // and the parsing itself happens behind the plan service's own sandbox. This layer's job is to
+  // make sure the service is never handed a raw renderer string.
+  //
+  // And a cancelled dialog is a *normal outcome*. Opening a file picker and changing your mind is
+  // something an operator does several times a service; it resolves with the unchanged state and
+  // `ok: true`, so the renderer has nothing to turn into an error toast.
+
+  /** A chosen path, or `null` when the operator cancelled the dialog. */
+  type ChosenPath = string | null
+
+  interface PathChoice {
+    /** What the renderer asked for, if anything. Untrusted. */
+    readonly supplied: string | undefined
+    readonly use: PathUse
+    readonly extensions: readonly string[]
+    readonly title: string
+    readonly filterName: string
+  }
+
+  /** `plan.dialog.save` with no extension typed in gets the plan extension appended. */
+  function withDefaultExtension(target: string, extensions: readonly string[]): string {
+    const fallback = extensions[0]
+    if (fallback === undefined || extname(target) !== '') return target
+    return `${target}${fallback}`
+  }
+
+  /**
+   * Decide which file to act on.
+   *
+   * A path supplied by the renderer is validated; an absent one opens the native dialog, whose
+   * result is validated too. Validating the dialog's answer as well is not paranoia about the
+   * OS — it is what makes "the file must exist and end in `.pptx`" one rule with one
+   * implementation rather than two that drift.
+   */
+  async function choosePath(choice: PathChoice): Promise<Result<ChosenPath>> {
+    if (choice.supplied !== undefined) {
+      return acceptPath(choice.supplied, choice.extensions, choice.use, filePaths)
+    }
+
+    if (dialogs === null) {
+      return err(
+        'NOT_CONFIGURED',
+        'no native file dialog is available',
+        'supply an explicit file path instead'
+      )
+    }
+
+    const filters = [
+      {
+        name: choice.filterName,
+        extensions: choice.extensions.map((extension) => extension.replace(/^\./, ''))
+      }
+    ]
+
+    if (choice.use === 'read') {
+      const picked = await dialogs.showOpenDialog({
+        title: choice.title,
+        filters,
+        properties: ['openFile']
+      })
+      const first = picked.filePaths[0]
+      if (picked.canceled || first === undefined) return ok(null)
+      return acceptPath(first, choice.extensions, choice.use, filePaths)
+    }
+
+    const target = await dialogs.showSaveDialog({ title: choice.title, filters })
+    if (target.canceled || target.filePath === undefined || target.filePath.length === 0) {
+      return ok(null)
+    }
+    return acceptPath(
+      withDefaultExtension(target.filePath, choice.extensions),
+      choice.extensions,
+      choice.use,
+      filePaths
+    )
+  }
+
+  /**
+   * What a cancelled dialog resolves with: the plan exactly as it was, and `ok: true`.
+   *
+   * Never an `Err`. Backing out of a file picker is not a failure, and a service plan the
+   * operator did not change must not arrive at the renderer wearing an error code that some
+   * component turns into a red banner mid-service.
+   */
+  async function unchangedPlan(service: PlanServiceLike, what: string): Promise<Result<PlanState>> {
+    log.debug('a plan file dialog was cancelled; nothing changed', { what })
+    return resolveCall(service.getState())
+  }
+
+  safeHandle(IpcChannel.planGet, noArg, async () => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.getState())
+  })
+
+  /**
+   * Replace the authored plan.
+   *
+   * `servicePlanArg` has already parsed *and rebuilt* the plan, so what reaches the service is a
+   * plan whose every cue payload was reconstructed from its type's own schema. An invalid plan is
+   * `Err(INVALID_ARG)` and the service is never called at all — a half-written plan must not be
+   * able to replace a good one that the operator is midway through using.
+   */
+  safeHandle(IpcChannel.planSet, servicePlanArg, async (next) => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.setPlan(next))
+  })
+
+  safeHandle(IpcChannel.planOpen, optionalPathArg, async ({ path }) => {
+    if (plan === null) return planUnavailable()
+    const chosen = await choosePath({
+      supplied: path,
+      use: 'read',
+      extensions: PLAN_FILE_EXTENSIONS,
+      title: 'Open a service plan',
+      filterName: 'Service plan'
+    })
+    if (!chosen.ok) return chosen
+    if (chosen.value === null) return unchangedPlan(plan, 'open')
+    return resolveCall(plan.open(chosen.value))
+  })
+
+  safeHandle(IpcChannel.planSave, optionalPathArg, async ({ path }) => {
+    if (plan === null) return planUnavailable()
+    const chosen = await choosePath({
+      supplied: path,
+      use: 'write',
+      extensions: PLAN_FILE_EXTENSIONS,
+      title: 'Save the service plan',
+      filterName: 'Service plan'
+    })
+    if (!chosen.ok) return chosen
+    if (chosen.value === null) return unchangedPlan(plan, 'save')
+    return resolveCall(plan.save(chosen.value))
+  })
+
+  /**
+   * Import a PowerPoint deck as one slide cue per slide.
+   *
+   * The file is untrusted in the strongest sense on this boundary — a `.pptx` is a ZIP an
+   * arbitrary stranger produced, and the failure modes (zip bombs, `..` in entry names, ten
+   * thousand slides) are ordinary rather than exotic. Two things follow, and only the first is
+   * this file's job: the path is accepted only after `acceptPath` has proven it is an absolute,
+   * existing `.pptx`, and the archive itself is parsed behind the plan service's bounded
+   * importer, never here.
+   *
+   * On a machine with no converter — this build machine has none — the importer reports
+   * `available: false` through `planGetImporterStatus` and the UI disables the button with an
+   * explanation. That is Standing Rule 5, and it is why this handler does not pre-check anything:
+   * an import attempted anyway returns the importer's own explanation rather than a generic
+   * refusal invented here.
+   */
+  safeHandle(IpcChannel.planImportDeck, optionalPathArg, async ({ path }) => {
+    if (plan === null) return planUnavailable()
+    const chosen = await choosePath({
+      supplied: path,
+      use: 'read',
+      extensions: DECK_FILE_EXTENSIONS,
+      title: 'Import a PowerPoint deck',
+      filterName: 'PowerPoint deck'
+    })
+    if (!chosen.ok) return chosen
+    if (chosen.value === null) return unchangedPlan(plan, 'import-deck')
+    return resolveCall(plan.importDeck(chosen.value))
+  })
+
+  safeHandle(IpcChannel.planFireCue, fireCueArg, async ({ cueId }) => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.fireCue(cueId))
+  })
+
+  safeHandle(IpcChannel.planAdvance, noArg, async () => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.advance())
+  })
+
+  safeHandle(IpcChannel.planBack, noArg, async () => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.back())
+  })
+
+  safeHandle(IpcChannel.planGetImporterStatus, noArg, async () => {
+    if (plan === null) return planUnavailable()
+    return resolveCall(plan.getImporterStatus())
+  })
+
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
 
   safeHandle(IpcChannel.logWrite, logRecordArg, async (record) => {
@@ -1272,7 +1936,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     overlay: overlay === null ? 'unavailable' : 'attached',
     camera: camera === null ? 'unavailable' : 'attached',
     youtube: youtube === null ? 'unavailable' : 'attached',
-    goLive: goLive === null ? 'unavailable' : 'attached'
+    goLive: goLive === null ? 'unavailable' : 'attached',
+    plan: plan === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -1291,7 +1956,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     registeredChannels.length = 0
 
     // Covers the OBS status/scene-list subscriptions, the overlay state/info ones, the camera
-    // state one, the YouTube status one and the go-live state one alike: all of them were pushed
+    // state one, the YouTube status one, the go-live state one and the plan state/import-progress
+    // pair alike: all of them were pushed
     // onto `unsubscribers` by `registerUnsubscribe`, so no subsystem is left holding a listener
     // into a disposed bridge — a YouTube poll that outlived the bridge would keep pushing at dead
     // windows for the rest of the process, and the go-live poller is a health loop that runs at

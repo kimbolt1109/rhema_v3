@@ -8,6 +8,8 @@
  * nothing in it is exercised.
  */
 
+import { resolve as resolvePath } from 'node:path'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CAMERA_SLOTS, findBinding, isBindingUsable, slotForScene } from '@shared/camera'
@@ -17,13 +19,15 @@ import { GO_LIVE_STEPS, emptyObsOutputState, idleGoLiveState } from '@shared/gol
 import type { GoLiveState, GoLiveStepStatus, StepState } from '@shared/golive'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type { IpcChannelValue } from '@shared/ipc'
-import type { OverlayServerInfo } from '@shared/ipc'
+import type { DeckImportProgress, DeckImporterStatus, OverlayServerInfo, PlanState } from '@shared/ipc'
 import type { Logger } from '@shared/log'
 import { LOOPBACK_ADDRESS, OVERLAY_SERVER_PORT, overlayPageUrl } from '@shared/net'
 import { initialObsStatus } from '@shared/obs'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
+import { initialPlanPosition } from '@shared/plan'
+import type { ServicePlan } from '@shared/plan'
 import { err, ok } from '@shared/result'
 import type { Result } from '@shared/result'
 import { defaultBroadcastTemplate } from '@shared/youtube'
@@ -33,6 +37,18 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp/verger-test' },
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: () => undefined, removeHandler: () => undefined },
+  /**
+   * A dialog that would hang forever if anything reached it.
+   *
+   * `registerIpc` defaults `deps.dialog` to Electron's real `dialog`, and a modal file picker is
+   * the one thing a headless test can never dismiss. Every test below injects its own fake, so
+   * these two rejecting stubs are a tripwire: if a future edit ever lets the default through, the
+   * test fails loudly instead of timing out with no explanation.
+   */
+  dialog: {
+    showOpenDialog: () => Promise.reject(new Error('no native dialog under vitest')),
+    showSaveDialog: () => Promise.reject(new Error('no native dialog under vitest'))
+  },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: () => Buffer.from(''),
@@ -94,15 +110,35 @@ vi.mock('@main/golive', () => ({
   }
 }))
 
+/**
+ * The plan singleton, mocked to throw like the other four.
+ *
+ * The real one owns a file handle, a deck importer and a child process, and would happily reach
+ * the filesystem. Making it throw keeps every test in this file hermetic and lets one test assert
+ * what the nine plan channels answer when the service could not be constructed at all — which
+ * must be "the rest of Verger is unaffected", never a crash.
+ */
+vi.mock('@main/plan', () => ({
+  getPlanService: () => {
+    throw new Error('the plan service singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
   type CameraServiceLike,
+  type DialogLike,
+  type FilePathProbeLike,
   type GoLiveServiceLike,
   type IpcInvokeEventLike,
   type IpcMainLike,
   type ObsClientLike,
+  type OpenDialogResultLike,
   type OverlayServerLike,
+  type PathKind,
+  type PlanServiceLike,
+  type SaveDialogResultLike,
   type SecretsStoreLike,
   type WebContentsLike,
   type WindowLike,
@@ -696,6 +732,200 @@ function createFakeGoLiveService(): FakeGoLiveService {
   return service
 }
 
+// ---------------------------------------------------------------------------
+// Service plan fakes (BLUEPRINT.md §7)
+//
+// Standing Rule 4 governs every fixture below. The slide cues carry asset *paths*, the labels are
+// "SLIDE 1"-style placeholders, and the one scripture cue carries a placeholder reference and no
+// text — because `ScripturePayload` has no text field to put any in. Nothing in this file is real
+// hymn lyrics, real verse text or a real sermon.
+// ---------------------------------------------------------------------------
+
+/** An absolute path built the same way `acceptPath` will resolve it, on any platform. */
+function absolutePath(...segments: string[]): string {
+  return resolvePath(...segments)
+}
+
+const PLAN_PATH = absolutePath('plans', 'sunday.json')
+const DECK_PATH = absolutePath('decks', 'sunday.pptx')
+
+const PLACEHOLDER_PLAN: ServicePlan = {
+  schemaVersion: 1,
+  service: 'PLACEHOLDER SERVICE',
+  defaultMode: 'assist',
+  cues: [
+    {
+      id: 'cue-1',
+      type: 'slide',
+      label: 'SLIDE 1',
+      trigger: { mode: 'manual' },
+      payload: { asset: 'slides/slide-001.png', sourceSlide: 1 }
+    },
+    {
+      id: 'cue-2',
+      type: 'scripture',
+      label: 'PLACEHOLDER READING',
+      trigger: { mode: 'manual' },
+      payload: { reference: 'PLACEHOLDER 1:1' }
+    }
+  ],
+  assetDir: 'assets'
+}
+
+const PLAN_STATE: PlanState = {
+  plan: PLACEHOLDER_PLAN,
+  position: initialPlanPosition(),
+  path: null,
+  dirty: false,
+  lastFired: null
+}
+
+/** What the importer reports on this build machine: no converter, and what to install. */
+const NO_IMPORTER: DeckImporterStatus = {
+  available: false,
+  backend: null,
+  executablePath: null,
+  detail: 'install LibreOffice to enable PowerPoint import'
+}
+
+interface FakePlanService extends PlanServiceLike {
+  emitState(state: PlanState): void
+  emitImportProgress(progress: DeckImportProgress): void
+  readonly stateUnsubscribed: () => number
+  readonly progressUnsubscribed: () => number
+  readonly setCalls: ServicePlan[]
+  readonly opened: string[]
+  readonly saved: string[]
+  readonly imported: string[]
+  readonly fired: string[]
+  readonly advances: () => number
+  readonly backs: () => number
+  current: PlanState
+}
+
+function createFakePlanService(): FakePlanService {
+  let stateListener: ((state: PlanState) => void) | null = null
+  let progressListener: ((progress: DeckImportProgress) => void) | null = null
+  let stateUnsubscribes = 0
+  let progressUnsubscribes = 0
+  let advanceCount = 0
+  let backCount = 0
+  const setCalls: ServicePlan[] = []
+  const opened: string[] = []
+  const saved: string[] = []
+  const imported: string[] = []
+  const fired: string[] = []
+
+  const service: FakePlanService = {
+    setCalls,
+    opened,
+    saved,
+    imported,
+    fired,
+    advances: () => advanceCount,
+    backs: () => backCount,
+    stateUnsubscribed: () => stateUnsubscribes,
+    progressUnsubscribed: () => progressUnsubscribes,
+    current: PLAN_STATE,
+
+    // A bare value rather than a `Result`, deliberately — `resolveCall` normalises both, and
+    // mixing the two shapes across this fake keeps that normalisation honest.
+    getState: () => service.current,
+    setPlan: (plan) => {
+      setCalls.push(plan)
+      service.current = { ...service.current, plan, dirty: true }
+      return ok(service.current)
+    },
+    open: (path) => {
+      opened.push(path)
+      service.current = { ...service.current, path, dirty: false }
+      return ok(service.current)
+    },
+    save: (path) => {
+      saved.push(path)
+      service.current = { ...service.current, path, dirty: false }
+      return ok(service.current)
+    },
+    importDeck: (path) => {
+      imported.push(path)
+      return ok(service.current)
+    },
+    fireCue: (cueId) => {
+      fired.push(cueId)
+      return ok(service.current)
+    },
+    advance: () => {
+      advanceCount += 1
+      return ok(service.current)
+    },
+    back: () => {
+      backCount += 1
+      return ok(service.current)
+    },
+    getImporterStatus: () => ok(NO_IMPORTER),
+    onState: (next) => {
+      stateListener = next
+      return () => {
+        stateUnsubscribes += 1
+        stateListener = null
+      }
+    },
+    onImportProgress: (next) => {
+      progressListener = next
+      return () => {
+        progressUnsubscribes += 1
+        progressListener = null
+      }
+    },
+
+    emitState: (state) => {
+      service.current = state
+      stateListener?.(state)
+    },
+    emitImportProgress: (progress) => {
+      progressListener?.(progress)
+    }
+  }
+  return service
+}
+
+interface FakeDialog extends DialogLike {
+  openResult: OpenDialogResultLike
+  saveResult: SaveDialogResultLike
+  readonly openCalls: Array<{ filters?: { name: string; extensions: string[] }[] }>
+  readonly saveCalls: Array<{ filters?: { name: string; extensions: string[] }[] }>
+}
+
+function createFakeDialog(): FakeDialog {
+  const openCalls: FakeDialog['openCalls'] = []
+  const saveCalls: FakeDialog['saveCalls'] = []
+  const dialogs: FakeDialog = {
+    openResult: { canceled: false, filePaths: [PLAN_PATH] },
+    saveResult: { canceled: false, filePath: PLAN_PATH },
+    openCalls,
+    saveCalls,
+    showOpenDialog: (options) => {
+      openCalls.push(options)
+      return dialogs.openResult
+    },
+    showSaveDialog: (options) => {
+      saveCalls.push(options)
+      return dialogs.saveResult
+    }
+  }
+  return dialogs
+}
+
+interface FakeFilePaths extends FilePathProbeLike {
+  readonly entries: Map<string, PathKind>
+}
+
+/** Everything named here is a file; everything else is missing. No disk is touched. */
+function createFakeFilePaths(files: readonly string[] = [PLAN_PATH, DECK_PATH]): FakeFilePaths {
+  const entries = new Map<string, PathKind>(files.map((file) => [file, 'file'] as const))
+  return { entries, kind: (target) => entries.get(target) ?? 'missing' }
+}
+
 /**
  * Anything that smells like a credential.
  *
@@ -761,6 +991,9 @@ interface Harness {
   readonly camera: FakeCameraService
   readonly youtube: FakeYouTubeService
   readonly goLive: FakeGoLiveService
+  readonly plan: FakePlanService
+  readonly dialog: FakeDialog
+  readonly filePaths: FakeFilePaths
   readonly windows: FakeWindow[]
   readonly secrets: SecretsStoreLike & { readonly writes: Array<[string, string]> }
   readonly dispose: () => void
@@ -775,6 +1008,9 @@ function setup(options: { windows?: number } = {}): Harness {
   const camera = createFakeCameraService()
   const youtube = createFakeYouTubeService()
   const goLive = createFakeGoLiveService()
+  const plan = createFakePlanService()
+  const dialog = createFakeDialog()
+  const filePaths = createFakeFilePaths()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
     createFakeWindow()
   )
@@ -795,6 +1031,9 @@ function setup(options: { windows?: number } = {}): Harness {
     camera,
     youtube,
     goLive,
+    plan,
+    dialog,
+    filePaths,
     config: CONFIG,
     logger: createSilentLogger(),
     ipcMain: ipc,
@@ -811,6 +1050,9 @@ function setup(options: { windows?: number } = {}): Harness {
     camera,
     youtube,
     goLive,
+    plan,
+    dialog,
+    filePaths,
     windows,
     secrets,
     dispose,
@@ -1062,7 +1304,7 @@ describe('registerIpc', () => {
     ).toBe('INVALID_ARG')
   })
 
-  it('dispose removes every handler and unsubscribes from all five subsystems', () => {
+  it('dispose removes every handler and unsubscribes from every subsystem', () => {
     expect(harness.ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
 
     harness.dispose()
@@ -1084,6 +1326,11 @@ describe('registerIpc', () => {
     // its fastest precisely while a service is on air, so a listener surviving dispose would keep
     // pushing at dead windows for the rest of the process.
     expect(harness.goLive.stateUnsubscribed()).toBe(1)
+    // And both plan subscriptions. The import-progress one in particular is backed by a child
+    // process that can outlive the window that started it, so a listener surviving dispose would
+    // keep pushing conversion progress at a dead bridge for the rest of the process.
+    expect(harness.plan.stateUnsubscribed()).toBe(1)
+    expect(harness.plan.progressUnsubscribed()).toBe(1)
 
     // Disposal unsubscribed and did nothing else. It did not end the broadcast, and it did not
     // stop the recording — a hot reload or a window close is not a reason to take a
@@ -1099,6 +1346,8 @@ describe('registerIpc', () => {
     expect(harness.camera.stateUnsubscribed()).toBe(1)
     expect(harness.youtube.statusUnsubscribed()).toBe(1)
     expect(harness.goLive.stateUnsubscribed()).toBe(1)
+    expect(harness.plan.stateUnsubscribed()).toBe(1)
+    expect(harness.plan.progressUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -1112,6 +1361,13 @@ describe('registerIpc', () => {
     })
     harness.youtube.emitStatus(SIGNED_IN_STATUS)
     harness.goLive.emitState(LIVE_GO_LIVE_STATE)
+    harness.plan.emitState(PLAN_STATE)
+    harness.plan.emitImportProgress({
+      stage: 'done',
+      slidesDone: 1,
+      slidesTotal: 1,
+      message: null
+    })
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -2385,6 +2641,615 @@ describe('registerIpc', () => {
       // manufactured an overlay command or moved a camera behind the operator's back.
       expect(harness.overlay.sent).toEqual([SHOW_LOWER_THIRD])
       expect(harness.camera.selected).toEqual(['cam2'])
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Service plan (BLUEPRINT.md §7)
+  //
+  // The claim these tests defend is that the plan is a *manual* driver first: nine channels, of
+  // which `advance`, `back` and `fireCue` are enough to run a whole service with no ASR, no cue
+  // engine and no network. The rest defend the two trust boundaries this phase adds — a plan
+  // arriving from the renderer, and a file path naming something on disk.
+  // -------------------------------------------------------------------------
+
+  describe('plan channels', () => {
+    const PLAN_CHANNELS: readonly IpcChannelValue[] = [
+      IpcChannel.planGet,
+      IpcChannel.planSet,
+      IpcChannel.planOpen,
+      IpcChannel.planSave,
+      IpcChannel.planImportDeck,
+      IpcChannel.planFireCue,
+      IpcChannel.planAdvance,
+      IpcChannel.planBack,
+      IpcChannel.planGetImporterStatus
+    ]
+
+    it('registers all nine plan channels', () => {
+      // Named explicitly as well as covered by the registry sweep above, which passes vacuously
+      // if a channel is ever dropped from `IpcChannel`.
+      for (const channel of PLAN_CHANNELS) {
+        expect(harness.ipc.handlers.has(channel)).toBe(true)
+      }
+    })
+
+    it('returns the whole snapshot from planGet', async () => {
+      const result = (await harness.invoke(IpcChannel.planGet)) as Result<PlanState>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual(PLAN_STATE)
+    })
+
+    it('drives a service manually with advance, back and fireCue', async () => {
+      // The whole manual path, and note what none of these calls needed: a transcript, a cue
+      // engine, a network, or an argument beyond a cue id.
+      expect(((await harness.invoke(IpcChannel.planAdvance)) as Result<unknown>).ok).toBe(true)
+      expect(((await harness.invoke(IpcChannel.planAdvance)) as Result<unknown>).ok).toBe(true)
+      expect(((await harness.invoke(IpcChannel.planBack)) as Result<unknown>).ok).toBe(true)
+      expect(
+        (
+          (await harness.invoke(IpcChannel.planFireCue, { cueId: 'cue-2' })) as Result<unknown>
+        ).ok
+      ).toBe(true)
+
+      expect(harness.plan.advances()).toBe(2)
+      expect(harness.plan.backs()).toBe(1)
+      expect(harness.plan.fired).toEqual(['cue-2'])
+    })
+
+    it('refuses a payload on the three no-argument plan channels', async () => {
+      for (const channel of [
+        IpcChannel.planGet,
+        IpcChannel.planAdvance,
+        IpcChannel.planBack,
+        IpcChannel.planGetImporterStatus
+      ]) {
+        expect(expectErr(await harness.invoke(channel, { evil: true })).code).toBe('INVALID_ARG')
+      }
+      expect(harness.plan.advances()).toBe(0)
+      expect(harness.plan.backs()).toBe(0)
+    })
+
+    it('rejects a malformed cue id and never calls the service', async () => {
+      for (const arg of [undefined, {}, { cueId: '' }, { cueId: 'x'.repeat(65) }, { cueId: 7 }]) {
+        expect(expectErr(await harness.invoke(IpcChannel.planFireCue, arg)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+      expect(harness.plan.fired).toHaveLength(0)
+    })
+
+    it('stores a well-formed plan', async () => {
+      const result = (await harness.invoke(
+        IpcChannel.planSet,
+        PLACEHOLDER_PLAN
+      )) as Result<PlanState>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(harness.plan.setCalls).toHaveLength(1)
+      expect(harness.plan.setCalls[0]).toEqual(PLACEHOLDER_PLAN)
+      expect(result.value.plan).toEqual(PLACEHOLDER_PLAN)
+    })
+
+    /**
+     * The required negative case: an invalid plan is refused at the boundary, and the service is
+     * never told about it. A half-written plan must not be able to replace the good one the
+     * operator is midway through using.
+     */
+    it('rejects an invalid plan with Err(INVALID_ARG) and never calls the service', async () => {
+      const invalid: unknown[] = [
+        // Not an object at all.
+        'nope',
+        undefined,
+        // Wrong schema version — this is the field that lets a future format change be detected.
+        { ...PLACEHOLDER_PLAN, schemaVersion: 2 },
+        // An unknown cue type.
+        {
+          ...PLACEHOLDER_PLAN,
+          cues: [
+            {
+              id: 'cue-x',
+              type: 'launch-missiles',
+              label: 'PLACEHOLDER',
+              trigger: { mode: 'manual' },
+              payload: {}
+            }
+          ]
+        },
+        // A payload that does not match its cue type: a slide cue with no asset.
+        {
+          ...PLACEHOLDER_PLAN,
+          cues: [
+            {
+              id: 'cue-x',
+              type: 'slide',
+              label: 'SLIDE 1',
+              trigger: { mode: 'manual' },
+              payload: { reference: 'PLACEHOLDER 1:1' }
+            }
+          ]
+        },
+        // A non-manual trigger with nothing to match against — a cue that could never fire.
+        {
+          ...PLACEHOLDER_PLAN,
+          cues: [
+            {
+              id: 'cue-x',
+              type: 'action',
+              label: 'PLACEHOLDER',
+              trigger: { mode: 'anchor' },
+              payload: { action: 'clearAll' }
+            }
+          ]
+        },
+        // An unknown service mode.
+        { ...PLACEHOLDER_PLAN, defaultMode: 'autopilot' }
+      ]
+
+      for (const plan of invalid) {
+        expect(expectErr(await harness.invoke(IpcChannel.planSet, plan)).code).toBe('INVALID_ARG')
+      }
+
+      expect(harness.plan.setCalls).toHaveLength(0)
+    })
+
+    /**
+     * Standing Rule 4, enforced at the process boundary rather than trusted upstream.
+     *
+     * `cueSchema` validates the payload in a `superRefine`, and a refinement hands the *original*
+     * object back — so a plain parse would let an extra `text` key ride along on a scripture cue
+     * all the way into the saved plan file. `servicePlanArg` rebuilds each payload from its
+     * type's own schema instead, and `ScripturePayload` has no third field to copy into.
+     *
+     * The fixture below is an obvious placeholder, never real verse text.
+     */
+    it('strips a smuggled text field off a scripture payload rather than persisting it', async () => {
+      const smuggled = {
+        ...PLACEHOLDER_PLAN,
+        cues: [
+          {
+            id: 'cue-x',
+            type: 'scripture',
+            label: 'PLACEHOLDER READING',
+            trigger: { mode: 'manual' },
+            payload: {
+              reference: 'PLACEHOLDER 1:1',
+              translation: 'KJV',
+              text: 'PLACEHOLDER TEXT THAT MUST NOT SURVIVE THE BOUNDARY'
+            }
+          }
+        ]
+      }
+
+      const result = (await harness.invoke(IpcChannel.planSet, smuggled)) as Result<PlanState>
+      expect(result.ok).toBe(true)
+
+      const stored = harness.plan.setCalls[0]
+      expect(stored).toBeDefined()
+      if (stored === undefined) return
+      const payload = stored.cues[0]?.payload as Record<string, unknown> | undefined
+      expect(payload).toEqual({ reference: 'PLACEHOLDER 1:1', translation: 'KJV' })
+      expect(payload && 'text' in payload).toBe(false)
+      expect(JSON.stringify(stored)).not.toContain('MUST NOT SURVIVE')
+    })
+
+    it('drops payload keys no cue type declares, on every cue type', async () => {
+      const noisy = {
+        ...PLACEHOLDER_PLAN,
+        cues: [
+          {
+            id: 'cue-slide',
+            type: 'slide',
+            label: 'SLIDE 1',
+            trigger: { mode: 'manual' },
+            payload: { asset: 'slides/slide-001.png', caption: 'PLACEHOLDER CAPTION' }
+          },
+          {
+            id: 'cue-lower',
+            type: 'lowerthird',
+            label: 'PLACEHOLDER NAME',
+            trigger: { mode: 'manual' },
+            payload: { line1: 'PLACEHOLDER ONE', biography: 'PLACEHOLDER BIOGRAPHY' }
+          }
+        ]
+      }
+
+      expect(((await harness.invoke(IpcChannel.planSet, noisy)) as Result<unknown>).ok).toBe(true)
+      const stored = harness.plan.setCalls[0]
+      expect(stored).toBeDefined()
+      if (stored === undefined) return
+      expect(stored.cues[0]?.payload).toEqual({ asset: 'slides/slide-001.png' })
+      expect(stored.cues[1]?.payload).toEqual({ line1: 'PLACEHOLDER ONE' })
+    })
+
+    // --- file dialogs ------------------------------------------------------
+
+    it('opens a plan through the native dialog when no path is supplied', async () => {
+      const result = (await harness.invoke(IpcChannel.planOpen, {})) as Result<PlanState>
+
+      expect(result.ok).toBe(true)
+      expect(harness.dialog.openCalls).toHaveLength(1)
+      // Filtered to the plan extension, so the picker cannot be used as a general file browser.
+      expect(harness.dialog.openCalls[0]?.filters).toEqual([
+        { name: 'Service plan', extensions: ['json'] }
+      ])
+      expect(harness.plan.opened).toEqual([PLAN_PATH])
+    })
+
+    /**
+     * The required cancellation case.
+     *
+     * An operator opens the picker and changes their mind several times a service. That resolves
+     * with the unchanged state and `ok: true` — there is nothing here for the renderer to turn
+     * into a red banner, and the service was never called.
+     */
+    it('treats a cancelled dialog as an ordinary unchanged state, not an error', async () => {
+      harness.dialog.openResult = { canceled: true, filePaths: [] }
+      harness.dialog.saveResult = { canceled: true }
+
+      for (const channel of [
+        IpcChannel.planOpen,
+        IpcChannel.planSave,
+        IpcChannel.planImportDeck
+      ]) {
+        const result = (await harness.invoke(channel, {})) as Result<PlanState>
+        expect(result.ok).toBe(true)
+        if (!result.ok) return
+        expect(result.value).toEqual(PLAN_STATE)
+      }
+
+      expect(harness.plan.opened).toHaveLength(0)
+      expect(harness.plan.saved).toHaveLength(0)
+      expect(harness.plan.imported).toHaveLength(0)
+    })
+
+    it('treats an empty dialog answer as a cancellation rather than a path', async () => {
+      // Some platforms report a cancelled save as `canceled: false` with an empty path.
+      harness.dialog.openResult = { canceled: false, filePaths: [] }
+      harness.dialog.saveResult = { canceled: false, filePath: '' }
+
+      expect(((await harness.invoke(IpcChannel.planOpen, {})) as Result<unknown>).ok).toBe(true)
+      expect(((await harness.invoke(IpcChannel.planSave, {})) as Result<unknown>).ok).toBe(true)
+      expect(harness.plan.opened).toHaveLength(0)
+      expect(harness.plan.saved).toHaveLength(0)
+    })
+
+    it('appends the plan extension when the save dialog returns a bare name', async () => {
+      const bare = absolutePath('plans', 'fresh')
+      harness.dialog.saveResult = { canceled: false, filePath: bare }
+
+      const result = (await harness.invoke(IpcChannel.planSave, {})) as Result<PlanState>
+      expect(result.ok).toBe(true)
+      expect(harness.plan.saved).toEqual([absolutePath('plans', 'fresh.json')])
+    })
+
+    it('filters the deck dialog to .pptx', async () => {
+      harness.dialog.openResult = { canceled: false, filePaths: [DECK_PATH] }
+
+      const result = (await harness.invoke(IpcChannel.planImportDeck, {})) as Result<PlanState>
+      expect(result.ok).toBe(true)
+      expect(harness.dialog.openCalls[0]?.filters).toEqual([
+        { name: 'PowerPoint deck', extensions: ['pptx'] }
+      ])
+      expect(harness.plan.imported).toEqual([DECK_PATH])
+    })
+
+    it('reports NOT_CONFIGURED rather than hanging when there is no dialog at all', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const plan = createFakePlanService()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan,
+        dialog: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.planOpen)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      const error = expectErr(await handler(eventFrom(window), {}))
+      expect(error.code).toBe('NOT_CONFIGURED')
+      expect(plan.opened).toHaveLength(0)
+    })
+
+    // --- untrusted paths ---------------------------------------------------
+
+    /**
+     * A path supplied by the renderer is a request, not an instruction.
+     *
+     * The renderer is the less-trusted side of this boundary and these three channels name files
+     * on disk — a `.pptx` in particular is an arbitrary archive a stranger may have produced. A
+     * supplied path is accepted only if it is absolute, carries the expected extension and (for a
+     * read) really is a file; nothing else reaches the service.
+     */
+    it('refuses a renderer-supplied path that is not an absolute file of the right kind', async () => {
+      const cases: ReadonlyArray<{ path: string; code: string }> = [
+        // Relative, and the classic traversal shape with it.
+        { path: 'sunday.json', code: 'INVALID_ARG' },
+        { path: '../../secrets/sunday.json', code: 'INVALID_ARG' },
+        // Absolute, but the wrong kind of file entirely.
+        { path: absolutePath('etc', 'passwd'), code: 'INVALID_ARG' },
+        { path: absolutePath('plans', 'sunday.exe'), code: 'INVALID_ARG' },
+        // A NUL truncates the path inside libuv, so what gets opened is not what was checked.
+        { path: `${PLAN_PATH} .png`, code: 'INVALID_ARG' },
+        // Right shape, but there is nothing there.
+        { path: absolutePath('plans', 'missing.json'), code: 'NOT_FOUND' }
+      ]
+
+      for (const { path, code } of cases) {
+        const error = expectErr(await harness.invoke(IpcChannel.planOpen, { path }))
+        expect(error.code).toBe(code)
+        // The rejected path is never echoed back — paths routinely carry a person's name.
+        expect(JSON.stringify(error)).not.toContain('passwd')
+      }
+
+      expect(harness.plan.opened).toHaveLength(0)
+      // And no dialog was opened either: a supplied path is answered on its own merits.
+      expect(harness.dialog.openCalls).toHaveLength(0)
+    })
+
+    it('accepts a supplied path that checks out, and normalises it', async () => {
+      const result = (await harness.invoke(IpcChannel.planOpen, {
+        path: absolutePath('plans', 'unused', '..', 'sunday.json')
+      })) as Result<PlanState>
+
+      expect(result.ok).toBe(true)
+      expect(harness.plan.opened).toEqual([PLAN_PATH])
+      expect(harness.dialog.openCalls).toHaveLength(0)
+    })
+
+    it('will not import a plan file as a deck, nor open a deck as a plan', async () => {
+      expect(
+        expectErr(await harness.invoke(IpcChannel.planImportDeck, { path: PLAN_PATH })).code
+      ).toBe('INVALID_ARG')
+      expect(
+        expectErr(await harness.invoke(IpcChannel.planOpen, { path: DECK_PATH })).code
+      ).toBe('INVALID_ARG')
+
+      expect(harness.plan.imported).toHaveLength(0)
+      expect(harness.plan.opened).toHaveLength(0)
+    })
+
+    it('lets a save name a file that does not exist yet, but not a directory', async () => {
+      const fresh = absolutePath('plans', 'next-sunday.json')
+      const saved = (await harness.invoke(IpcChannel.planSave, { path: fresh })) as Result<
+        PlanState
+      >
+      expect(saved.ok).toBe(true)
+      expect(harness.plan.saved).toEqual([fresh])
+
+      const directory = absolutePath('plans', 'archive.json')
+      harness.filePaths.entries.set(directory, 'directory')
+      expect(expectErr(await harness.invoke(IpcChannel.planSave, { path: directory })).code).toBe(
+        'INVALID_ARG'
+      )
+      expect(harness.plan.saved).toHaveLength(1)
+    })
+
+    it('rejects a malformed path envelope', async () => {
+      for (const arg of ['nope', { path: 7 }, { path: '' }, { path: 'x'.repeat(1025) }]) {
+        expect(expectErr(await harness.invoke(IpcChannel.planOpen, arg)).code).toBe('INVALID_ARG')
+      }
+      expect(harness.plan.opened).toHaveLength(0)
+    })
+
+    // --- fan-out -----------------------------------------------------------
+
+    it('fans plan state and import progress out to every window', () => {
+      const many = setup({ windows: 3 })
+      const advanced: PlanState = {
+        ...PLAN_STATE,
+        position: { index: 0, firedCueIds: ['cue-1'] },
+        dirty: true
+      }
+      const progress: DeckImportProgress = {
+        stage: 'converting',
+        slidesDone: 3,
+        slidesTotal: 12,
+        message: null
+      }
+
+      many.plan.emitState(advanced)
+      many.plan.emitImportProgress(progress)
+
+      for (const window of many.windows) {
+        expect(window.sent).toEqual([
+          { channel: IpcEvent.planState, payload: advanced },
+          { channel: IpcEvent.planImportProgress, payload: progress }
+        ])
+      }
+    })
+
+    it('never carries slide or verse text on the progress feed', () => {
+      const many = setup({ windows: 1 })
+      many.plan.emitImportProgress({
+        stage: 'writing',
+        slidesDone: 1,
+        slidesTotal: 2,
+        message: 'writing slide 1 of 2'
+      })
+
+      // Structural, not by inspection: the payload's whole key set is the four `DeckImportProgress`
+      // fields, so there is nowhere for slide content to be hiding.
+      const pushed = many.windows[0]?.sent[0]?.payload
+      expect(collectKeys(pushed).sort()).toEqual([
+        'message',
+        'slidesDone',
+        'slidesTotal',
+        'stage'
+      ])
+    })
+
+    // --- degradation (Standing Rule 5) -------------------------------------
+
+    it('reports an unavailable importer as ordinary information, not a failure', async () => {
+      // LibreOffice is not installed on this machine and cannot be. The panel's job is to render
+      // this struct and disable the button, so an absent converter is an `Ok`.
+      const result = (await harness.invoke(
+        IpcChannel.planGetImporterStatus
+      )) as Result<DeckImporterStatus>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.available).toBe(false)
+      expect(result.value.detail).toContain('LibreOffice')
+    })
+
+    it('degrades to NOT_CONNECTED when there is no plan service at all', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      const args: Partial<Record<IpcChannelValue, unknown>> = {
+        [IpcChannel.planSet]: PLACEHOLDER_PLAN,
+        [IpcChannel.planOpen]: {},
+        [IpcChannel.planSave]: {},
+        [IpcChannel.planImportDeck]: {},
+        [IpcChannel.planFireCue]: { cueId: 'cue-1' }
+      }
+
+      for (const channel of PLAN_CHANNELS) {
+        const error = expectErr(await call(channel, args[channel]))
+        expect(error.code).toBe('NOT_CONNECTED')
+        // The operator is told, in the same breath, that the rest of the app still works.
+        expect(error.detail).toContain('OBS')
+      }
+    })
+
+    it('survives a plan singleton that cannot be constructed', async () => {
+      // `plan` is omitted entirely, so `registerIpc` falls back to `getPlanService()` — which the
+      // module mock at the top of this file makes throw.
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      const handler = ipc.handlers.get(IpcChannel.planAdvance)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+      expect(expectErr(await handler(eventFrom(window), undefined)).code).toBe('NOT_CONNECTED')
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('tolerates a plan service whose subscriptions return nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: PlanServiceLike = {
+        getState: () => PLAN_STATE,
+        setPlan: () => PLAN_STATE,
+        open: () => PLAN_STATE,
+        save: () => PLAN_STATE,
+        importDeck: () => PLAN_STATE,
+        fireCue: () => PLAN_STATE,
+        advance: () => PLAN_STATE,
+        back: () => PLAN_STATE,
+        getImporterStatus: () => NO_IMPORTER,
+        onState: () => undefined,
+        onImportProgress: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('converts a throwing plan service into Err(INTERNAL) instead of rejecting', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const plan = createFakePlanService()
+      Object.assign(plan, {
+        advance: () => {
+          throw new Error('the plan service exploded')
+        }
+      })
+
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.planAdvance)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      const settled = await Promise.resolve(handler(eventFrom(window), undefined))
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      expect(expectErr(settled.value).code).toBe('INTERNAL')
+    })
+
+    it('leaves the camera and the overlay untouched', async () => {
+      expect(((await harness.invoke(IpcChannel.planAdvance)) as Result<unknown>).ok).toBe(true)
+      expect(
+        ((await harness.invoke(IpcChannel.planFireCue, { cueId: 'cue-1' })) as Result<unknown>).ok
+      ).toBe(true)
+
+      // Driving the plan through this boundary manufactured no overlay command and moved no
+      // camera. Whatever a *cue* does when it fires is the plan service's business, reached
+      // through its own seams — this layer stays out of it.
+      expect(harness.overlay.sent).toHaveLength(0)
+      expect(harness.camera.selected).toHaveLength(0)
     })
   })
 

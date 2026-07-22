@@ -20,6 +20,7 @@
       "connection": "연결",
       "camera": "카메라",
       "overlay": "오버레이",
+      "plan": "진행표",
       "goLive": "송출 시작",
       "goLiveSettings": "송출 설정",
       "cameraSetup": "카메라 설정"
@@ -494,6 +495,132 @@
       "body": "유튜브 데이터 API에는 일일 할당량이 있습니다. 송출을 시작하고 종료하는 데는 소량만 쓰이므로 하루 몇 번의 예배는 여유롭게 들어갑니다. 신경 쓰지 않아도 됩니다."
     },
     "lastError": "마지막 오류"
+  },
+
+  "plan": {
+    "title": "예배 진행표",
+    "subtitle": "예배 순서를 큐 목록으로 정리합니다. 여기 있는 큐는 모두 손으로 실행하며, 마이크도 큐 엔진도 네트워크도 필요 없습니다. 나중의 모든 자동화가 결국 이 화면으로 되돌아옵니다.",
+    "unsaved": "저장하지 않은 변경",
+    "saved": "저장됨",
+    "file": {
+      "label": "진행표 파일",
+      "untitled": "이름 없는 예배",
+      "neverSaved": "아직 파일로 저장하지 않음"
+    },
+    "actions": {
+      "open": "열기…",
+      "save": "저장",
+      "import": "덱 가져오기…",
+      "addCue": "큐 추가",
+      "advance": "다음",
+      "back": "이전"
+    },
+    "list": {
+      "label": "큐 목록 (순서대로)",
+      "heading": "큐 {{total}}개",
+      "newCueType": "추가할 큐 종류",
+      "reorderHint": "손잡이를 끌어서 순서를 바꿉니다. 손잡이에 초점을 두고 스페이스를 누른 뒤 화살표로 옮기고 다시 스페이스를 눌러도 됩니다.",
+      "empty": "아직 큐가 없습니다. 하나 추가하거나 덱을 가져오세요."
+    },
+    "row": {
+      "dragHandle": "{{label}} 순서 바꾸기",
+      "fire": "{{label}} 실행",
+      "current": "화면 표시 중",
+      "next": "다음",
+      "accessibleSummary": "{{ordinal}}번 큐, {{type}}, {{trigger}} 트리거"
+    },
+    "cueType": {
+      "scene": "장면",
+      "slide": "슬라이드",
+      "media": "미디어",
+      "scripture": "성경",
+      "lowerthird": "하단 자막",
+      "action": "동작"
+    },
+    "trigger": {
+      "label": "트리거",
+      "modeField": "실행 조건",
+      "modeHint": "기본값은 수동이며, 이번 단계에서 실제로 동작하는 것도 수동뿐입니다. 나머지는 다음 단계를 위한 설정이라 지금은 아무 일도 하지 않습니다.",
+      "textField": "일치시킬 문구",
+      "textRequired": "{{mode}} 트리거에는 일치시킬 문구가 있어야 합니다. 비워 두면 영원히 실행되지 않습니다.",
+      "manualNote": "이 큐는 직접 실행합니다. 재생 단추를 누르거나 진행표를 한 칸 넘기면 됩니다.",
+      "mode": {
+        "manual": "수동",
+        "anchor": "기준 문구",
+        "scripture": "성경 구절 인식",
+        "hotphrase": "지정 문구"
+      }
+    },
+    "payload": {
+      "scene": "OBS 장면 이름",
+      "sceneHint": "OBS에 실제로 있는 장면 이름과 정확히 같아야 합니다.",
+      "asset": "파일",
+      "slideAssetHint": "진행표의 자료 폴더 기준 경로입니다. 예: slides/slide-001.png",
+      "mediaAssetHint": "진행표의 자료 폴더 기준 경로이거나, 비워 두고 OBS 미디어 소스를 직접 제어할 수도 있습니다.",
+      "sourceSlide": "가져온 덱에서의 슬라이드 번호",
+      "obsInputName": "OBS 미디어 소스",
+      "reference": "장절",
+      "referenceHint": "예: 요한복음 3:16, 시편 23편",
+      "translation": "선호하는 역본",
+      "line1": "첫째 줄",
+      "line2": "둘째 줄",
+      "template": "템플릿",
+      "action": "동작 이름",
+      "actionHint": "앱에 정의된 동작 이름입니다. 예: overlay.clear"
+    },
+    "scriptureNote": "본문을 적는 칸은 일부러 두지 않았습니다. Verger는 장절만 저장하고, 실제 본문은 큐가 실행되는 순간 정식 출처에서 받아 옵니다. 진행표 파일에는 본문이 절대 기록되지 않습니다.",
+    "options": {
+      "title": "자동화",
+      "autoFireThreshold": "자동 실행 신뢰도",
+      "autoFireThresholdHint": "자동 모드에서 이 큐가 스스로 실행되려면 인식 결과가 이만큼 확실해야 합니다. 수동 트리거에는 영향이 없습니다.",
+      "thresholdUnset": "설정 안 함",
+      "confirmAlways": "항상 먼저 확인받기",
+      "confirmAlwaysHint": "예배 전체 모드보다 이 설정이 우선합니다. 큐는 언제나 기본값보다 안전해질 수만 있고 위험해질 수는 없습니다. 저절로 나가면 곤란한 큐에 켜 두세요."
+    },
+    "editor": {
+      "title": "큐",
+      "none": "편집할 큐를 선택하세요.",
+      "typeField": "종류",
+      "labelField": "이름",
+      "labelHint": "예배 중에 목록에서 읽게 될 이름입니다. 짧게 지으세요.",
+      "noteField": "운영자 메모",
+      "noteHint": "운영자만 봅니다. 회중 화면에는 절대 나가지 않습니다.",
+      "delete": "큐 삭제",
+      "invalid": "아직 유효하지 않아 저장되지 않습니다. 아래 표시된 항목을 확인하세요."
+    },
+    "driver": {
+      "title": "수동 진행",
+      "nowShowing": "화면 표시 중",
+      "nothingFired": "아직 실행한 큐 없음",
+      "upNext": "다음 차례",
+      "endOfPlan": "진행표 끝"
+    },
+    "importer": {
+      "title": "파워포인트 가져오기",
+      "backend": "변환기: {{backend}} — {{path}}",
+      "unavailable": {
+        "title": "파워포인트 변환기가 설치되어 있지 않아 덱 가져오기를 끕니다",
+        "noDetail": "이 컴퓨터에서 변환기를 찾지 못했습니다.",
+        "install": "무료인 LibreOffice를 설치하고 Verger를 다시 시작하세요. 슬라이드를 이미지로 바꾸는 데에만 쓰며, 슬라이드의 글자는 읽지 않습니다.",
+        "meanwhile": "그때까지도 손으로 예배를 준비할 수 있습니다. 덱을 PNG나 JPEG로 직접 내보내 진행표의 자료 폴더에 넣고, 이미지마다 슬라이드 큐를 하나씩 추가하면 됩니다."
+      },
+      "progress": {
+        "label": "가져오기 진행률",
+        "reading": "덱을 읽는 중",
+        "converting": "슬라이드를 이미지로 변환하는 중",
+        "writing": "자료 폴더에 이미지를 쓰는 중",
+        "done": "가져오기 완료",
+        "failed": "가져오기 실패",
+        "counted": "{{total}}장 중 {{done}}장",
+        "countedUnknown": "지금까지 {{done}}장"
+      }
+    },
+    "bridgeUnavailable": {
+      "body": "Verger의 내부 연결이 올라오지 않아 진행표를 저장·열기·실행할 수 없습니다. 지금 보이는 큐는 읽기 전용입니다. 앱을 다시 시작하면 대개 해결됩니다."
+    },
+    "error": {
+      "title": "마지막 진행표 작업이 거부되었습니다"
+    }
   },
 
   "holdButton": {

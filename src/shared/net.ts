@@ -41,6 +41,19 @@ export const OVERLAY_PAGE_PATH = '/overlay'
 /** The WebSocket upgrade path on the same server. */
 export const OVERLAY_SOCKET_PATH = '/ws'
 
+/**
+ * Where the current Service Plan's asset folder (imported slide images, media) is served.
+ *
+ * Slides MUST be served over HTTP rather than referenced as `file:` URLs. The overlay page is
+ * loaded from `http://127.0.0.1:7320/overlay`, and Chromium — including an OBS Browser Source —
+ * refuses to load `file:` subresources from an `http:` document. On top of that the overlay's CSP
+ * is `img-src 'self' data:`, which a `file:` URL also fails. A slide referenced as `file:` simply
+ * never appears on the congregation screen, silently.
+ *
+ * Serving assets from this same origin satisfies both constraints at once.
+ */
+export const OVERLAY_ASSET_PATH = '/assets'
+
 /** Build the `http://host:port` origin for the overlay server. */
 export function overlayOrigin(
   host: string = LOOPBACK_ADDRESS,
@@ -60,6 +73,26 @@ export function overlayPageUrl(
   port: number = OVERLAY_SERVER_PORT,
 ): string {
   return `${overlayOrigin(host, port)}${OVERLAY_PAGE_PATH}`
+}
+
+/**
+ * The HTTP URL for one asset inside the current plan's asset folder.
+ *
+ * `relative` is a path relative to the plan's `assetDir` (e.g. `slides/slide-003.png`). It is
+ * percent-encoded segment by segment, so a filename containing spaces or Hangul — both routine
+ * for a deck exported by a Korean church — produces a URL that actually resolves.
+ */
+export function overlayAssetUrl(
+  relative: string,
+  host: string = LOOPBACK_ADDRESS,
+  port: number = OVERLAY_SERVER_PORT,
+): string {
+  const encoded = relative
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+  return `${overlayOrigin(host, port)}${OVERLAY_ASSET_PATH}/${encoded}`
 }
 
 /** The WebSocket URL the overlay page dials back on. */

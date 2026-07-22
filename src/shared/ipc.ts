@@ -21,6 +21,7 @@ import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
 import type { CameraConfig, CameraSlot, CameraState } from './camera'
 import type { OverlayCommand, OverlayState } from './overlay'
 import type { GoLiveState } from './golive'
+import type { Cue, PlanPosition, ServicePlan } from './plan'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
 
@@ -31,6 +32,37 @@ import type { Result } from './result'
  * is running knows immediately that OBS's Overlays source has died — which is exactly the
  * failure BLUEPRINT.md §9 says must be visible rather than silent.
  */
+/** Whether a PowerPoint deck can be converted on this machine. */
+export interface DeckImporterStatus {
+  /** False when no converter was found — import is disabled and the UI explains why. */
+  readonly available: boolean
+  /** Which backend was found, e.g. `libreoffice` or `embedded-media`. */
+  readonly backend: string | null
+  /** Resolved converter path, for the settings readout. */
+  readonly executablePath: string | null
+  /** Operator-facing explanation when unavailable. */
+  readonly detail: string | null
+}
+
+/** Progress while converting a deck; decks can take a while and the UI must not look frozen. */
+export interface DeckImportProgress {
+  readonly stage: 'reading' | 'converting' | 'writing' | 'done' | 'failed'
+  readonly slidesDone: number
+  readonly slidesTotal: number | null
+  readonly message: string | null
+}
+
+/** The loaded plan plus where the operator is in it. */
+export interface PlanState {
+  readonly plan: ServicePlan
+  readonly position: PlanPosition
+  /** Absolute path the plan was loaded from / will save to, or null when never saved. */
+  readonly path: string | null
+  readonly dirty: boolean
+  /** The cue most recently fired, for the "now showing" readout. */
+  readonly lastFired: Cue | null
+}
+
 export interface OverlayServerInfo {
   readonly running: boolean
   readonly host: string
@@ -71,6 +103,15 @@ export const IpcChannel = {
   goLiveGetState: 'verger:golive:get-state',
   goLiveStart: 'verger:golive:start',
   goLiveEnd: 'verger:golive:end',
+  planGet: 'verger:plan:get',
+  planSet: 'verger:plan:set',
+  planOpen: 'verger:plan:open',
+  planSave: 'verger:plan:save',
+  planImportDeck: 'verger:plan:import-deck',
+  planFireCue: 'verger:plan:fire-cue',
+  planAdvance: 'verger:plan:advance',
+  planBack: 'verger:plan:back',
+  planGetImporterStatus: 'verger:plan:get-importer-status',
 } as const
 
 /** Union of every request channel string. */
@@ -90,6 +131,8 @@ export const IpcEvent = {
   cameraState: 'verger:camera:state',
   youtubeStatus: 'verger:youtube:status',
   goLiveState: 'verger:golive:state',
+  planState: 'verger:plan:state',
+  planImportProgress: 'verger:plan:import-progress',
 } as const
 
 /** Union of every event channel string. */
@@ -139,6 +182,15 @@ export interface IpcRequest {
   [IpcChannel.goLiveGetState]: void
   [IpcChannel.goLiveStart]: void
   [IpcChannel.goLiveEnd]: void
+  [IpcChannel.planGet]: void
+  [IpcChannel.planSet]: ServicePlan
+  [IpcChannel.planOpen]: { path?: string }
+  [IpcChannel.planSave]: { path?: string }
+  [IpcChannel.planImportDeck]: { path?: string }
+  [IpcChannel.planFireCue]: { cueId: string }
+  [IpcChannel.planAdvance]: void
+  [IpcChannel.planBack]: void
+  [IpcChannel.planGetImporterStatus]: void
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -166,6 +218,15 @@ export interface IpcResponse {
   [IpcChannel.goLiveGetState]: Result<GoLiveState>
   [IpcChannel.goLiveStart]: Result<GoLiveState>
   [IpcChannel.goLiveEnd]: Result<GoLiveState>
+  [IpcChannel.planGet]: Result<PlanState>
+  [IpcChannel.planSet]: Result<PlanState>
+  [IpcChannel.planOpen]: Result<PlanState>
+  [IpcChannel.planSave]: Result<PlanState>
+  [IpcChannel.planImportDeck]: Result<PlanState>
+  [IpcChannel.planFireCue]: Result<PlanState>
+  [IpcChannel.planAdvance]: Result<PlanState>
+  [IpcChannel.planBack]: Result<PlanState>
+  [IpcChannel.planGetImporterStatus]: Result<DeckImporterStatus>
 }
 
 /** The payload pushed on each event channel. */
@@ -178,6 +239,8 @@ export interface IpcEventPayload {
   [IpcEvent.cameraState]: CameraState
   [IpcEvent.youtubeStatus]: YouTubeStatus
   [IpcEvent.goLiveState]: GoLiveState
+  [IpcEvent.planState]: PlanState
+  [IpcEvent.planImportProgress]: DeckImportProgress
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -241,6 +304,20 @@ export interface VergerApi {
     /** Ends the broadcast, stops the stream and stops the recording. */
     end(): Promise<Result<GoLiveState>>
     onState(callback: (state: GoLiveState) => void): Unsubscribe
+  }
+  readonly plan: {
+    getState(): Promise<Result<PlanState>>
+    set(plan: ServicePlan): Promise<Result<PlanState>>
+    open(options: { path?: string }): Promise<Result<PlanState>>
+    save(options: { path?: string }): Promise<Result<PlanState>>
+    /** Convert a .pptx into one slide cue per slide. */
+    importDeck(options: { path?: string }): Promise<Result<PlanState>>
+    fireCue(options: { cueId: string }): Promise<Result<PlanState>>
+    advance(): Promise<Result<PlanState>>
+    back(): Promise<Result<PlanState>>
+    getImporterStatus(): Promise<Result<DeckImporterStatus>>
+    onState(callback: (state: PlanState) => void): Unsubscribe
+    onImportProgress(callback: (progress: DeckImportProgress) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

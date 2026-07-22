@@ -396,3 +396,72 @@ confirming the local recording file exists afterwards.
 ### Remaining delta
 
 Phases 6-10.
+
+---
+
+## Cycle 6 — Phase 6: Service Plan, cue editor, PowerPoint import (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 989 tests / 36 files ·
+`electron-vite build` succeeds · app launches with 32 IPC channels.
+
+The plan is a fully usable **manual** slide/media driver — no ASR, no cue engine, no network.
+That manual path is the fallback Phases 7-8 degrade to, so it had to be solid first.
+
+### Delta closed
+
+- **Plan model** (`src/shared/plan.ts`) — Service = ordered Cues, each with a trigger and a
+  payload, validated per-type. Position helpers (`advance`, `stepBack`) that clamp rather than
+  wrap: running off the end mid-service is a no-op, never a jump back to the welcome slide.
+- **PlanService** — routes each cue type to the overlay, camera or OBS; atomic save; load
+  validation that names the offending cue (`cue 2 ("PLACEHOLDER TITLE", id "cue-2")`).
+- **Deck import** — a hardened PPTX reader over `fflate` with zip-bomb, entry-count, slide-count
+  and path-traversal limits, and the `_rels` media mapping the v2 notes flagged. Numeric slide
+  ordering is asserted explicitly (`slide10` must sort after `slide2` — a string sort silently
+  scrambles a service).
+- **Cue editor** with keyboard-accessible `@dnd-kit` reordering, and **PlanRunner** with NOW/NEXT
+  and next-slide preloading.
+
+### Standing Rule 4, enforced by schema
+
+The `scripture` payload has **no `text` field**, so a plan carrying verse text is invalid by
+construction — not by discipline. Imported slides are treated as opaque images; their text is
+never read, logged or stored. All fixtures are placeholders.
+
+### The defect that would have broken this phase in production
+
+**Slide assets were `file://` URLs.** The overlay page is served from
+`http://127.0.0.1:7320/overlay`, and Chromium — which is what an OBS Browser Source is — refuses
+`file:` subresources inside an `http:` document; the page's CSP (`img-src 'self' data:`) rejects
+them too. **Every imported slide would have silently failed to appear on the congregation
+screen**, with every unit test passing. Found because the agent that wrote it said plainly that
+it was unverified end-to-end rather than assuming it worked.
+
+Fixed by serving the open plan's asset folder from the same origin: a new `/assets` route on the
+overlay server whose root is set at runtime by the plan service (it moves with the plan), plus
+`overlayAssetUrl()` which percent-encodes each segment so filenames with spaces or Hangul — both
+routine for a Korean church's deck — actually resolve. Three regression tests: an image round-trips
+byte-for-byte over HTTP, the route 404s when no plan is open rather than serving last week's
+slides, and three traversal shapes are refused (the asset folder holds files extracted from an
+untrusted `.pptx`, so a traversal would turn the overlay into an arbitrary-file-read endpoint).
+
+### The OBS write allowlist held
+
+A media cue needs `TriggerMediaInputAction`, which is **not** on the allowlist. The agent
+correctly refused to widen it, returning a clear error saying it needs a reviewed change instead
+— and covered that with a test. That is the guard working as intended: it made a phase stop and
+ask rather than quietly punch through. **Media cues therefore do not fire yet**; widening the
+allowlist is a deliberate follow-up.
+
+### Not verified
+
+- **No PPTX renderer exists on this machine.** LibreOffice is not installed and cannot be
+  (no `winget`), so `detectImporter()` honestly reports `available: false` and the UI disables
+  import with an explanation. The embedded-media fallback extracts pictures the deck already
+  contains — which works for image-per-slide decks, and yields nothing for text-only slides.
+  No real deck has been converted.
+- No slide has been rendered in a real OBS Browser Source; the asset route is proven by HTTP
+  fetch, not by compositing over live video.
+
+### Remaining delta
+
+Phases 7-10.

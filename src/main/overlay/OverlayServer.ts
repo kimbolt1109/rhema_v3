@@ -50,6 +50,7 @@ import type { OverlayServerInfo, Unsubscribe } from '@shared/ipc'
 import type { Logger } from '@shared/log'
 import {
   LOOPBACK_ADDRESS,
+  OVERLAY_ASSET_PATH,
   OVERLAY_PAGE_PATH,
   OVERLAY_SERVER_PORT,
   OVERLAY_SOCKET_PATH,
@@ -223,6 +224,14 @@ export class OverlayServer {
   private readonly now: () => number
   private readonly heartbeatMs: number
 
+  /**
+   * Root of the current Service Plan's asset folder, served at {@link OVERLAY_ASSET_PATH}.
+   *
+   * `null` until a plan is opened. Set at runtime rather than at construction because it moves
+   * with whichever plan the operator has open — see {@link setAssetRoot}.
+   */
+  private assetRoot: string | null = null
+
   private state: OverlayState = emptyOverlayState()
 
   private httpServer: HttpServer | null = null
@@ -297,6 +306,36 @@ export class OverlayServer {
 
       app.get('/', (_request, response) => {
         response.redirect(OVERLAY_PAGE_PATH)
+      })
+
+      // The current Service Plan's asset folder — imported slide images and media.
+      //
+      // These MUST be served over HTTP. The overlay page is loaded from `http://127.0.0.1:7320`,
+      // and Chromium (including an OBS Browser Source) refuses to load `file:` subresources from
+      // an `http:` document; the page's CSP is also `img-src 'self' data:`. A slide referenced as
+      // a `file:` URL simply never appears on the congregation screen, and does so silently.
+      //
+      // The root is set at runtime by the plan service (`setAssetRoot`), because it moves with
+      // whichever plan is open. It is resolved per-request so opening a different plan takes
+      // effect immediately with no server restart.
+      app.use(OVERLAY_ASSET_PATH, (request, response, next) => {
+        const root = this.assetRoot
+        if (root === null) {
+          response.status(404).type('text/plain').send('no service plan is open')
+          return
+        }
+        express.static(root, {
+          index: false,
+          etag: false,
+          lastModified: false,
+          cacheControl: false,
+          // `express.static` already refuses to serve outside its root and rejects encoded `..`,
+          // and `dotfiles: 'deny'` keeps anything hidden in the plan folder unreachable.
+          dotfiles: 'deny',
+          setHeaders: (assetResponse) => {
+            assetResponse.setHeader('Cache-Control', 'no-store')
+          }
+        })(request, response, next)
       })
 
       // A browser source must never render a stale overlay after an asset edit, so nothing here
@@ -455,6 +494,26 @@ export class OverlayServer {
   /** The authoritative overlay state. The overlay page is a pure function of this. */
   getState(): OverlayState {
     return this.state
+  }
+
+  /**
+   * Point the `/assets` route at the open plan's asset folder.
+   *
+   * Called by the plan service whenever a plan is opened or saved. Takes effect immediately —
+   * the route resolves the root per request, so no restart is needed and an operator switching
+   * plans mid-setup does not have to think about it.
+   *
+   * Pass `null` when no plan is open; requests then 404 rather than serving a stale folder from
+   * a previous service.
+   */
+  setAssetRoot(root: string | null): void {
+    this.assetRoot = root
+    this.logger.debug('overlay asset root changed', { assetRoot: root })
+  }
+
+  /** The directory currently served at `/assets`, or `null` when no plan is open. */
+  getAssetRoot(): string | null {
+    return this.assetRoot
   }
 
   /**

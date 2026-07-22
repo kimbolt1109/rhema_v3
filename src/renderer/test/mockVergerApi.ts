@@ -31,9 +31,12 @@ import {
 } from '@shared/golive'
 import type {
   AppVersions,
+  DeckImportProgress,
+  DeckImporterStatus,
   IpcEventPayload,
   IpcEventValue,
   OverlayServerInfo,
+  PlanState,
   Unsubscribe,
   VergerApi,
 } from '@shared/ipc'
@@ -44,6 +47,8 @@ import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import { initialObsStatus } from '@shared/obs'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
+import type { Cue, ServicePlan } from '@shared/plan'
+import { advance as advancePosition, initialPlanPosition, stepBack } from '@shared/plan'
 import type { Result } from '@shared/result'
 import { ErrorCode, err, ok } from '@shared/result'
 import type {
@@ -146,6 +151,49 @@ export interface MockResponses {
    * their backup afterwards.
    */
   goLiveEnd: Result<GoLiveState> | null
+  /**
+   * What `plan.getState` resolves with.
+   *
+   * An **empty** plan by default, because that is what a freshly launched Verger genuinely has:
+   * no file open, nothing fired. Tests that want an authored order of service say so with
+   * {@link mockPlanState}.
+   */
+  planGetState: Result<PlanState>
+  /**
+   * `null` — the default — means "behave like the real service": adopt the supplied plan, mark it
+   * dirty, and clamp the position so a cue that was deleted out from under the pointer cannot
+   * leave the operator pointing past the end of the list.
+   */
+  planSet: Result<PlanState> | null
+  /** `null` — the default — means "behave like the real service": load {@link mockPlanState}. */
+  planOpen: Result<PlanState> | null
+  /** `null` — the default — means "behave like the real service": clear `dirty`, keep the plan. */
+  planSave: Result<PlanState> | null
+  /**
+   * What `plan.importDeck` resolves with.
+   *
+   * The default is a **refusal**, because this machine has no PowerPoint converter installed and
+   * the honest fake refuses rather than inventing slides. The UI is supposed to make this
+   * unreachable by disabling the control; a regression that enables it fails here.
+   */
+  planImportDeck: Result<PlanState> | null
+  /**
+   * `null` — the default — means "behave like the real service": move the pointer to the named
+   * cue, remember it as `lastFired`, and record it as fired.
+   */
+  planFireCue: Result<PlanState> | null
+  /** `null` — the default — means "behave like the real service": {@link advancePosition}. */
+  planAdvance: Result<PlanState> | null
+  /** `null` — the default — means "behave like the real service": {@link stepBack}. */
+  planBack: Result<PlanState> | null
+  /**
+   * What `plan.getImporterStatus` resolves with.
+   *
+   * Unavailable by default — see {@link MOCK_DECK_IMPORTER_UNAVAILABLE}. This is not pessimism,
+   * it is this build machine's actual state, and every screen test therefore exercises the
+   * degraded path unless it deliberately opts out.
+   */
+  planGetImporterStatus: Result<DeckImporterStatus>
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -179,6 +227,16 @@ export interface MockCalls {
   readonly goLiveStart: number[]
   /** Every completed END hold, in order. A short press must never appear here. */
   readonly goLiveEnd: number[]
+  readonly planGetState: number[]
+  /** Every plan the editor pushed, in order. The reorder/add/delete assertions read this. */
+  readonly planSet: ServicePlan[]
+  readonly planOpen: { path?: string }[]
+  readonly planSave: { path?: string }[]
+  readonly planImportDeck: { path?: string }[]
+  readonly planFireCue: { cueId: string }[]
+  readonly planAdvance: number[]
+  readonly planBack: number[]
+  readonly planGetImporterStatus: number[]
 }
 
 export interface MockVergerApi {
@@ -571,6 +629,113 @@ export function mockFailedGoLiveState(overrides: Partial<GoLiveState> = {}): GoL
   }
 }
 
+/* ------------------------------------ the service plan ------------------------------------ */
+
+/**
+ * One cue, with obviously-fake content.
+ *
+ * **Standing Rule 4 applies to this file as hard as it applies to the app.** Every fixture label
+ * here is a placeholder — "SLIDE 1", "PLACEHOLDER TITLE" — never a hymn line, never a sermon
+ * sentence, never verse text. A `scripture` cue carries a reference and nothing else, which is
+ * enforced by `src/shared/plan.ts` giving the payload no `text` field at all.
+ */
+export function mockCue(overrides: Partial<Cue> = {}): Cue {
+  return {
+    id: 'cue-1',
+    type: 'slide',
+    label: 'SLIDE 1',
+    trigger: { mode: 'manual' },
+    payload: { asset: 'slides/slide-001.png', sourceSlide: 1 },
+    ...overrides,
+  }
+}
+
+/**
+ * A three-cue order of service.
+ *
+ * Deliberately mixed-type — a scene, a slide and a scripture reference — so a row-rendering
+ * regression that only handles one payload shape cannot pass. Every cue is `manual`, which is
+ * both the schema default and the whole point of Phase 6.
+ */
+export function mockServicePlan(overrides: Partial<ServicePlan> = {}): ServicePlan {
+  return {
+    schemaVersion: 1,
+    service: '2023-11-14 PLACEHOLDER SERVICE',
+    defaultMode: 'assist',
+    cues: [
+      mockCue({
+        id: 'cue-welcome',
+        type: 'scene',
+        label: 'PLACEHOLDER TITLE',
+        payload: { scene: 'Welcome loop' },
+      }),
+      mockCue({ id: 'cue-slide-1', label: 'SLIDE 1', payload: { asset: 'slides/slide-001.png' } }),
+      mockCue({
+        id: 'cue-reading',
+        type: 'scripture',
+        label: 'PLACEHOLDER READING',
+        // A REFERENCE. There is no field here that could hold the verse, by construction.
+        payload: { reference: 'John 3:16' },
+      }),
+    ],
+    assetDir: 'assets',
+    ...overrides,
+  }
+}
+
+/** A loaded plan, saved to disk, with nothing fired yet. */
+export function mockPlanState(overrides: Partial<PlanState> = {}): PlanState {
+  return {
+    plan: mockServicePlan(),
+    position: initialPlanPosition(),
+    path: 'C:\\Verger\\plans\\2023-11-14.verger.json',
+    dirty: false,
+    lastFired: null,
+    ...overrides,
+  }
+}
+
+/** Nothing open: an unnamed empty plan, never saved. The launch state. */
+export function emptyPlanState(overrides: Partial<PlanState> = {}): PlanState {
+  return {
+    plan: { schemaVersion: 1, service: '', defaultMode: 'assist', cues: [], assetDir: 'assets' },
+    position: initialPlanPosition(),
+    path: null,
+    dirty: false,
+    lastFired: null,
+    ...overrides,
+  }
+}
+
+/**
+ * The importer state on this build machine: no converter, and a sentence saying so.
+ *
+ * LibreOffice is not installed and cannot be installed here (`HUMAN_TASKS.md`), so `available` is
+ * false and `detail` carries the operator-facing explanation the UI is required to print verbatim.
+ */
+export const MOCK_DECK_IMPORTER_UNAVAILABLE: DeckImporterStatus = {
+  available: false,
+  backend: null,
+  executablePath: null,
+  detail:
+    'No PowerPoint converter was found on this machine. Verger looked for LibreOffice and did not find it.',
+}
+
+/** A machine that *does* have LibreOffice, for the enabled-control case. */
+export const MOCK_DECK_IMPORTER_AVAILABLE: DeckImporterStatus = {
+  available: true,
+  backend: 'libreoffice',
+  executablePath: 'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+  detail: null,
+}
+
+/** One progress tick, mid-conversion. */
+export function mockDeckImportProgress(
+  overrides: Partial<DeckImportProgress> = {},
+): DeckImportProgress {
+  return { stage: 'converting', slidesDone: 3, slidesTotal: 12, message: null, ...overrides }
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -596,6 +761,15 @@ function defaultResponses(): MockResponses {
     goLiveGetState: ok(idleGoLiveState()),
     goLiveStart: null,
     goLiveEnd: null,
+    planGetState: ok(emptyPlanState()),
+    planSet: null,
+    planOpen: null,
+    planSave: null,
+    planImportDeck: null,
+    planFireCue: null,
+    planAdvance: null,
+    planBack: null,
+    planGetImporterStatus: ok(MOCK_DECK_IMPORTER_UNAVAILABLE),
   }
 }
 
@@ -635,6 +809,15 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     goLiveGetState: [],
     goLiveStart: [],
     goLiveEnd: [],
+    planGetState: [],
+    planSet: [],
+    planOpen: [],
+    planSave: [],
+    planImportDeck: [],
+    planFireCue: [],
+    planAdvance: [],
+    planBack: [],
+    planGetImporterStatus: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -665,6 +848,13 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let goLiveSnapshot: GoLiveState = responses.goLiveGetState.ok
     ? responses.goLiveGetState.value
     : idleGoLiveState()
+
+  // A fifth deliberately separate snapshot. Authoring or firing a cue must not move a camera, must
+  // not blank an overlay layer, and must not touch the broadcast — Phase 6 drives the plan and
+  // nothing else. Nothing in the plan methods below reads any of the four snapshots above.
+  let planSnapshot: PlanState = responses.planGetState.ok
+    ? responses.planGetState.value
+    : emptyPlanState()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -901,6 +1091,145 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
         return Promise.resolve(ok(goLiveSnapshot))
       },
       onState: (callback) => on(IpcEvent.goLiveState, callback),
+    },
+    plan: {
+      getState: () => {
+        calls.planGetState.push(calls.planGetState.length)
+        if (responses.planGetState.ok) planSnapshot = responses.planGetState.value
+        return Promise.resolve(responses.planGetState)
+      },
+      set: (plan) => {
+        calls.planSet.push(plan)
+        const scripted = responses.planSet
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        // The pointer follows the cue it was on **by id**, not by slot number: reordering the cue
+        // after the one on screen must not change what is on screen. Deleting the cue the pointer
+        // was sitting on clamps instead — an out-of-range pointer would make the next SPACE do
+        // nothing at all. Both behaviours are `docs/v2-notes/PLAN_LESSONS.md`'s playlist contract.
+        const anchor = planSnapshot.plan.cues[planSnapshot.position.index]
+        const followed =
+          anchor === undefined ? -1 : plan.cues.findIndex((cue) => cue.id === anchor.id)
+        const index =
+          planSnapshot.position.index < 0
+            ? planSnapshot.position.index
+            : followed === -1
+              ? Math.min(planSnapshot.position.index, plan.cues.length - 1)
+              : followed
+        planSnapshot = {
+          ...planSnapshot,
+          plan,
+          position: { index, firedCueIds: planSnapshot.position.firedCueIds },
+          dirty: true,
+        }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      open: (options) => {
+        calls.planOpen.push(options)
+        const scripted = responses.planOpen
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        planSnapshot = mockPlanState(
+          options.path === undefined ? {} : { path: options.path },
+        )
+        return Promise.resolve(ok(planSnapshot))
+      },
+      save: (options) => {
+        calls.planSave.push(options)
+        const scripted = responses.planSave
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        planSnapshot = {
+          ...planSnapshot,
+          path: options.path ?? planSnapshot.path ?? 'C:\\Verger\\plans\\untitled.verger.json',
+          dirty: false,
+        }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      importDeck: (options) => {
+        calls.planImportDeck.push(options)
+        const scripted = responses.planImportDeck
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const importer = responses.planGetImporterStatus
+        if (!importer.ok || !importer.value.available) {
+          // There is genuinely no converter here. The fake refuses rather than fabricating slides,
+          // so a UI regression that enables the control shows up as a failing assertion.
+          return Promise.resolve(
+            err(
+              ErrorCode.NOT_CONFIGURED,
+              importer.ok
+                ? (importer.value.detail ?? 'no deck converter is available')
+                : 'no deck converter is available',
+            ),
+          )
+        }
+
+        // One opaque image per slide, and no slide text anywhere: Standing Rule 4 means the
+        // importer never reads a deck's words into the model, so neither does its fake.
+        const cues: Cue[] = [1, 2].map((slide) => ({
+          id: `cue-imported-${String(slide)}`,
+          type: 'slide' as const,
+          label: `SLIDE ${String(slide)}`,
+          trigger: { mode: 'manual' as const },
+          payload: { asset: `slides/slide-${String(slide).padStart(3, '0')}.png`, sourceSlide: slide },
+        }))
+        planSnapshot = {
+          ...planSnapshot,
+          plan: { ...planSnapshot.plan, cues: [...planSnapshot.plan.cues, ...cues] },
+          dirty: true,
+        }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      fireCue: (options) => {
+        calls.planFireCue.push(options)
+        const scripted = responses.planFireCue
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const index = planSnapshot.plan.cues.findIndex((cue) => cue.id === options.cueId)
+        const cue = planSnapshot.plan.cues[index]
+        if (cue === undefined) {
+          return Promise.resolve(err(ErrorCode.NOT_FOUND, `no cue with id ${options.cueId}`))
+        }
+        planSnapshot = {
+          ...planSnapshot,
+          position: {
+            index,
+            firedCueIds: planSnapshot.position.firedCueIds.includes(cue.id)
+              ? planSnapshot.position.firedCueIds
+              : [...planSnapshot.position.firedCueIds, cue.id],
+          },
+          lastFired: cue,
+        }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      advance: () => {
+        calls.planAdvance.push(calls.planAdvance.length)
+        const scripted = responses.planAdvance
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const position = advancePosition(planSnapshot.plan, planSnapshot.position)
+        planSnapshot = {
+          ...planSnapshot,
+          position,
+          lastFired: planSnapshot.plan.cues[position.index] ?? planSnapshot.lastFired,
+        }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      back: () => {
+        calls.planBack.push(calls.planBack.length)
+        const scripted = responses.planBack
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        planSnapshot = { ...planSnapshot, position: stepBack(planSnapshot.position) }
+        return Promise.resolve(ok(planSnapshot))
+      },
+      getImporterStatus: () => {
+        calls.planGetImporterStatus.push(calls.planGetImporterStatus.length)
+        return Promise.resolve(responses.planGetImporterStatus)
+      },
+      onState: (callback) => on(IpcEvent.planState, callback),
+      onImportProgress: (callback) => on(IpcEvent.planImportProgress, callback),
     },
     config: {
       get: () => {

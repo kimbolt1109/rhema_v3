@@ -20,6 +20,7 @@
       "connection": "Connection",
       "camera": "Cameras",
       "overlay": "Overlay",
+      "plan": "Plan",
       "goLive": "GO LIVE",
       "goLiveSettings": "Go Live settings",
       "cameraSetup": "Camera setup"
@@ -495,6 +496,132 @@
       "body": "YouTube's Data API has a daily quota. Going live and ending again costs a handful of units, so a few services a day sits comfortably inside it — this is not something you need to watch."
     },
     "lastError": "Last error"
+  },
+
+  "plan": {
+    "title": "Service plan",
+    "subtitle": "The order of service, as a list of cues. Every cue here is fired by hand — this screen works with no microphone, no cue engine and no network, and it is what everything later falls back to.",
+    "unsaved": "Unsaved changes",
+    "saved": "Saved",
+    "file": {
+      "label": "Plan file",
+      "untitled": "Untitled service",
+      "neverSaved": "Not saved to a file yet"
+    },
+    "actions": {
+      "open": "Open…",
+      "save": "Save",
+      "import": "Import deck…",
+      "addCue": "Add cue",
+      "advance": "Advance",
+      "back": "Back"
+    },
+    "list": {
+      "label": "Cues, in order",
+      "heading": "Cues ({{total}})",
+      "newCueType": "Type of cue to add",
+      "reorderHint": "Reorder with the grip handle: drag it, or focus it and press Space, then the arrow keys, then Space again.",
+      "empty": "No cues yet. Add one, or import a deck."
+    },
+    "row": {
+      "dragHandle": "Reorder {{label}}",
+      "fire": "Fire {{label}}",
+      "current": "On screen",
+      "next": "Next",
+      "accessibleSummary": "cue {{ordinal}}, {{type}}, {{trigger}} trigger"
+    },
+    "cueType": {
+      "scene": "Scene",
+      "slide": "Slide",
+      "media": "Media",
+      "scripture": "Scripture",
+      "lowerthird": "Lower third",
+      "action": "Action"
+    },
+    "trigger": {
+      "label": "Trigger",
+      "modeField": "Fires when",
+      "modeHint": "Manual is the default and the only mode this build acts on. The others are armed for a later phase and change nothing yet.",
+      "textField": "Text to match",
+      "textRequired": "A {{mode}} trigger needs text to match against, or it will never fire.",
+      "manualNote": "You fire this cue yourself, with its play button or by advancing through the plan.",
+      "mode": {
+        "manual": "Manual",
+        "anchor": "Anchor phrase",
+        "scripture": "Scripture reference",
+        "hotphrase": "Hot phrase"
+      }
+    },
+    "payload": {
+      "scene": "OBS scene name",
+      "sceneHint": "Must match a scene that exists in OBS, exactly.",
+      "asset": "File",
+      "slideAssetHint": "Path inside the plan's asset folder, e.g. slides/slide-001.png.",
+      "mediaAssetHint": "Path inside the plan's asset folder, or leave it and drive an OBS media input instead.",
+      "sourceSlide": "Slide number in the imported deck",
+      "obsInputName": "OBS media input",
+      "reference": "Reference",
+      "referenceHint": "For example: John 3:16, or Psalm 23.",
+      "translation": "Preferred translation",
+      "line1": "Line 1",
+      "line2": "Line 2",
+      "template": "Template",
+      "action": "Action name",
+      "actionHint": "A named app action, for example overlay.clear."
+    },
+    "scriptureNote": "There is no box for the verse itself, on purpose. Verger stores only the reference; the wording is fetched from a licensed source at the moment the cue fires and is never written into the plan file.",
+    "options": {
+      "title": "Automation",
+      "autoFireThreshold": "Auto-fire confidence",
+      "autoFireThresholdHint": "How sure a match must be before this cue may fire itself in auto mode. It has no effect on a manual trigger.",
+      "thresholdUnset": "Not set",
+      "confirmAlways": "Always ask me first",
+      "confirmAlwaysHint": "Beats the service-wide mode. A cue can always be made safer than the default, never more dangerous — use it for anything you would hate to see appear by itself."
+    },
+    "editor": {
+      "title": "Cue",
+      "none": "Select a cue to edit it.",
+      "typeField": "Type",
+      "labelField": "Label",
+      "labelHint": "What you will read in the list mid-service. Keep it short.",
+      "noteField": "Operator note",
+      "noteHint": "For you only. Never shown on the congregation screen.",
+      "delete": "Delete cue",
+      "invalid": "This cue is not valid yet and will not save. Check the fields marked below."
+    },
+    "driver": {
+      "title": "Manual driver",
+      "nowShowing": "On screen",
+      "nothingFired": "Nothing fired yet",
+      "upNext": "Up next",
+      "endOfPlan": "End of the plan"
+    },
+    "importer": {
+      "title": "PowerPoint import",
+      "backend": "Converter: {{backend}} — {{path}}",
+      "unavailable": {
+        "title": "No PowerPoint converter is installed, so deck import is switched off",
+        "noDetail": "Verger found no converter on this machine.",
+        "install": "Install LibreOffice (it is free) and restart Verger. Verger uses it only to turn each slide into an image; it never reads the words on your slides.",
+        "meanwhile": "Until then you can still build the service by hand: export the deck to PNG or JPEG yourself, drop the images into the plan's asset folder, and add one slide cue per image."
+      },
+      "progress": {
+        "label": "Import progress",
+        "reading": "Reading the deck",
+        "converting": "Converting slides to images",
+        "writing": "Writing images into the asset folder",
+        "done": "Import finished",
+        "failed": "Import failed",
+        "counted": "{{done}} of {{total}} slides",
+        "countedUnknown": "{{done}} slides so far"
+      }
+    },
+    "bridgeUnavailable": {
+      "body": "Verger's privileged bridge did not load, so the plan cannot be saved, opened or fired. The cues shown are read-only. Restarting the app usually fixes this."
+    },
+    "error": {
+      "title": "The last plan action was refused"
+    }
   },
 
   "holdButton": {

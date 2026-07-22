@@ -45,6 +45,7 @@ import { ConnectionScreen } from './screens/ConnectionScreen'
 import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
+import { PlanEditor } from './screens/PlanEditor'
 import { isRecordingMissing, useGoLiveStore } from './store/goLiveStore'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
@@ -57,6 +58,9 @@ const SECTIONS = [
   // last because it is a soundcheck task, not a service one.
   { id: 'camera', labelKey: 'app.section.camera' },
   { id: 'overlay', labelKey: 'app.section.overlay' },
+  // Phase 6. The plan sits with the live surfaces rather than with the settings tabs, because it
+  // is one: the operator drives slides from it during the service, not only before it.
+  { id: 'plan', labelKey: 'app.section.plan' },
   // Phase 5 splits what Phase 4 called "Go Live" in two: the GO LIVE / END *controls* sit here,
   // with the two other live surfaces, and the weekly template and OAuth *settings* move one tab
   // to the right. A screen that both configures a broadcast and starts one invites the operator to
@@ -445,6 +449,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <CameraPanel />
     case 'overlay':
       return <OverlayPanel />
+    case 'plan':
+      return <PlanEditor />
     case 'goLive':
       return <GoLivePanel />
     case 'goLiveSettings':
