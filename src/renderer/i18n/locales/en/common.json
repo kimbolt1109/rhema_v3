@@ -11,7 +11,8 @@
       "asr": "Speech",
       "youtube": "YouTube",
       "live": "Live",
-      "recording": "Recording"
+      "recording": "Recording",
+      "automation": "Automation"
     },
     "phasePending": "Not built yet",
     "phasePendingDetail": "Arrives in a later phase.",
@@ -22,6 +23,7 @@
       "overlay": "Overlay",
       "plan": "Plan",
       "transcript": "Transcript",
+      "automation": "Automation",
       "goLive": "GO LIVE",
       "goLiveSettings": "Go Live settings",
       "cameraSetup": "Camera setup",
@@ -743,6 +745,138 @@
         "body": "DEEPGRAM_API_KEY is empty, so cloud recognition is switched off. This is not a fault — Verger simply runs manual and the rest of the console is unaffected.",
         "humanTasks": "Adding the key is a human-only task: see HUMAN_TASKS.md in the project folder. Local recognition can be used instead by choosing Local or Auto above."
       }
+    }
+  },
+  "cue": {
+    "subsystem": {
+      "unknown": "Checking",
+      "assist": "Assist",
+      "auto": "AUTO",
+      "manual": "Manual",
+      "panicked": "HALTED",
+      "waiting": "Waiting on you"
+    },
+    "mode": {
+      "assist": "Assist",
+      "auto": "Auto",
+      "manual": "Manual"
+    },
+    "modeDetail": {
+      "assist": "Verger highlights the next likely cue and waits for you to confirm it with a tap, a key or a pedal. Nothing reaches the congregation screen until you say so.",
+      "auto": "High-confidence cues fire on their own, without asking. Lower-confidence ones still wait for you.",
+      "manual": "You drive. Detections are still shown so the transcript stays useful, but nothing is ever offered as an action to accept."
+    },
+    "modeBadge": {
+      "default": "Default",
+      "recommended": "Recommended"
+    },
+    "detector": {
+      "plan": "Service plan",
+      "scripture": "Scripture",
+      "hotphrase": "Hot phrase"
+    },
+    "alignment": {
+      "aligned": "Following the plan",
+      "lost": "Off script",
+      "no-plan": "No plan loaded"
+    },
+    "alignmentDetail": {
+      "aligned": "The recent transcript matches the cues just ahead, so the plan-follower is tracking.",
+      "lost": "The speaker has left the script, so the plan-follower is quietly waiting. Scripture and hot-phrase detection keep working — they need no plan at all.",
+      "no-plan": "No plan with anchor text is loaded, so there is nothing to follow. Scripture and hot-phrase detection still work."
+    },
+    "band": {
+      "exact": "Exact match",
+      "fuzzy": "Close match",
+      "weak": "Weak match"
+    },
+    "position": {
+      "label": "Position",
+      "beforeStart": "Before the first cue",
+      "cue": "Cue {{ordinal}} — {{label}}",
+      "unknownCue": "Cue {{ordinal}}"
+    },
+    "suggestion": {
+      "regionLabel": "Suggested next action",
+      "idleRegionLabel": "Cue engine",
+      "whatLabel": "What this would do",
+      "whyLabel": "Why",
+      "confidenceLabel": "Confidence",
+      "confidenceValue": "{{percent}}%",
+      "detectorLabel": "Detected by",
+      "fireCue": "Fire “{{label}}”",
+      "fireCueUnknown": "Fire a cue",
+      "showScripture": "Show {{reference}}",
+      "cueMissing": "The cue this points at is not in the plan any more, so there is nothing to fire. Dismiss it.",
+      "spokenAs": "Heard as {{reference}}",
+      "translationLabel": "Translation",
+      "attributionLabel": "Attribution",
+      "attributionNone": "This source asks for no attribution.",
+      "resolving": "Fetching the verse text…",
+      "textUnavailable": "Text unavailable",
+      "textUnavailableDetail": "The verse text could not be fetched, so this will NOT be shown automatically in any mode. Showing it now would put an empty scripture card in front of the congregation.",
+      "textUnavailableReason": "Reason: {{reason}}",
+      "textNote": "Verger never stores verse text. What is fetched is shown once, with its attribution, and never written into your plan file.",
+      "willAutoFire": "This will fire by itself in a moment. Press N, or Dismiss, to stop it.",
+      "willNotAutoFire": "Nothing happens until you confirm.",
+      "confirm": "Confirm",
+      "dismiss": "Dismiss",
+      "confirmHint": "Key Y",
+      "dismissHint": "Key N",
+      "announce": "Suggestion: {{what}}. {{why}}. Press Y to confirm, N to dismiss.",
+      "none": "Nothing suggested",
+      "noneDetail": "The engine is watching. A card appears here the moment it has something to offer.",
+      "lastFiredLabel": "Last fired",
+      "undo": "BACK — undo “{{label}}”",
+      "undoHint": "Steps the plan back one cue. It never blanks the congregation screen.",
+      "error": "The last automation action was refused"
+    },
+    "trust": {
+      "title": "Trust dial",
+      "subtitle": "How much Verger may do without asking. Assist is the default, and it is the one to run.",
+      "groupLabel": "Automation mode",
+      "current": "In force now: {{mode}}",
+      "autoCaution": "Caution: in Auto, a high-confidence cue appears on the congregation screen without asking you first. You can veto it, but only once it is already up.",
+      "perCueNote": "A single cue can always be made safer than this setting — tick “Always ask me first” on it in the plan — but never more dangerous."
+    },
+    "panic": {
+      "regionLabel": "PANIC — halts automation only; it does not stop the stream, does not stop the recording, and does not clear the screen",
+      "title": "PANIC",
+      "label": "PANIC — stop automation, not the stream",
+      "does": "Halts every automatic action at once: no cue fires, no scripture appears, and no suggestion is applied.",
+      "doesNotLabel": "What PANIC does NOT do",
+      "notStream": "It does not stop the stream. You stay live.",
+      "notRecording": "It does not stop the local recording. Your backup keeps being written.",
+      "notScreen": "It does not clear the congregation screen. Whatever is showing stays showing.",
+      "reassurance": "That is why it is safe to press. It costs you nothing except the automation you did not want.",
+      "panickedTitle": "AUTOMATION HALTED",
+      "panickedBody": "Verger is firing nothing and offering nothing. The stream, the local recording and the congregation screen are exactly as you left them.",
+      "resume": "Resume automation",
+      "resumeHint": "Nothing turns automation back on by itself — not a new suggestion, not a mode change, not restarting speech recognition. Only this button.",
+      "lockedWhilePanicked": "The trust dial is locked while automation is halted. Resume first."
+    },
+    "hotPhrases": {
+      "title": "Hot phrases",
+      "subtitle": "A phrase spoken from the pulpit, bound to a cue. It needs no plan and no alignment, so it keeps working in fully extemporaneous preaching.",
+      "listLabel": "Hot phrases",
+      "phraseLabel": "Phrase",
+      "phrasePlaceholder": "let’s pray",
+      "cueLabel": "Fires this cue",
+      "enableLabel": "Enable “{{phrase}}”",
+      "add": "Add hot phrase",
+      "remove": "Remove “{{phrase}}”",
+      "empty": "No hot phrases yet.",
+      "emptyHint": "Add the things said the same way every week — “let’s pray”, “받으실 말씀은”.",
+      "noCues": "There are no cues to bind to yet. Author the service plan first: a hot phrase with nothing to fire would do nothing.",
+      "tooShort": "That phrase is too short to save. Use at least {{min}} characters.",
+      "shortWarning": "Very short — this will fire when nobody meant it to. A phrase under {{min}} characters turns up inside ordinary words, so make it a whole spoken phrase.",
+      "duplicate": "That phrase is already in the list.",
+      "full": "The hot-phrase list is full.",
+      "saveFailed": "That change was refused and has not been saved."
+    },
+    "bridgeUnavailable": {
+      "title": "The cue engine is unavailable",
+      "body": "Verger cannot reach its own main process, so nothing is being detected and nothing can fire. The plan, the cameras and the overlay all still work by hand."
     }
   },
   "holdButton": {

@@ -36,6 +36,7 @@ import type { IpcRendererEvent } from 'electron'
 import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from '@shared/asr'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
+import type { CueEngineSettings, CueEngineState, CueSuggestion } from '@shared/cue'
 import type { GoLiveState } from '@shared/golive'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
@@ -53,6 +54,7 @@ import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import type { ServicePlan } from '@shared/plan'
 import type { Result } from '@shared/result'
+import type { ResolvedScripture, ScriptureReference, TranslationSource } from '@shared/scripture'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
 /** A listener that has already had the Electron event object removed. */
@@ -319,6 +321,64 @@ const api: VergerApi = {
       subscribe<AsrStatus>(IpcEvent.asrStatus, callback),
     onTranscript: (callback: (segment: TranscriptSegment) => void): Unsubscribe =>
       subscribe<TranscriptSegment>(IpcEvent.asrTranscript, callback)
+  },
+
+  /**
+   * The cue engine — the trust dial and the three parallel detectors (BLUEPRINT.md §4).
+   *
+   * This is the most dangerous surface in the app, so read it for what it *cannot* express:
+   *
+   *  - **There is no `fire`, no `apply`, no `show`.** The engine produces `CueSuggestion`s — an
+   *    INTENT — and something else applies them. The only verbs here are `confirm` and `dismiss`,
+   *    both of which name a specific `suggestionId`. A renderer holding a stale suggestion cannot
+   *    accidentally fire the *current* one, because the id it sends will simply not match: the
+   *    engine drops its pending suggestion the moment the plan moves by any other means
+   *    (`syncToActual` in `@shared/cue`), and a confirm arriving after that is a no-op rather than
+   *    a race the operator loses.
+   *  - **There is no method that makes automation more aggressive than the mode allows.**
+   *    `setMode` is the whole dial. A cue's own `confirmAlways`, a below-threshold confidence and
+   *    an unresolved verse each BLOCK an auto-fire; nothing on this bridge can compel one.
+   *  - **`panic()` takes no argument and cannot fail usefully.** It halts automation and nothing
+   *    else — it never touches the stream, the recording, OBS or the overlay. `resume()` is
+   *    deliberately separate and deliberately explicit: automation coming back on its own after a
+   *    panic would be exactly the surprise the panic switch exists to prevent.
+   *
+   * `resolveScripture` returns a `ResolvedScripture` fetched at runtime from a licensed API or a
+   * verified public-domain source. **No verse text is authored in this repository** (Standing Rule
+   * 4), and the detectors on the other side of this bridge emit REFERENCES only — `CueSuggestion`
+   * carries a `ScriptureReference`, which has no text field at all.
+   *
+   * Every method resolves with a whole `CueEngineState` (mode, alignment, position, the pending
+   * suggestion, the recent ones, `panicked`), so a control window that reloads mid-service recovers
+   * with one `getState()`, exactly as the overlay, camera, go-live and plan panels do. `onState`
+   * pushes the same snapshot after every change; `onSuggestion` is the separate low-latency feed
+   * the "Y / N" prompt renders from.
+   */
+  cue: {
+    getState: (): Promise<Result<CueEngineState>> => ipcRenderer.invoke(IpcChannel.cueGetState),
+    getSettings: (): Promise<Result<CueEngineSettings>> =>
+      ipcRenderer.invoke(IpcChannel.cueGetSettings),
+    setSettings: (settings: CueEngineSettings): Promise<Result<CueEngineSettings>> =>
+      ipcRenderer.invoke(IpcChannel.cueSetSettings, settings),
+    setMode: (options: { mode: CueEngineSettings['mode'] }): Promise<Result<CueEngineState>> =>
+      ipcRenderer.invoke(IpcChannel.cueSetMode, options),
+    confirm: (options: { suggestionId: string }): Promise<Result<CueEngineState>> =>
+      ipcRenderer.invoke(IpcChannel.cueConfirm, options),
+    dismiss: (options: { suggestionId: string }): Promise<Result<CueEngineState>> =>
+      ipcRenderer.invoke(IpcChannel.cueDismiss, options),
+    panic: (): Promise<Result<CueEngineState>> => ipcRenderer.invoke(IpcChannel.cuePanic),
+    resume: (): Promise<Result<CueEngineState>> => ipcRenderer.invoke(IpcChannel.cueResume),
+    resolveScripture: (options: {
+      reference: ScriptureReference
+      translation?: string
+    }): Promise<Result<ResolvedScripture>> =>
+      ipcRenderer.invoke(IpcChannel.cueResolveScripture, options),
+    listTranslations: (): Promise<Result<readonly TranslationSource[]>> =>
+      ipcRenderer.invoke(IpcChannel.cueListTranslations),
+    onState: (callback: (state: CueEngineState) => void): Unsubscribe =>
+      subscribe<CueEngineState>(IpcEvent.cueState, callback),
+    onSuggestion: (callback: (suggestion: CueSuggestion) => void): Unsubscribe =>
+      subscribe<CueSuggestion>(IpcEvent.cueSuggestion, callback)
   },
 
   config: {

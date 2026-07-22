@@ -17,6 +17,8 @@ import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from
 import { CAMERA_SLOTS, findBinding, isBindingUsable, slotForScene } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
+import { TRUST_MODES, defaultCueEngineSettings, idleCueEngineState } from '@shared/cue'
+import type { CueEngineSettings, CueEngineState, CueSuggestion, TrustMode } from '@shared/cue'
 import { GO_LIVE_STEPS, emptyObsOutputState, idleGoLiveState } from '@shared/golive'
 import type { GoLiveState, GoLiveStepStatus, StepState } from '@shared/golive'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
@@ -32,6 +34,8 @@ import { initialPlanPosition } from '@shared/plan'
 import type { ServicePlan } from '@shared/plan'
 import { err, ok } from '@shared/result'
 import type { Result } from '@shared/result'
+import { CONFIDENCE_EXACT, CONFIDENCE_WEAK } from '@shared/scripture'
+import type { ResolvedScripture, ScriptureReference, TranslationSource } from '@shared/scripture'
 import { defaultBroadcastTemplate } from '@shared/youtube'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
@@ -144,11 +148,27 @@ vi.mock('@main/asr', () => ({
   }
 }))
 
+/**
+ * The cue-engine singleton, mocked to throw like the other six.
+ *
+ * The real one attaches to a live transcript feed and can reach a network scripture resolver, and
+ * **no test in this repo may make a network call**. Making it throw also lets the tests below
+ * assert what the ten cue channels answer when the engine could not be constructed at all — which
+ * must read as "automation is off, the service runs by hand", never as a crash, and which must
+ * still let `cuePanic` succeed.
+ */
+vi.mock('@main/cue', () => ({
+  getCueEngine: () => {
+    throw new Error('the cue engine singleton is unavailable under vitest')
+  }
+}))
+
 import {
   OBS_PASSWORD_SECRET_KEY,
   registerIpc,
   type AsrServiceLike,
   type CameraServiceLike,
+  type CueEngineLike,
   type DialogLike,
   type FilePathProbeLike,
   type GoLiveServiceLike,
@@ -160,6 +180,7 @@ import {
   type PathKind,
   type PlanServiceLike,
   type SaveDialogResultLike,
+  type ScriptureResolverLike,
   type SecretsStoreLike,
   type WebContentsLike,
   type WindowLike,
@@ -1176,6 +1197,254 @@ function collectKeys(value: unknown, into: string[] = []): string[] {
 /** Standing Rule 4: no verse text is ever authored in this repo, fixtures included. */
 const SCRIPTURE_TEXT_PLACEHOLDER = 'VERSE TEXT PLACEHOLDER'
 
+// ---------------------------------------------------------------------------
+// Cue engine fixtures (BLUEPRINT.md §4)
+//
+// Standing Rule 4 governs every fixture below. A `ScriptureReference` is a *reference* — book,
+// chapter, verse — and carries no text at all, which is why one can be written here safely. The
+// only "verse text" in this file is `SCRIPTURE_TEXT_PLACEHOLDER`, and every transcript span is an
+// invented placeholder rather than anything a real preacher said.
+// ---------------------------------------------------------------------------
+
+/** Placeholder transcript spans. Synthetic — no real sermon appears in this repository. */
+const PLACEHOLDER_ANCHOR = 'PLACEHOLDER TRANSCRIPT: the first thing I want us to see'
+const PLACEHOLDER_SCRIPTURE_SPAN = 'PLACEHOLDER TRANSCRIPT: turn with me to John three sixteen'
+
+const SCRIPTURE_REFERENCE: ScriptureReference = {
+  book: 'John',
+  spokenBook: 'John',
+  chapter: 3,
+  verse: 16,
+  verseEnd: null,
+  confidence: CONFIDENCE_EXACT,
+  band: 'exact',
+  sourceText: PLACEHOLDER_SCRIPTURE_SPAN
+}
+
+/**
+ * The resolved text.
+ *
+ * `text` is the placeholder and nothing else, ever. Real verse text reaches Verger at runtime from
+ * a licensed API or a verified public-domain download; it is never authored here, and a fixture is
+ * exactly the place a future edit would be tempted to "just paste the verse in".
+ */
+const RESOLVED_SCRIPTURE: ResolvedScripture = {
+  reference: SCRIPTURE_REFERENCE,
+  text: SCRIPTURE_TEXT_PLACEHOLDER,
+  translation: 'KJV',
+  attribution: 'Public domain'
+}
+
+/**
+ * The translation catalogue.
+ *
+ * Two entries on purpose. `docs/v2-notes/LEGAL_AND_CONTENT.md` describes a quarantine rule for a
+ * translation whose public-domain status is contested — the Korean KRV specifically — and the
+ * catalogue is where that fact lives: `verified: false`, so nothing may offer it for selection
+ * merely because a file exists.
+ */
+const TRANSLATIONS: readonly TranslationSource[] = [
+  {
+    code: 'KJV',
+    name: 'King James Version',
+    language: 'en',
+    kind: 'public-domain',
+    license: 'Public domain',
+    attribution: null,
+    verified: true
+  },
+  {
+    code: 'KRV',
+    name: 'Korean Revised Version',
+    language: 'ko',
+    kind: 'public-domain',
+    license: 'contested — quarantined pending verification',
+    attribution: null,
+    verified: false
+  }
+]
+
+const PLAN_SUGGESTION: CueSuggestion = {
+  id: 'suggestion-plan-1',
+  detector: 'plan',
+  cueId: 'cue-1',
+  reference: null,
+  confidence: 0.91,
+  why: `matched "${PLACEHOLDER_ANCHOR}"`,
+  at: 12_000,
+  canAutoFire: true
+}
+
+/**
+ * A scripture suggestion whose text has not resolved.
+ *
+ * `canAutoFire: false` is the hard gate from `@shared/scripture` — a confident *reference* says
+ * nothing about whether the *text* is in hand, and auto-showing one whose text failed to resolve
+ * puts an empty scripture card in front of a congregation.
+ */
+const SCRIPTURE_SUGGESTION: CueSuggestion = {
+  id: 'suggestion-scripture-1',
+  detector: 'scripture',
+  cueId: null,
+  reference: SCRIPTURE_REFERENCE,
+  confidence: CONFIDENCE_WEAK,
+  why: 'detected a scripture reference',
+  at: 13_000,
+  canAutoFire: false
+}
+
+const CUE_SETTINGS: CueEngineSettings = {
+  ...defaultCueEngineSettings(),
+  hotPhrases: [
+    { id: 'hotphrase-1', phrase: 'PLACEHOLDER HOT PHRASE', cueId: 'cue-3', enabled: true }
+  ]
+}
+
+const ASSISTING_CUE_STATE: CueEngineState = {
+  ...idleCueEngineState(),
+  alignment: 'aligned',
+  position: 2,
+  pending: PLAN_SUGGESTION
+}
+
+interface FakeCueEngine extends CueEngineLike {
+  emitState(state: CueEngineState): void
+  emitSuggestion(suggestion: CueSuggestion): void
+  /** Every settings object that actually reached the engine. Must stay empty for rejected input. */
+  readonly settingsWrites: CueEngineSettings[]
+  readonly modeWrites: TrustMode[]
+  readonly confirmed: string[]
+  readonly dismissed: string[]
+  readonly panicCalls: () => number
+  readonly resumeCalls: () => number
+  readonly stateUnsubscribed: () => number
+  readonly suggestionUnsubscribed: () => number
+}
+
+function createFakeCueEngine(): FakeCueEngine {
+  let stateListener: ((state: CueEngineState) => void) | null = null
+  let suggestionListener: ((suggestion: CueSuggestion) => void) | null = null
+  let stateUnsubscribes = 0
+  let suggestionUnsubscribes = 0
+  let panics = 0
+  let resumes = 0
+  let settings: CueEngineSettings = defaultCueEngineSettings()
+  let state: CueEngineState = ASSISTING_CUE_STATE
+  const settingsWrites: CueEngineSettings[] = []
+  const modeWrites: TrustMode[] = []
+  const confirmed: string[] = []
+  const dismissed: string[] = []
+
+  const engine: FakeCueEngine = {
+    settingsWrites,
+    modeWrites,
+    confirmed,
+    dismissed,
+    panicCalls: () => panics,
+    resumeCalls: () => resumes,
+    stateUnsubscribed: () => stateUnsubscribes,
+    suggestionUnsubscribed: () => suggestionUnsubscribes,
+
+    // A bare value rather than a Result, like the camera, overlay and ASR fakes: mixing the two
+    // shapes across the fakes is what keeps `resolveCall` honest.
+    getState: () => state,
+    getSettings: () => settings,
+    setSettings: (next) => {
+      settingsWrites.push(next)
+      settings = next
+      return ok(settings)
+    },
+    setMode: (mode) => {
+      modeWrites.push(mode)
+      state = { ...state, mode }
+      return ok(state)
+    },
+    confirm: (suggestionId) => {
+      confirmed.push(suggestionId)
+      // A stale id must miss rather than fire whatever happens to be pending.
+      if (state.pending?.id !== suggestionId) return ok(state)
+      state = { ...state, pending: null, recent: [state.pending, ...state.recent] }
+      return ok(state)
+    },
+    dismiss: (suggestionId) => {
+      dismissed.push(suggestionId)
+      if (state.pending?.id !== suggestionId) return ok(state)
+      state = { ...state, pending: null }
+      return ok(state)
+    },
+    panic: () => {
+      panics += 1
+      state = { ...state, enabled: false, mode: 'manual', pending: null, panicked: true }
+      return ok(state)
+    },
+    resume: () => {
+      resumes += 1
+      state = { ...state, enabled: true, mode: 'assist', panicked: false }
+      return ok(state)
+    },
+    onState: (listener) => {
+      stateListener = listener
+      return () => {
+        stateUnsubscribes += 1
+        stateListener = null
+      }
+    },
+    onSuggestion: (listener) => {
+      suggestionListener = listener
+      return () => {
+        suggestionUnsubscribes += 1
+        suggestionListener = null
+      }
+    },
+
+    emitState: (next) => {
+      stateListener?.(next)
+    },
+    emitSuggestion: (suggestion) => {
+      suggestionListener?.(suggestion)
+    }
+  }
+  return engine
+}
+
+interface FakeScriptureResolver extends ScriptureResolverLike {
+  readonly resolveCalls: Array<{
+    reference: ScriptureReference
+    translation: string | undefined
+  }>
+  readonly listCalls: () => number
+}
+
+/**
+ * A resolver that touches no network and holds no verse text.
+ *
+ * What it hands back is `SCRIPTURE_TEXT_PLACEHOLDER` — the only "verse text" anywhere in this
+ * repository. The real resolver fetches from a licensed API or a verified public-domain file at
+ * runtime; nothing here, and nothing in any fixture, ever authors a verse (Standing Rule 4).
+ */
+function createFakeScriptureResolver(): FakeScriptureResolver {
+  let lists = 0
+  const resolveCalls: FakeScriptureResolver['resolveCalls'] = []
+  return {
+    resolveCalls,
+    listCalls: () => lists,
+    resolve: (reference, translation) => {
+      resolveCalls.push({ reference, translation })
+      return ok({
+        ...RESOLVED_SCRIPTURE,
+        reference,
+        translation: translation ?? RESOLVED_SCRIPTURE.translation
+      })
+    },
+    // Only the verified entries. The quarantined KRV is in the catalogue and is not offered —
+    // absent, never present-and-disabled, so nothing downstream can select it.
+    listTranslations: () => {
+      lists += 1
+      return TRANSLATIONS.filter((entry) => entry.verified)
+    }
+  }
+}
+
 const SHOW_LOWER_THIRD: OverlayCommand = {
   channel: 'command',
   name: 'lowerThird.show',
@@ -1215,6 +1484,8 @@ interface Harness {
   readonly goLive: FakeGoLiveService
   readonly plan: FakePlanService
   readonly asr: FakeAsrService
+  readonly cue: FakeCueEngine
+  readonly scripture: FakeScriptureResolver
   readonly dialog: FakeDialog
   readonly filePaths: FakeFilePaths
   readonly windows: FakeWindow[]
@@ -1233,6 +1504,8 @@ function setup(options: { windows?: number } = {}): Harness {
   const goLive = createFakeGoLiveService()
   const plan = createFakePlanService()
   const asr = createFakeAsrService()
+  const cue = createFakeCueEngine()
+  const scripture = createFakeScriptureResolver()
   const dialog = createFakeDialog()
   const filePaths = createFakeFilePaths()
   const windows: FakeWindow[] = Array.from({ length: options.windows ?? 1 }, () =>
@@ -1257,6 +1530,8 @@ function setup(options: { windows?: number } = {}): Harness {
     goLive,
     plan,
     asr,
+    cue,
+    scripture,
     dialog,
     filePaths,
     config: CONFIG,
@@ -1277,6 +1552,8 @@ function setup(options: { windows?: number } = {}): Harness {
     goLive,
     plan,
     asr,
+    cue,
+    scripture,
     dialog,
     filePaths,
     windows,
@@ -1346,6 +1623,34 @@ describe('registerIpc', () => {
     ]) {
       expect(harness.ipc.handlers.has(channel)).toBe(true)
     }
+
+    // And the ten Phase 8 cue channels. Named explicitly for the same reason the go-live three
+    // are: the registry sweep above passes vacuously if a channel is ever dropped from
+    // `IpcChannel`, and a build that shipped without `cuePanic` in particular would fail at the
+    // one button that has to work when everything else already has.
+    for (const channel of [
+      IpcChannel.cueGetState,
+      IpcChannel.cueGetSettings,
+      IpcChannel.cueSetSettings,
+      IpcChannel.cueSetMode,
+      IpcChannel.cueConfirm,
+      IpcChannel.cueDismiss,
+      IpcChannel.cuePanic,
+      IpcChannel.cueResume,
+      IpcChannel.cueResolveScripture,
+      IpcChannel.cueListTranslations
+    ]) {
+      expect(harness.ipc.handlers.has(channel)).toBe(true)
+    }
+
+    // There is deliberately no `cue:fire` channel. The engine emits intents; something else
+    // applies them, and that separation is what makes an operator's veto instant. A future edit
+    // that added one would have to delete this assertion first.
+    expect(
+      IPC_CHANNEL_VALUES.filter(
+        (channel) => channel.startsWith('verger:cue:') && /fire|apply|show/.test(channel)
+      )
+    ).toEqual([])
   })
 
   it('returns the value a handler produces', async () => {
@@ -1578,6 +1883,11 @@ describe('registerIpc', () => {
     // dispose would hammer a dead bridge for the rest of the service.
     expect(harness.asr.statusUnsubscribed()).toBe(1)
     expect(harness.asr.transcriptUnsubscribed()).toBe(1)
+    // And both cue-engine subscriptions. A suggestion feed surviving dispose would be the worst of
+    // the lot: it would keep offering cues into a bridge nobody is holding, which is precisely the
+    // "something automated happened that nobody asked for" failure this phase exists to prevent.
+    expect(harness.cue.stateUnsubscribed()).toBe(1)
+    expect(harness.cue.suggestionUnsubscribed()).toBe(1)
 
     // Disposal unsubscribed and did nothing else. It did not end the broadcast, and it did not
     // stop the recording — a hot reload or a window close is not a reason to take a
@@ -1597,6 +1907,8 @@ describe('registerIpc', () => {
     expect(harness.plan.progressUnsubscribed()).toBe(1)
     expect(harness.asr.statusUnsubscribed()).toBe(1)
     expect(harness.asr.transcriptUnsubscribed()).toBe(1)
+    expect(harness.cue.stateUnsubscribed()).toBe(1)
+    expect(harness.cue.suggestionUnsubscribed()).toBe(1)
   })
 
   it('stops fanning events out after dispose', () => {
@@ -1619,6 +1931,8 @@ describe('registerIpc', () => {
     })
     harness.asr.emitStatus(LISTENING_ASR_STATUS)
     harness.asr.emitTranscript(FINAL_SEGMENT)
+    harness.cue.emitState(ASSISTING_CUE_STATE)
+    harness.cue.emitSuggestion(PLAN_SUGGESTION)
     expect(harness.windows[0]?.sent).toHaveLength(0)
   })
 
@@ -3976,6 +4290,680 @@ describe('registerIpc', () => {
       expect(harness.plan.advances()).toBe(0)
       expect(harness.plan.fired).toHaveLength(0)
       expect(harness.obs.connectCalls).toHaveLength(0)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Cue engine (BLUEPRINT.md §4)
+  //
+  // The most dangerous component in the product, tested at the boundary where it meets the
+  // renderer. Three claims are defended here, and each of them is a thing a wrong automated action
+  // mid-service would violate:
+  //
+  //  1. **The boundary cannot make the engine act.** There is no fire channel. The renderer can
+  //     read, tune, accept or reject a *named* suggestion, and switch automation off.
+  //  2. **Nothing can force an auto-fire.** The dial is enum-bounded and an invalid payload never
+  //     reaches the engine at all.
+  //  3. **`cuePanic` always succeeds.** No engine, an `Err` from the engine and a throw out of the
+  //     engine all resolve `ok` with a renderable panicked state — an operator hitting the switch
+  //     must never meet an error dialog.
+  //
+  // Standing Rule 4 runs through the whole block: the only verse text anywhere in it is
+  // `SCRIPTURE_TEXT_PLACEHOLDER`, and every transcript span is invented.
+  // -------------------------------------------------------------------------
+
+  describe('cue channels', () => {
+    it('returns the current engine snapshot and settings', async () => {
+      const state = (await harness.invoke(IpcChannel.cueGetState)) as Result<CueEngineState>
+      expect(state.ok).toBe(true)
+      if (!state.ok) return
+      expect(state.value).toEqual(ASSISTING_CUE_STATE)
+      // `assist` is the default everywhere and the only mode that should be recommended.
+      expect(state.value.mode).toBe('assist')
+      expect(state.value.panicked).toBe(false)
+
+      const settings = (await harness.invoke(
+        IpcChannel.cueGetSettings
+      )) as Result<CueEngineSettings>
+      expect(settings.ok).toBe(true)
+      if (!settings.ok) return
+      expect(settings.value).toEqual(defaultCueEngineSettings())
+    })
+
+    it('saves valid settings and resolves with what was stored', async () => {
+      const saved = (await harness.invoke(
+        IpcChannel.cueSetSettings,
+        CUE_SETTINGS
+      )) as Result<CueEngineSettings>
+
+      expect(saved.ok).toBe(true)
+      if (!saved.ok) return
+      expect(harness.cue.settingsWrites).toEqual([CUE_SETTINGS])
+      expect(saved.value.hotPhrases).toHaveLength(1)
+    })
+
+    /**
+     * The requirement stated as a test: an invalid settings object is refused **and the engine is
+     * never called**.
+     *
+     * A half-typed settings form must not be able to replace a working configuration mid-service,
+     * and an `autoFireThreshold` outside 0..1 in particular would be an engine that auto-fires
+     * everything — the exact failure that cannot be undone in front of a congregation.
+     */
+    it('rejects invalid settings with Err(INVALID_ARG) and never calls the engine', async () => {
+      const rejected: unknown[] = [
+        undefined,
+        null,
+        'assist',
+        { ...CUE_SETTINGS, mode: 'autopilot' },
+        { ...CUE_SETTINGS, autoFireThreshold: 1.5 },
+        { ...CUE_SETTINGS, autoFireThreshold: -1 },
+        { ...CUE_SETTINGS, scriptureAutoShow: 'yes' },
+        { ...CUE_SETTINGS, translation: '' },
+        // A hot phrase whose id/cueId/phrase is out of bounds. These are matched against a live
+        // transcript for the length of a service, so their size is bounded here.
+        { ...CUE_SETTINGS, hotPhrases: [{ id: '', phrase: 'ab', cueId: 'c', enabled: true }] },
+        {
+          ...CUE_SETTINGS,
+          hotPhrases: [{ id: 'h', phrase: 'x'.repeat(121), cueId: 'c', enabled: true }]
+        },
+        {
+          ...CUE_SETTINGS,
+          hotPhrases: Array.from({ length: 201 }, (_unused, index) => ({
+            id: `h${index}`,
+            phrase: 'PLACEHOLDER HOT PHRASE',
+            cueId: 'c',
+            enabled: true
+          }))
+        }
+      ]
+
+      for (const payload of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.cueSetSettings, payload)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      expect(harness.cue.settingsWrites).toHaveLength(0)
+    })
+
+    it('accepts every trust mode and refuses anything else without calling the engine', async () => {
+      for (const mode of TRUST_MODES) {
+        const result = (await harness.invoke(IpcChannel.cueSetMode, {
+          mode
+        })) as Result<CueEngineState>
+        expect(result.ok).toBe(true)
+        if (!result.ok) return
+        expect(result.value.mode).toBe(mode)
+      }
+      expect(harness.cue.modeWrites).toEqual([...TRUST_MODES])
+
+      for (const payload of [undefined, {}, { mode: 'autopilot' }, { mode: 4 }, 'auto']) {
+        expect(expectErr(await harness.invoke(IpcChannel.cueSetMode, payload)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+      // Still only the three legitimate writes: an unknown mode never reached the engine, so the
+      // dial was never left in a position nobody can name.
+      expect(harness.cue.modeWrites).toEqual([...TRUST_MODES])
+    })
+
+    /**
+     * A confirm names its suggestion, and a stale one misses.
+     *
+     * This is "human always wins" at the boundary. `syncToActual` drops the pending suggestion the
+     * instant the plan moves by any other means, so a confirm that was already in flight when the
+     * operator advanced by hand refers to a suggestion that no longer exists — and must therefore
+     * do nothing rather than fire whatever happens to be pending by the time it lands.
+     */
+    it('confirms and dismisses by id, and a stale id is a no-op', async () => {
+      const confirmed = (await harness.invoke(IpcChannel.cueConfirm, {
+        suggestionId: PLAN_SUGGESTION.id
+      })) as Result<CueEngineState>
+      expect(confirmed.ok).toBe(true)
+      if (!confirmed.ok) return
+      expect(confirmed.value.pending).toBeNull()
+      expect(confirmed.value.recent[0]).toEqual(PLAN_SUGGESTION)
+
+      // Nothing is pending now. A second confirm — the stale one — changes nothing at all.
+      const stale = (await harness.invoke(IpcChannel.cueConfirm, {
+        suggestionId: PLAN_SUGGESTION.id
+      })) as Result<CueEngineState>
+      expect(stale.ok).toBe(true)
+      if (!stale.ok) return
+      expect(stale.value.pending).toBeNull()
+      expect(stale.value.recent).toHaveLength(1)
+
+      expect(harness.cue.confirmed).toEqual([PLAN_SUGGESTION.id, PLAN_SUGGESTION.id])
+    })
+
+    it('requires a suggestion id on confirm and dismiss', async () => {
+      for (const channel of [IpcChannel.cueConfirm, IpcChannel.cueDismiss]) {
+        for (const payload of [undefined, {}, { suggestionId: '' }, { suggestionId: 7 }]) {
+          expect(expectErr(await harness.invoke(channel, payload)).code).toBe('INVALID_ARG')
+        }
+      }
+      expect(harness.cue.confirmed).toHaveLength(0)
+      expect(harness.cue.dismissed).toHaveLength(0)
+    })
+
+    it('dismisses the pending suggestion without recording it as fired', async () => {
+      const dismissed = (await harness.invoke(IpcChannel.cueDismiss, {
+        suggestionId: PLAN_SUGGESTION.id
+      })) as Result<CueEngineState>
+      expect(dismissed.ok).toBe(true)
+      if (!dismissed.ok) return
+      expect(dismissed.value.pending).toBeNull()
+      expect(dismissed.value.recent).toHaveLength(0)
+    })
+
+    // --- panic ---------------------------------------------------------------
+
+    it('halts automation on panic and reports a panicked state', async () => {
+      const result = (await harness.invoke(IpcChannel.cuePanic)) as Result<CueEngineState>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(harness.cue.panicCalls()).toBe(1)
+      expect(result.value.panicked).toBe(true)
+      expect(result.value.enabled).toBe(false)
+      expect(result.value.mode).toBe('manual')
+      expect(result.value.pending).toBeNull()
+
+      // And it touched nothing else. Panicking must never take a congregation's stream off the
+      // air, move the plan pointer, cut a camera or clear a lower-third.
+      expect(harness.obs.disconnectCalls()).toBe(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
+      expect(harness.plan.advances()).toBe(0)
+      expect(harness.plan.fired).toHaveLength(0)
+      expect(harness.camera.selected).toHaveLength(0)
+      expect(harness.overlay.sent).toHaveLength(0)
+    })
+
+    /**
+     * The requirement, exactly: **panic succeeds even when the engine throws.**
+     *
+     * `safeHandle` would ordinarily convert a throw into `Err(INTERNAL)`. For this one channel
+     * that is the wrong answer, because an `Err` is what the renderer turns into an error dialog —
+     * and an operator hitting the panic switch is already having the worst minute of their
+     * service. What comes back instead is a successful, renderable, *panicked* state carrying the
+     * reason in `lastError`, which is also what stops the layer above from applying anything.
+     */
+    it('succeeds on panic even when the engine throws', async () => {
+      const cue = createFakeCueEngine()
+      Object.assign(cue, {
+        panic: () => {
+          throw new Error('the cue engine exploded')
+        }
+      })
+
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.cuePanic)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      const settled = await Promise.resolve(handler(eventFrom(window), undefined))
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      const result = settled.value as Result<CueEngineState>
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.panicked).toBe(true)
+      expect(result.value.enabled).toBe(false)
+      expect(result.value.mode).toBe('manual')
+      expect(result.value.lastError).toContain('exploded')
+    })
+
+    it('succeeds on panic even when the engine returns an error', async () => {
+      const cue = createFakeCueEngine()
+      Object.assign(cue, {
+        panic: () => err('INTERNAL', 'the engine could not halt')
+      })
+
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.cuePanic)
+      if (handler === undefined) throw new Error('no panic handler')
+      const result = (await handler(eventFrom(window), undefined)) as Result<CueEngineState>
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.panicked).toBe(true)
+      expect(result.value.lastError).toContain('could not halt')
+    })
+
+    /**
+     * The press is logged before the attempt, at `info`, with a timestamp.
+     *
+     * The fact worth recording is that the operator pressed it — not the outcome. If the engine
+     * then throws, or the process dies a second later, the rolling log still answers "when did they
+     * panic?", which is the first question anyone asks afterwards.
+     */
+    it('logs the panic press at info with a timestamp before attempting anything', async () => {
+      const lines: LogLine[] = []
+      const cue = createFakeCueEngine()
+      Object.assign(cue, {
+        panic: () => {
+          throw new Error('the cue engine exploded')
+        }
+      })
+
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue,
+        config: CONFIG,
+        logger: createRecordingLogger(lines),
+        ipcMain: ipc,
+        getWindows: () => [window],
+        now: () => 1_700_000_000_000
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.cuePanic)
+      if (handler === undefined) throw new Error('no panic handler')
+      await handler(eventFrom(window), undefined)
+
+      const requested = lines.find((line) => line.msg.startsWith('PANIC requested'))
+      expect(requested?.level).toBe('info')
+      expect(requested?.data?.at).toBe(new Date(1_700_000_000_000).toISOString())
+      expect(requested?.data?.channel).toBe(IpcChannel.cuePanic)
+
+      // The throw is recorded too — as a log line, not as a failed Result.
+      expect(lines.some((line) => line.level === 'error' && line.msg.includes('PANIC'))).toBe(true)
+    })
+
+    it('re-engages automation only when the operator asks', async () => {
+      await harness.invoke(IpcChannel.cuePanic)
+      expect(harness.cue.resumeCalls()).toBe(0)
+
+      const resumed = (await harness.invoke(IpcChannel.cueResume)) as Result<CueEngineState>
+      expect(resumed.ok).toBe(true)
+      if (!resumed.ok) return
+      expect(harness.cue.resumeCalls()).toBe(1)
+      expect(resumed.value.panicked).toBe(false)
+      expect(resumed.value.mode).toBe('assist')
+    })
+
+    // --- scripture (Standing Rule 4) -----------------------------------------
+
+    it('resolves a scripture reference and forwards the requested translation', async () => {
+      const resolved = (await harness.invoke(IpcChannel.cueResolveScripture, {
+        reference: SCRIPTURE_REFERENCE,
+        translation: 'KJV'
+      })) as Result<ResolvedScripture>
+
+      expect(resolved.ok).toBe(true)
+      if (!resolved.ok) return
+      expect(harness.scripture.resolveCalls).toEqual([
+        { reference: SCRIPTURE_REFERENCE, translation: 'KJV' }
+      ])
+      expect(resolved.value.reference).toEqual(SCRIPTURE_REFERENCE)
+      // Standing Rule 4: the only "verse text" anywhere in this repository is the placeholder.
+      expect(resolved.value.text).toBe(SCRIPTURE_TEXT_PLACEHOLDER)
+    })
+
+    /**
+     * An omitted translation is *omitted*, never sent as `undefined`.
+     *
+     * "Absent" means "use the operator's configured translation", which is also the only place the
+     * quarantine rule for an unverified translation can be applied consistently.
+     */
+    it('omits the translation key when the renderer did not supply one', async () => {
+      const resolved = (await harness.invoke(IpcChannel.cueResolveScripture, {
+        reference: SCRIPTURE_REFERENCE
+      })) as Result<ResolvedScripture>
+
+      expect(resolved.ok).toBe(true)
+      expect(harness.scripture.resolveCalls).toHaveLength(1)
+      expect(harness.scripture.resolveCalls[0]?.translation).toBeUndefined()
+    })
+
+    /**
+     * The requirement: **an invalid scripture reference is rejected**, and the resolver never runs.
+     *
+     * The resolver turns this struct into a request against a licensed API or a public-domain file.
+     * A reference the detector could not have produced is either a bug or an attempt to make Verger
+     * fetch something arbitrary, so it stops here.
+     */
+    it('rejects an invalid scripture reference without calling the engine', async () => {
+      const rejected: unknown[] = [
+        undefined,
+        null,
+        'John 3:16',
+        { reference: null },
+        { reference: { ...SCRIPTURE_REFERENCE, chapter: 0 } },
+        { reference: { ...SCRIPTURE_REFERENCE, chapter: 151 } },
+        { reference: { ...SCRIPTURE_REFERENCE, verse: 0 } },
+        { reference: { ...SCRIPTURE_REFERENCE, verse: 201 } },
+        { reference: { ...SCRIPTURE_REFERENCE, chapter: 3.5 } },
+        { reference: { ...SCRIPTURE_REFERENCE, book: '' } },
+        { reference: { ...SCRIPTURE_REFERENCE, band: 'certain' } },
+        { reference: { ...SCRIPTURE_REFERENCE, confidence: 2 } },
+        { reference: { ...SCRIPTURE_REFERENCE, sourceText: 'x'.repeat(501) } },
+        // A reference with the `verse` field missing entirely — nullable, but not optional.
+        { reference: { ...SCRIPTURE_REFERENCE, verse: undefined } },
+        { reference: SCRIPTURE_REFERENCE, translation: '' },
+        { reference: SCRIPTURE_REFERENCE, translation: 'x'.repeat(21) }
+      ]
+
+      for (const payload of rejected) {
+        expect(expectErr(await harness.invoke(IpcChannel.cueResolveScripture, payload)).code).toBe(
+          'INVALID_ARG'
+        )
+      }
+
+      expect(harness.scripture.resolveCalls).toHaveLength(0)
+    })
+
+    it('lists only the translations that may actually be selected', async () => {
+      const listed = (await harness.invoke(IpcChannel.cueListTranslations)) as Result<
+        readonly TranslationSource[]
+      >
+      expect(listed.ok).toBe(true)
+      if (!listed.ok) return
+
+      // The quarantined Korean KRV is in the catalogue and is not offered: an unverified
+      // translation must never be selectable just because a file for it exists.
+      expect(listed.value.map((entry) => entry.code)).toEqual(['KJV'])
+      expect(listed.value.every((entry) => entry.verified)).toBe(true)
+      expect(listed.value.every((entry) => entry.license.length > 0)).toBe(true)
+
+      // And nothing in the catalogue carries verse text — there is no field on `TranslationSource`
+      // that could hold any.
+      expect(collectKeys(listed.value)).not.toContain('text')
+    })
+
+    // --- fan-out -------------------------------------------------------------
+
+    /**
+     * The requirement: suggestions fan out to *all* windows.
+     *
+     * Broadcasting an intent changes nothing anywhere — the engine has not fired and cannot fire
+     * from the IPC layer — so every window gets the same offer and the operator answers from
+     * whichever one they are looking at.
+     */
+    it('fans engine state and suggestions out to every window', () => {
+      const many = setup({ windows: 3 })
+      try {
+        many.cue.emitState(ASSISTING_CUE_STATE)
+        many.cue.emitSuggestion(PLAN_SUGGESTION)
+        many.cue.emitSuggestion(SCRIPTURE_SUGGESTION)
+
+        for (const window of many.windows) {
+          expect(window.sent).toEqual([
+            { channel: IpcEvent.cueState, payload: ASSISTING_CUE_STATE },
+            { channel: IpcEvent.cueSuggestion, payload: PLAN_SUGGESTION },
+            { channel: IpcEvent.cueSuggestion, payload: SCRIPTURE_SUGGESTION }
+          ])
+        }
+
+        // Standing Rule 4 on the event feed: a suggestion carries a REFERENCE, never text.
+        const pushed = many.windows[0]?.sent.find(
+          (entry) => entry.channel === IpcEvent.cueSuggestion
+        )?.payload as CueSuggestion | undefined
+        expect(pushed?.reference).toBeNull()
+        expect(collectKeys(many.windows[0]?.sent ?? [])).not.toContain('text')
+
+        // And the scripture suggestion whose text has not resolved cannot self-fire, whatever the
+        // mode: a confident reference says nothing about whether the text is in hand.
+        const scripture = many.windows[0]?.sent[2]?.payload as CueSuggestion | undefined
+        expect(scripture?.detector).toBe('scripture')
+        expect(scripture?.canAutoFire).toBe(false)
+      } finally {
+        many.dispose()
+      }
+    })
+
+    // --- degradation ---------------------------------------------------------
+
+    /**
+     * No cue engine at all — and the operator loses nothing that matters.
+     *
+     * Nine channels answer `NOT_CONFIGURED` with a detail saying the plan still advances on SPACE.
+     * The tenth is `cuePanic`, which still succeeds: with no engine there was no automation to
+     * halt, and the operator gets exactly the state they asked for rather than a dialog.
+     */
+    it('degrades to NOT_CONFIGURED with no engine, and panic still succeeds', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      for (const [channel, arg] of [
+        [IpcChannel.cueGetState, undefined],
+        [IpcChannel.cueGetSettings, undefined],
+        [IpcChannel.cueSetSettings, CUE_SETTINGS],
+        [IpcChannel.cueSetMode, { mode: 'assist' }],
+        [IpcChannel.cueConfirm, { suggestionId: PLAN_SUGGESTION.id }],
+        [IpcChannel.cueDismiss, { suggestionId: PLAN_SUGGESTION.id }],
+        [IpcChannel.cueResume, undefined],
+        [IpcChannel.cueResolveScripture, { reference: SCRIPTURE_REFERENCE }],
+        [IpcChannel.cueListTranslations, undefined]
+      ] as Array<[IpcChannelValue, unknown]>) {
+        expect(expectErr(await call(channel, arg)).code).toBe('NOT_CONFIGURED')
+      }
+
+      const panicked = (await call(IpcChannel.cuePanic)) as Result<CueEngineState>
+      expect(panicked.ok).toBe(true)
+      if (!panicked.ok) return
+      expect(panicked.value.panicked).toBe(true)
+      expect(panicked.value.enabled).toBe(false)
+      expect(panicked.value.mode).toBe('manual')
+      expect(panicked.value.lastError).not.toBeNull()
+
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    /**
+     * No scripture resolver — Standing Rule 5, and the ordinary state of a machine with no ESV /
+     * API.Bible key and no verified public-domain translation downloaded.
+     *
+     * The two scripture channels answer `NOT_CONFIGURED` naming the keys. Everything else about the
+     * engine keeps working: the plan-follower and hot-phrase detectors need no scripture at all, so
+     * the operator loses verse *text* and keeps every other suggestion.
+     */
+    it('reports NOT_CONFIGURED for the scripture channels when there is no resolver', async () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: createFakeCueEngine(),
+        // No resolver: no ESV / API.Bible key and no verified public-domain translation on disk.
+        scripture: null,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const call = async (channel: IpcChannelValue, arg?: unknown): Promise<unknown> => {
+        const handler = ipc.handlers.get(channel)
+        if (handler === undefined) throw new Error(`no handler for ${channel}`)
+        return handler(eventFrom(window), arg)
+      }
+
+      const resolved = expectErr(
+        await call(IpcChannel.cueResolveScripture, { reference: SCRIPTURE_REFERENCE })
+      )
+      expect(resolved.code).toBe('NOT_CONFIGURED')
+      expect(resolved.detail).toContain('ESV_API_KEY')
+      expect(expectErr(await call(IpcChannel.cueListTranslations)).code).toBe('NOT_CONFIGURED')
+
+      // The rest of the engine is untouched — including the switch that has to work.
+      const state = (await call(IpcChannel.cueGetState)) as Result<CueEngineState>
+      expect(state.ok).toBe(true)
+      const panicked = (await call(IpcChannel.cuePanic)) as Result<CueEngineState>
+      expect(panicked.ok).toBe(true)
+
+      dispose()
+    })
+
+    it('tolerates a cue engine whose subscriptions return nothing', () => {
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      const bare: CueEngineLike = {
+        getState: () => idleCueEngineState(),
+        getSettings: () => defaultCueEngineSettings(),
+        setSettings: (settings) => settings,
+        setMode: () => idleCueEngineState(),
+        confirm: () => idleCueEngineState(),
+        dismiss: () => idleCueEngineState(),
+        panic: () => idleCueEngineState(),
+        resume: () => idleCueEngineState(),
+        onState: () => undefined,
+        onSuggestion: () => undefined
+      }
+
+      const dispose = registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue: bare,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      expect(ipc.handlers.size).toBe(IPC_CHANNEL_VALUES.length)
+      expect(() => {
+        dispose()
+      }).not.toThrow()
+    })
+
+    it('converts a throwing cue engine into Err(INTERNAL) on the ordinary channels', async () => {
+      const cue = createFakeCueEngine()
+      Object.assign(cue, {
+        getState: () => {
+          throw new Error('the cue engine exploded')
+        }
+      })
+
+      const ipc = createFakeIpcMain()
+      const window = createFakeWindow()
+      registerIpc({
+        obs: createFakeObsClient(),
+        overlay: null,
+        camera: null,
+        youtube: null,
+        goLive: null,
+        plan: null,
+        asr: null,
+        cue,
+        config: CONFIG,
+        logger: createSilentLogger(),
+        ipcMain: ipc,
+        getWindows: () => [window]
+      })
+
+      const handler = ipc.handlers.get(IpcChannel.cueGetState)
+      expect(handler).toBeDefined()
+      if (handler === undefined) return
+
+      const settled = await Promise.resolve(handler(eventFrom(window), undefined))
+        .then((value) => ({ rejected: false, value }))
+        .catch((cause: unknown) => ({ rejected: true, value: cause }))
+
+      expect(settled.rejected).toBe(false)
+      expect(expectErr(settled.value).code).toBe('INTERNAL')
+    })
+
+    /**
+     * Standing Rule 1 at the boundary: driving the whole cue surface changes nothing else.
+     *
+     * Confirming a suggestion here does not advance the plan, does not fire a cue, does not switch
+     * a camera and does not send an overlay command — because this layer cannot. Whatever applies a
+     * confirmed suggestion reaches the plan through the same `plan:*` channels an operator's SPACE
+     * key uses, which is exactly what makes "a manual move always wins" implementable.
+     */
+    it('leaves the plan, the camera, the overlay and OBS untouched', async () => {
+      await harness.invoke(IpcChannel.cueSetMode, { mode: 'auto' })
+      await harness.invoke(IpcChannel.cueSetSettings, CUE_SETTINGS)
+      await harness.invoke(IpcChannel.cueConfirm, { suggestionId: PLAN_SUGGESTION.id })
+      await harness.invoke(IpcChannel.cueDismiss, { suggestionId: SCRIPTURE_SUGGESTION.id })
+      await harness.invoke(IpcChannel.cueResolveScripture, { reference: SCRIPTURE_REFERENCE })
+      await harness.invoke(IpcChannel.cuePanic)
+      await harness.invoke(IpcChannel.cueResume)
+
+      expect(harness.plan.advances()).toBe(0)
+      expect(harness.plan.fired).toHaveLength(0)
+      expect(harness.camera.selected).toHaveLength(0)
+      expect(harness.overlay.sent).toHaveLength(0)
+      expect(harness.obs.connectCalls).toHaveLength(0)
+      expect(harness.goLive.endArgs).toHaveLength(0)
     })
   })
 

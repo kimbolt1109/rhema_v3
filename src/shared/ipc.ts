@@ -23,6 +23,8 @@ import type { OverlayCommand, OverlayState } from './overlay'
 import type { GoLiveState } from './golive'
 import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from './asr'
 import type { Cue, PlanPosition, ServicePlan } from './plan'
+import type { CueEngineSettings, CueEngineState, CueSuggestion } from './cue'
+import type { ResolvedScripture, ScriptureReference, TranslationSource } from './scripture'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from './youtube'
 import type { Result } from './result'
 
@@ -120,6 +122,16 @@ export const IpcChannel = {
   asrStop: 'verger:asr:stop',
   asrPushAudio: 'verger:asr:push-audio',
   asrListDevices: 'verger:asr:list-devices',
+  cueGetState: 'verger:cue:get-state',
+  cueGetSettings: 'verger:cue:get-settings',
+  cueSetSettings: 'verger:cue:set-settings',
+  cueSetMode: 'verger:cue:set-mode',
+  cueConfirm: 'verger:cue:confirm',
+  cueDismiss: 'verger:cue:dismiss',
+  cuePanic: 'verger:cue:panic',
+  cueResume: 'verger:cue:resume',
+  cueResolveScripture: 'verger:cue:resolve-scripture',
+  cueListTranslations: 'verger:cue:list-translations',
 } as const
 
 /** Union of every request channel string. */
@@ -143,6 +155,8 @@ export const IpcEvent = {
   planImportProgress: 'verger:plan:import-progress',
   asrStatus: 'verger:asr:status',
   asrTranscript: 'verger:asr:transcript',
+  cueState: 'verger:cue:state',
+  cueSuggestion: 'verger:cue:suggestion',
 } as const
 
 /** Union of every event channel string. */
@@ -209,6 +223,16 @@ export interface IpcRequest {
   /** One PCM chunk from the renderer's capture. 16 kHz mono s16le. */
   [IpcChannel.asrPushAudio]: ArrayBuffer
   [IpcChannel.asrListDevices]: readonly AudioInputDevice[]
+  [IpcChannel.cueGetState]: void
+  [IpcChannel.cueGetSettings]: void
+  [IpcChannel.cueSetSettings]: CueEngineSettings
+  [IpcChannel.cueSetMode]: { mode: CueEngineSettings['mode'] }
+  [IpcChannel.cueConfirm]: { suggestionId: string }
+  [IpcChannel.cueDismiss]: { suggestionId: string }
+  [IpcChannel.cuePanic]: void
+  [IpcChannel.cueResume]: void
+  [IpcChannel.cueResolveScripture]: { reference: ScriptureReference; translation?: string }
+  [IpcChannel.cueListTranslations]: void
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -252,6 +276,16 @@ export interface IpcResponse {
   [IpcChannel.asrStop]: Result<AsrStatus>
   [IpcChannel.asrPushAudio]: Result<void>
   [IpcChannel.asrListDevices]: Result<void>
+  [IpcChannel.cueGetState]: Result<CueEngineState>
+  [IpcChannel.cueGetSettings]: Result<CueEngineSettings>
+  [IpcChannel.cueSetSettings]: Result<CueEngineSettings>
+  [IpcChannel.cueSetMode]: Result<CueEngineState>
+  [IpcChannel.cueConfirm]: Result<CueEngineState>
+  [IpcChannel.cueDismiss]: Result<CueEngineState>
+  [IpcChannel.cuePanic]: Result<CueEngineState>
+  [IpcChannel.cueResume]: Result<CueEngineState>
+  [IpcChannel.cueResolveScripture]: Result<ResolvedScripture>
+  [IpcChannel.cueListTranslations]: Result<readonly TranslationSource[]>
 }
 
 /** The payload pushed on each event channel. */
@@ -268,6 +302,8 @@ export interface IpcEventPayload {
   [IpcEvent.planImportProgress]: DeckImportProgress
   [IpcEvent.asrStatus]: AsrStatus
   [IpcEvent.asrTranscript]: TranscriptSegment
+  [IpcEvent.cueState]: CueEngineState
+  [IpcEvent.cueSuggestion]: CueSuggestion
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -364,6 +400,28 @@ export interface VergerApi {
     listDevices(devices: readonly AudioInputDevice[]): Promise<Result<void>>
     onStatus(callback: (status: AsrStatus) => void): Unsubscribe
     onTranscript(callback: (segment: TranscriptSegment) => void): Unsubscribe
+  }
+  readonly cue: {
+    getState(): Promise<Result<CueEngineState>>
+    getSettings(): Promise<Result<CueEngineSettings>>
+    setSettings(settings: CueEngineSettings): Promise<Result<CueEngineSettings>>
+    /** The trust dial. */
+    setMode(options: { mode: CueEngineSettings['mode'] }): Promise<Result<CueEngineState>>
+    /** Accept the pending suggestion (Y / pedal). */
+    confirm(options: { suggestionId: string }): Promise<Result<CueEngineState>>
+    /** Reject it (N). */
+    dismiss(options: { suggestionId: string }): Promise<Result<CueEngineState>>
+    /** Master switch: halt all automation. Never touches the stream or the recording. */
+    panic(): Promise<Result<CueEngineState>>
+    /** Re-engage automation after a panic. Deliberately explicit — never automatic. */
+    resume(): Promise<Result<CueEngineState>>
+    resolveScripture(options: {
+      reference: ScriptureReference
+      translation?: string
+    }): Promise<Result<ResolvedScripture>>
+    listTranslations(): Promise<Result<readonly TranslationSource[]>>
+    onState(callback: (state: CueEngineState) => void): Unsubscribe
+    onSuggestion(callback: (suggestion: CueSuggestion) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

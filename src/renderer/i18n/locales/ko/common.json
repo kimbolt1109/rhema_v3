@@ -11,7 +11,8 @@
       "asr": "음성 인식",
       "youtube": "유튜브",
       "live": "송출",
-      "recording": "녹화"
+      "recording": "녹화",
+      "automation": "자동화"
     },
     "phasePending": "준비 중",
     "phasePendingDetail": "다음 단계에서 추가됩니다.",
@@ -22,6 +23,7 @@
       "overlay": "오버레이",
       "plan": "진행표",
       "transcript": "자막 기록",
+      "automation": "자동화",
       "goLive": "송출 시작",
       "goLiveSettings": "송출 설정",
       "cameraSetup": "카메라 설정",
@@ -742,6 +744,138 @@
         "body": "DEEPGRAM_API_KEY가 비어 있어 클라우드 인식이 꺼져 있습니다. 고장이 아니라 정상적인 대기 상태이며, Verger는 수동으로 동작하고 나머지 기능은 영향을 받지 않습니다.",
         "humanTasks": "키 등록은 사람이 직접 해야 하는 작업입니다. 프로젝트 폴더의 HUMAN_TASKS.md를 확인하세요. 위에서 로컬 또는 자동을 고르면 로컬 인식을 대신 쓸 수 있습니다."
       }
+    }
+  },
+  "cue": {
+    "subsystem": {
+      "unknown": "확인 중",
+      "assist": "보조",
+      "auto": "자동",
+      "manual": "수동",
+      "panicked": "정지됨",
+      "waiting": "확인 대기"
+    },
+    "mode": {
+      "assist": "보조",
+      "auto": "자동",
+      "manual": "수동"
+    },
+    "modeDetail": {
+      "assist": "다음에 나갈 큐를 표시해 두고, 화면을 누르거나 키 또는 페달로 확인해 줄 때까지 기다립니다. 확인하기 전에는 회중 화면에 아무것도 나가지 않습니다.",
+      "auto": "확신도가 높은 큐는 묻지 않고 스스로 나갑니다. 확신도가 낮은 큐는 여전히 확인을 기다립니다.",
+      "manual": "운영자가 직접 진행합니다. 인식 결과는 계속 보여 주지만, 눌러서 실행할 제안으로는 올라오지 않습니다."
+    },
+    "modeBadge": {
+      "default": "기본값",
+      "recommended": "권장"
+    },
+    "detector": {
+      "plan": "진행표",
+      "scripture": "성경 구절",
+      "hotphrase": "지정 문구"
+    },
+    "alignment": {
+      "aligned": "진행표를 따라가는 중",
+      "lost": "진행표에서 벗어남",
+      "no-plan": "진행표 없음"
+    },
+    "alignmentDetail": {
+      "aligned": "최근 자막이 바로 앞의 큐들과 맞아떨어져, 진행표를 그대로 따라가고 있습니다.",
+      "lost": "설교가 원고에서 벗어나 진행표 추적은 조용히 멈춰 있습니다. 성경 구절과 지정 문구 인식은 그대로 동작합니다. 이 둘은 진행표가 없어도 됩니다.",
+      "no-plan": "따라갈 문구가 등록된 진행표가 없습니다. 성경 구절과 지정 문구 인식은 그대로 동작합니다."
+    },
+    "band": {
+      "exact": "정확히 일치",
+      "fuzzy": "거의 일치",
+      "weak": "약한 일치"
+    },
+    "position": {
+      "label": "현재 위치",
+      "beforeStart": "첫 큐 이전",
+      "cue": "{{ordinal}}번 큐 — {{label}}",
+      "unknownCue": "{{ordinal}}번 큐"
+    },
+    "suggestion": {
+      "regionLabel": "제안된 다음 동작",
+      "idleRegionLabel": "큐 엔진",
+      "whatLabel": "실행하면 일어나는 일",
+      "whyLabel": "이유",
+      "confidenceLabel": "확신도",
+      "confidenceValue": "{{percent}}%",
+      "detectorLabel": "인식한 곳",
+      "fireCue": "“{{label}}” 실행",
+      "fireCueUnknown": "큐 실행",
+      "showScripture": "{{reference}} 표시",
+      "cueMissing": "이 제안이 가리키는 큐가 진행표에 더 이상 없어 실행할 것이 없습니다. 무시하세요.",
+      "spokenAs": "들린 대로: {{reference}}",
+      "translationLabel": "역본",
+      "attributionLabel": "출처 표기",
+      "attributionNone": "이 출처는 별도 표기를 요구하지 않습니다.",
+      "resolving": "구절 본문을 가져오는 중…",
+      "textUnavailable": "본문을 가져오지 못함",
+      "textUnavailableDetail": "구절 본문을 가져오지 못했습니다. 따라서 어떤 모드에서도 자동으로 표시되지 않습니다. 지금 표시하면 회중 화면에 빈 성경 카드가 그대로 나갑니다.",
+      "textUnavailableReason": "원인: {{reason}}",
+      "textNote": "Verger는 구절 본문을 저장하지 않습니다. 가져온 본문은 출처 표기와 함께 그때 한 번 보여 줄 뿐, 진행표 파일에 기록되지 않습니다.",
+      "willAutoFire": "잠시 후 스스로 실행됩니다. 막으려면 N을 누르거나 무시를 선택하세요.",
+      "willNotAutoFire": "확인하기 전까지는 아무 일도 일어나지 않습니다.",
+      "confirm": "확인",
+      "dismiss": "무시",
+      "confirmHint": "Y 키",
+      "dismissHint": "N 키",
+      "announce": "제안: {{what}}. {{why}}. 확인은 Y, 무시는 N입니다.",
+      "none": "제안 없음",
+      "noneDetail": "엔진이 계속 듣고 있습니다. 제안할 것이 생기면 이 자리에 카드가 나타납니다.",
+      "lastFiredLabel": "마지막 실행",
+      "undo": "되돌리기 — “{{label}}” 취소",
+      "undoHint": "진행표를 한 큐 뒤로 되돌립니다. 회중 화면을 비우지는 않습니다.",
+      "error": "마지막 자동화 동작이 거부되었습니다"
+    },
+    "trust": {
+      "title": "자동화 수준",
+      "subtitle": "Verger가 묻지 않고 할 수 있는 범위입니다. 보조가 기본값이며, 실제로 권장하는 설정입니다.",
+      "groupLabel": "자동화 모드",
+      "current": "현재 적용: {{mode}}",
+      "autoCaution": "주의: 자동 모드에서는 확신도가 높은 큐가 먼저 묻지 않고 회중 화면에 나갑니다. 취소할 수는 있지만, 이미 화면에 나간 뒤입니다.",
+      "perCueNote": "개별 큐는 언제나 이 설정보다 더 안전하게만 바꿀 수 있습니다. 진행표에서 그 큐의 “항상 먼저 물어보기”를 켜세요. 반대로 더 위험하게 만들 수는 없습니다."
+    },
+    "panic": {
+      "regionLabel": "긴급 정지 — 자동화만 멈춥니다. 송출을 끄지 않고, 녹화를 멈추지 않으며, 화면을 지우지 않습니다",
+      "title": "긴급 정지",
+      "label": "긴급 정지 — 자동화만 멈춤, 송출은 그대로",
+      "does": "모든 자동 동작을 즉시 멈춥니다. 큐가 실행되지 않고, 성경 구절이 표시되지 않으며, 어떤 제안도 적용되지 않습니다.",
+      "doesNotLabel": "긴급 정지가 하지 않는 일",
+      "notStream": "송출을 끄지 않습니다. 방송은 그대로 나갑니다.",
+      "notRecording": "로컬 녹화를 멈추지 않습니다. 백업 파일은 계속 기록됩니다.",
+      "notScreen": "회중 화면을 지우지 않습니다. 지금 나가 있는 화면은 그대로 남습니다.",
+      "reassurance": "그래서 마음 놓고 눌러도 됩니다. 원하지 않던 자동화만 사라질 뿐, 잃는 것이 없습니다.",
+      "panickedTitle": "자동화 정지됨",
+      "panickedBody": "Verger는 아무것도 실행하지 않고 아무것도 제안하지 않습니다. 송출, 로컬 녹화, 회중 화면은 방금 그대로입니다.",
+      "resume": "자동화 다시 시작",
+      "resumeHint": "자동화는 저절로 켜지지 않습니다. 새 제안이 와도, 모드를 바꿔도, 음성 인식을 다시 시작해도 켜지지 않습니다. 오직 이 버튼으로만 켜집니다.",
+      "lockedWhilePanicked": "자동화가 멈춰 있는 동안에는 모드를 바꿀 수 없습니다. 먼저 다시 시작하세요."
+    },
+    "hotPhrases": {
+      "title": "지정 문구",
+      "subtitle": "강단에서 말하는 문구를 큐에 연결해 둡니다. 진행표도, 위치 추적도 필요 없어서 원고 없는 설교에서도 그대로 동작합니다.",
+      "listLabel": "지정 문구 목록",
+      "phraseLabel": "문구",
+      "phrasePlaceholder": "기도하겠습니다",
+      "cueLabel": "실행할 큐",
+      "enableLabel": "“{{phrase}}” 사용",
+      "add": "지정 문구 추가",
+      "remove": "“{{phrase}}” 삭제",
+      "empty": "등록된 지정 문구가 없습니다.",
+      "emptyHint": "매주 같은 말로 하는 순서를 넣어 두세요. 예: “기도하겠습니다”, “받으실 말씀은”.",
+      "noCues": "연결할 큐가 아직 없습니다. 진행표를 먼저 작성하세요. 실행할 큐가 없는 지정 문구는 아무 일도 하지 않습니다.",
+      "tooShort": "너무 짧아 저장할 수 없습니다. {{min}}자 이상으로 입력하세요.",
+      "shortWarning": "너무 짧습니다. 이대로 두면 의도하지 않은 순간에 실행됩니다. {{min}}자 미만은 평범한 낱말 속에도 들어 있으니, 실제로 말하는 문구 전체를 넣으세요.",
+      "duplicate": "이미 목록에 있는 문구입니다.",
+      "full": "지정 문구 목록이 가득 찼습니다.",
+      "saveFailed": "변경이 거부되어 저장되지 않았습니다."
+    },
+    "bridgeUnavailable": {
+      "title": "큐 엔진을 사용할 수 없습니다",
+      "body": "Verger가 내부 프로세스에 연결하지 못해 인식도, 자동 실행도 이루어지지 않습니다. 진행표와 카메라, 오버레이는 손으로 그대로 사용할 수 있습니다."
     }
   },
   "holdButton": {

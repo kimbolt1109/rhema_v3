@@ -537,3 +537,85 @@ tones, which proves the plumbing but says nothing about accuracy on a sermon.
 ### Remaining delta
 
 Phases 8-10.
+
+---
+
+## Cycle 8 — Phase 8: The cue engine (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 1,566 tests / 51 files ·
+`electron-vite build` succeeds · app launches with 49 IPC channels.
+
+The brain: three parallel detectors, the trust dial, and the mechanism that makes "human always
+wins" true rather than aspirational.
+
+### Delta closed
+
+- **Scripture contract** (`src/shared/scripture.ts`) — the confidence bands (0.95 / 0.65 / 0.50)
+  as named constants with their reasoning, and `canAutoShow()`, the hard gate.
+- **Cue contract** (`src/shared/cue.ts`) — `CueSuggestion` as an *intent*, `shouldAutoFire()`,
+  and `syncToActual()`.
+- **Scripture detector** — 66-book table with Korean names and abbreviations; KO forms
+  (`요한복음 3장 16절`, `요 3:16`, `시편 23편`, Sino-Korean numerals) and EN forms
+  (`John 3:16`, `First Corinthians 13`, `turn to John three sixteen`).
+- **Resolver + translation catalogue** — PD-first, licensed-API second, attribution carried
+  through, with the KRV quarantine rule enforced as data plus a filter.
+- **Engine** — plan-follower, hot-phrase and scripture detectors running independently, plus the
+  trust dial and panic.
+- **Suggestion panel, trust dial, hot-phrase editor.**
+
+### The safety properties, and how they are enforced
+
+- **The engine never writes authoritative state.** It emits an intent; something else applies it.
+- **`syncToActual()` runs first on every tick.** A manual plan move snaps the pointer, zeroes the
+  dwell clock and *drops the pending suggestion* — otherwise an operator taking over is still
+  racing a suggestion formed a second ago. Tested directly.
+- **Nothing can force an auto-fire.** `confirmAlways` and a below-threshold confidence each block
+  one; nothing compels one. Tested at confidence 1.0.
+- **A confident reference whose text failed to resolve does not auto-show.** Tested.
+- **Off-script degrades rather than breaks**: after three misses alignment goes `lost`, the
+  plan-follower stops suggesting, and scripture + hot-phrase keep working. Its own test.
+- **PANIC halts automation and touches nothing else** — no stream, no recording, no overlay
+  output — and resuming is explicit, never automatic.
+
+### Detector judgement calls worth knowing
+
+- **Fuzzy matching runs against full book names only, never abbreviations.** Otherwise "we are
+  meeting in room 3:16" is one edit from "Rom" and becomes Romans. Against full names "room" is
+  three edits from "Romans" and is discarded, while "Jon" is still one from "John".
+- **At equal edit distance an insertion outranks a substitution.** "Jon" is one edit from both Job
+  and John; canonical order alone silently picked Job. An ASR dropping a character is likelier
+  than one substituting and landing on a different real book.
+- **Priming can never manufacture an `exact` match**: `CONFIDENCE_FUZZY + PRIMING_BONUS = 0.75`,
+  below `CONFIDENCE_EXACT`. So `받으실 말씀은` re-ranks guesses but can never make one
+  auto-showable. Asserted by a test.
+- **ReDoS measured, not assumed**: nine adversarial inputs complete in **1.35 ms** against a 50 ms
+  budget; no unbounded quantifiers anywhere in the file.
+- `maxVerse` is a deliberate conservative upper bound. Hand-authoring 1,189 per-chapter counts
+  invites a typo that silently rejects a real reference mid-service — invisible to the operator.
+  Too-high merely lets an absurd number through to a suggestion they can ignore.
+
+### Defects found and fixed during verification
+
+**The engine was wired to nothing.** `getCueEngine()` defaulted `plan` and `overlay` but not
+`asr`, and `register.ts` never passed the scripture detector at all. In production the engine had
+no transcript source and no detector — a brain with neither ears nor eyes — while all 1,566 tests
+passed, because every engine test injects its own fakes and calls `onTranscript()` directly.
+Both are now defaulted alongside `plan` and `overlay`, and the module's docblock (which claimed
+`register.ts` supplied them) was corrected.
+
+This is the **fourth** occurrence of this exact class: Phase 2's unstarted overlay server, Phase
+4's unrestored session, Phase 5's unwired go-live re-attach, and now this. The pattern is
+consistent — a component is built and tested in isolation, and nothing connects it to the running
+app. **Phase 9 should add an integration test that boots the real wiring** rather than relying on
+me catching the fifth one by hand.
+
+### Not verified
+
+No real speech has ever reached this engine. Detection is exercised on synthetic transcripts, and
+the resolver on mocked fetches — no ESV/API.Bible key exists and no public-domain translation has
+been downloaded. Korean detection accuracy against a real sermon, and end-to-end
+speech → transcript → suggestion latency, are both unproven.
+
+### Remaining delta
+
+Phases 9-10.

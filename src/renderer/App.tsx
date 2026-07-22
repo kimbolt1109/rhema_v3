@@ -28,11 +28,12 @@
  * tree still produces a readable screen rather than a black window.
  */
 
-import { Cast, Disc, Layers, Mic, Radio, RadioTower } from 'lucide-react'
+import { Bot, Cast, Disc, Layers, Mic, Radio, RadioTower } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ActionId, DEFAULT_KEY_BINDINGS } from '@shared/actions'
 import type { AsrState } from '@shared/asr'
 import type { GoLivePhase } from '@shared/golive'
 import type { AppVersions } from '@shared/ipc'
@@ -40,7 +41,12 @@ import type { ObsConnectionState } from '@shared/obs'
 import type { YouTubeAuthState } from '@shared/youtube'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { TrustDial } from './components/TrustDial'
+import { createActionDispatcher } from './input/ActionDispatcher'
+import { useKeyboardActions } from './input/useKeyboardActions'
 import { AsrSettings } from './screens/AsrSettings'
+import { HotPhraseEditor } from './screens/HotPhraseEditor'
+import { SuggestionPanel } from './screens/SuggestionPanel'
 import { CameraPanel } from './screens/CameraPanel'
 import { CameraSettings } from './screens/CameraSettings'
 import { ConnectionScreen } from './screens/ConnectionScreen'
@@ -50,6 +56,7 @@ import { OverlayPanel } from './screens/OverlayPanel'
 import { PlanEditor } from './screens/PlanEditor'
 import { TranscriptPanel } from './screens/TranscriptPanel'
 import { useAsrStore } from './store/asrStore'
+import { useCueStore } from './store/cueStore'
 import { isRecordingMissing, useGoLiveStore } from './store/goLiveStore'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
@@ -69,6 +76,9 @@ const SECTIONS = [
   // what the cue engine (Phase 8) is going to key off — so it sits with the others, and its
   // settings sit with the settings tabs.
   { id: 'transcript', labelKey: 'app.section.transcript' },
+  // Phase 8. The trust dial and the hot-phrase list live together because they are the same
+  // decision at two scales: how much Verger may do without asking, and which words let it.
+  { id: 'automation', labelKey: 'app.section.automation' },
   // Phase 5 splits what Phase 4 called "Go Live" in two: the GO LIVE / END *controls* sit here,
   // with the two other live surfaces, and the weekly template and OAuth *settings* move one tab
   // to the right. A screen that both configures a broadcast and starts one invites the operator to
@@ -82,7 +92,15 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]['id']
 
 /** Where a subsystem light gets its state from. */
-type SubsystemSource = 'obs' | 'overlay' | 'asr' | 'youtube' | 'goLive' | 'recording' | 'pending'
+type SubsystemSource =
+  | 'obs'
+  | 'overlay'
+  | 'asr'
+  | 'youtube'
+  | 'goLive'
+  | 'recording'
+  | 'cue'
+  | 'pending'
 
 /** One light in the subsystem strip. */
 interface SubsystemDescriptor {
@@ -102,6 +120,9 @@ const SUBSYSTEMS: readonly SubsystemDescriptor[] = [
   // the failure the operator most needs to notice, and it is invisible in a combined light.
   { id: 'live', labelKey: 'app.subsystem.live', icon: RadioTower, source: 'goLive' },
   { id: 'recording', labelKey: 'app.subsystem.recording', icon: Disc, source: 'recording' },
+  // Phase 8. What the automation is allowed to do, always visible: an operator must never have to
+  // open a tab to find out whether the console is about to act on its own.
+  { id: 'automation', labelKey: 'app.subsystem.automation', icon: Bot, source: 'cue' },
 ]
 
 /** Same three-channel rule as the big light: colour is never the only signal. */
@@ -231,6 +252,8 @@ function SubsystemStrip(): React.JSX.Element {
   const goLiveHydrated = useGoLiveStore((state) => state.hydrated)
   const asrState = useAsrStore((state) => state.status.state)
   const asrHydrated = useAsrStore((state) => state.hydrated)
+  const cueEngine = useCueStore((state) => state.state)
+  const cueHydrated = useCueStore((state) => state.hydrated)
 
   const overlayLight = ((): LightState => {
     if (!overlayHydrated) {
@@ -310,6 +333,32 @@ function SubsystemStrip(): React.JSX.Element {
     }
   })()
 
+  const cueLight = ((): LightState => {
+    if (!cueHydrated) {
+      return { key: 'unknown', text: t('cue.subsystem.unknown'), tone: 'text-text-muted' }
+    }
+    // Panic outranks the mode, and it is panic-coloured rather than muted on purpose: automation
+    // being halted is a state the operator chose, and one they must be reminded of until they undo
+    // it. A halted engine that read as an ordinary "manual" would be found out the hard way.
+    if (cueEngine.panicked) {
+      return { key: 'panicked', text: t('cue.subsystem.panicked'), tone: 'text-panic' }
+    }
+    // A decision waiting on the operator is louder than the mode, because it is the thing with a
+    // deadline attached.
+    if (cueEngine.pending !== null) {
+      return { key: 'waiting', text: t('cue.subsystem.waiting'), tone: 'text-accent-2' }
+    }
+    // Auto is amber, not green. Green would say "all well"; what it actually means is "this console
+    // may put something on screen without asking you", and the strip should say so at a glance.
+    const tone =
+      cueEngine.mode === 'auto'
+        ? 'text-accent-2'
+        : cueEngine.mode === 'assist'
+          ? 'text-live'
+          : 'text-text-muted'
+    return { key: cueEngine.mode, text: t(`cue.subsystem.${cueEngine.mode}`), tone }
+  })()
+
   const lightFor = (source: SubsystemSource): LightState => {
     switch (source) {
       case 'obs':
@@ -324,6 +373,8 @@ function SubsystemStrip(): React.JSX.Element {
         return goLiveLight
       case 'recording':
         return recordingLight
+      case 'cue':
+        return cueLight
       case 'pending':
         return { key: 'pending', text: t('app.phasePending'), tone: 'text-text-muted' }
     }
@@ -499,6 +550,35 @@ function useAsrSubsystem(): void {
   }, [hydrate, subscribe])
 }
 
+/**
+ * Keep the cue engine live for the whole session.
+ *
+ * The most important of these hooks. The suggestion panel is mounted at the top of the shell and
+ * has to receive a suggestion whatever tab the operator is on — a card that only appears while you
+ * are looking at the automation tab is not an assistant. It also means PANIC state is visible from
+ * every screen.
+ */
+function useCueSubsystem(): void {
+  const hydrate = useCueStore((state) => state.hydrate)
+  const subscribe = useCueStore((state) => state.subscribe)
+
+  useEffect(() => {
+    const unsubscribe = subscribe()
+    void hydrate()
+    return unsubscribe
+  }, [hydrate, subscribe])
+}
+
+/** The trust dial and the hot phrases, together. */
+function AutomationSection(): React.JSX.Element {
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      <TrustDial />
+      <HotPhraseEditor />
+    </div>
+  )
+}
+
 /** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
 function SectionView({ section }: { section: SectionId }): React.JSX.Element {
   switch (section) {
@@ -512,6 +592,8 @@ function SectionView({ section }: { section: SectionId }): React.JSX.Element {
       return <PlanEditor />
     case 'transcript':
       return <TranscriptPanel />
+    case 'automation':
+      return <AutomationSection />
     case 'goLive':
       return <GoLivePanel />
     case 'goLiveSettings':
@@ -546,6 +628,19 @@ function TitleBar(): React.JSX.Element {
   )
 }
 
+/**
+ * The two suggestion keys, and deliberately only those two.
+ *
+ * `DEFAULT_KEY_BINDINGS` also carries SPACE (advance / PANIC-hold), ESC, the camera digits and the
+ * rest. Those belong to handlers that do not exist yet, and binding a key whose action nothing
+ * listens for would swallow the keypress and teach the operator that the key is broken. Y and N
+ * have a handler — the suggestion panel registers them — so they are wired and the others wait for
+ * the phase that owns them.
+ */
+const SUGGESTION_KEY_BINDINGS = DEFAULT_KEY_BINDINGS.filter(
+  (binding) => binding.action === ActionId.confirm || binding.action === ActionId.dismiss,
+)
+
 export function App(): React.JSX.Element {
   const { t } = useTranslation()
   useDocumentLanguage()
@@ -553,14 +648,23 @@ export function App(): React.JSX.Element {
   useYouTubeSubsystem()
   useGoLiveSubsystem()
   useAsrSubsystem()
+  useCueSubsystem()
 
   const [section, setSection] = useState<SectionId>('connection')
+
+  // One dispatcher for the session. Created here rather than inside the panel so a pedal or a
+  // Stream Deck added in Phase 10 has a single object to bind against.
+  const dispatcher = useMemo(() => createActionDispatcher(), [])
+  useKeyboardActions({ dispatcher, bindings: SUGGESTION_KEY_BINDINGS })
 
   return (
     <ErrorBoundary>
       <div className="flex h-full w-full flex-col bg-background text-text">
         <TitleBar />
         <SubsystemStrip />
+        {/* Above the tabs, on every screen. A suggestion has a deadline measured in seconds and
+            must never be one tab-click away. */}
+        <SuggestionPanel dispatcher={dispatcher} />
         <SectionTabs active={section} onSelect={setSection} />
         <main aria-label={t('app.mainLabel')} className="min-h-0 flex-1">
           {SECTIONS.map((entry) => (

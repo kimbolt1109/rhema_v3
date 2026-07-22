@@ -25,6 +25,14 @@ import { defaultCameraConfig, findBinding, slotForScene } from '@shared/camera'
 import type { ConfigSummary } from '@shared/config'
 import { emptyConfiguredMap } from '@shared/config'
 import type {
+  CueEngineSettings,
+  CueEngineState,
+  CueSuggestion,
+  HotPhrase,
+  TrustMode,
+} from '@shared/cue'
+import { defaultCueEngineSettings, idleCueEngineState } from '@shared/cue'
+import type {
   GoLiveState,
   GoLiveStep,
   GoLiveStepStatus,
@@ -59,6 +67,12 @@ import type { Cue, ServicePlan } from '@shared/plan'
 import { advance as advancePosition, initialPlanPosition, stepBack } from '@shared/plan'
 import type { Result } from '@shared/result'
 import { ErrorCode, err, ok } from '@shared/result'
+import type {
+  ResolvedScripture,
+  ScriptureReference,
+  TranslationSource,
+} from '@shared/scripture'
+import { CONFIDENCE_EXACT, CONFIDENCE_FUZZY } from '@shared/scripture'
 import type {
   Broadcast,
   BroadcastTemplate,
@@ -224,6 +238,45 @@ export interface MockResponses {
   asrStop: Result<AsrStatus> | null
   asrPushAudio: Result<void>
   asrListDevices: Result<void>
+  /**
+   * What `cue.getState` resolves with.
+   *
+   * {@link idleCueEngineState} by default — enabled, **assisting**, nothing pending, not panicked.
+   * Assist is the default in the contract and it is the default here too, so a screen test that
+   * never mentions the trust dial is still exercising the mode an operator actually runs.
+   */
+  cueGetState: Result<CueEngineState>
+  cueGetSettings: Result<CueEngineSettings>
+  /** `null` — the default — means "behave like the real service": adopt the supplied settings. */
+  cueSetSettings: Result<CueEngineSettings> | null
+  /** `null` — the default — means "behave like the real service": adopt the mode. */
+  cueSetMode: Result<CueEngineState> | null
+  /**
+   * `null` — the default — means "behave like the real service": drop the pending suggestion and
+   * record it as fired. Note it does **not** touch the plan snapshot — see the note on the cue
+   * snapshot in {@link createMockVergerApi}.
+   */
+  cueConfirm: Result<CueEngineState> | null
+  /** `null` — the default — means "behave like the real service": drop the pending suggestion. */
+  cueDismiss: Result<CueEngineState> | null
+  /**
+   * `null` — the default — means "behave like the real service": set `panicked`, drop the pending
+   * suggestion, and touch **nothing** else. The fake owns no stream and no recording precisely so
+   * that a panic which reached them would have to be written here to happen at all.
+   */
+  cuePanic: Result<CueEngineState> | null
+  /** `null` — the default — means "behave like the real service": clear `panicked`. */
+  cueResume: Result<CueEngineState> | null
+  /**
+   * What `cue.resolveScripture` resolves with.
+   *
+   * `null` — the default — means "behave like the real service": hand back
+   * {@link MOCK_VERSE_TEXT_PLACEHOLDER} under the requested translation. A test that wants the
+   * **unresolved** case — the one the never-auto-show-unless-resolved gate exists for — assigns an
+   * `Err` here.
+   */
+  cueResolveScripture: Result<ResolvedScripture> | null
+  cueListTranslations: Result<readonly TranslationSource[]>
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -283,6 +336,23 @@ export interface MockCalls {
   readonly asrPushAudio: number[]
   /** Every device list the renderer reported, in order. */
   readonly asrListDevices: (readonly AudioInputDevice[])[]
+  readonly cueGetState: number[]
+  readonly cueGetSettings: number[]
+  /** Every settings save, in order. The hot-phrase editor's assertions read this. */
+  readonly cueSetSettings: CueEngineSettings[]
+  /** Every trust-dial change, in order. */
+  readonly cueSetMode: TrustMode[]
+  /** Every accepted suggestion, in order. */
+  readonly cueConfirm: { suggestionId: string }[]
+  /** Every rejected suggestion, in order. A veto that never arrived is a bug. */
+  readonly cueDismiss: { suggestionId: string }[]
+  /** Every PANIC. Length is how many times automation was halted; a short press must not appear. */
+  readonly cuePanic: number[]
+  /** Every RESUME. Automation may never come back without one of these. */
+  readonly cueResume: number[]
+  /** Every resolution request, in order. Never the verse text — only what was asked for. */
+  readonly cueResolveScripture: { reference: ScriptureReference; translation?: string }[]
+  readonly cueListTranslations: number[]
 }
 
 export interface MockVergerApi {
@@ -897,6 +967,186 @@ function providerForMode(settings: AsrSettings): AsrProviderId {
   return settings.mode === 'local' ? 'whisper' : 'deepgram'
 }
 
+/* ------------------------------------- the cue engine ------------------------------------- */
+
+/**
+ * The stand-in for resolved verse text.
+ *
+ * **Standing Rule 4 is at its most fragile in this file.** A fixture is exactly where a verse would
+ * get committed "just for a test", so the placeholder is deliberately shouty and deliberately not a
+ * sentence: nothing here could ever be mistaken for scripture, and a regression that started
+ * bundling real text would not look like this.
+ */
+export const MOCK_VERSE_TEXT_PLACEHOLDER = 'VERSE TEXT PLACEHOLDER'
+
+/**
+ * A detected reference in the `exact` band.
+ *
+ * A REFERENCE and nothing else — there is no field on {@link ScriptureReference} that could hold
+ * the verse. `sourceText` is invented placeholder wording, never a sermon sentence.
+ */
+export function mockScriptureReference(
+  overrides: Partial<ScriptureReference> = {},
+): ScriptureReference {
+  return {
+    book: 'John',
+    spokenBook: '요한복음',
+    chapter: 3,
+    verse: 16,
+    verseEnd: null,
+    confidence: CONFIDENCE_EXACT,
+    band: 'exact',
+    sourceText: 'PLACEHOLDER TRANSCRIPT LINE MENTIONING A REFERENCE',
+    ...overrides,
+  }
+}
+
+/** A one-edit-away match. Offered, flagged uncertain, never auto-shown. */
+export function mockFuzzyScriptureReference(
+  overrides: Partial<ScriptureReference> = {},
+): ScriptureReference {
+  return mockScriptureReference({
+    confidence: CONFIDENCE_FUZZY,
+    band: 'fuzzy',
+    spokenBook: '요한복음',
+    ...overrides,
+  })
+}
+
+/** A reference whose text a provider has supplied. The text is always the placeholder. */
+export function mockResolvedScripture(
+  overrides: Partial<ResolvedScripture> = {},
+): ResolvedScripture {
+  return {
+    reference: mockScriptureReference(),
+    text: MOCK_VERSE_TEXT_PLACEHOLDER,
+    translation: 'KJV',
+    attribution: 'King James Version (public domain)',
+    ...overrides,
+  }
+}
+
+/**
+ * The translations the fake offers.
+ *
+ * The third entry matters more than the other two: `docs/v2-notes/LEGAL_AND_CONTENT.md` quarantines
+ * the Korean KRV because its public-domain status is contested, so it is present-but-`verified:
+ * false` here. A picker that offers it is a licensing incident, and a fixture that omitted it
+ * entirely would let that regression through untested.
+ */
+export const MOCK_TRANSLATIONS: readonly TranslationSource[] = [
+  {
+    code: 'KJV',
+    name: 'King James Version',
+    language: 'en',
+    kind: 'public-domain',
+    license: 'Public domain (outside the United Kingdom).',
+    attribution: 'King James Version (public domain)',
+    verified: true,
+  },
+  {
+    code: 'ESV',
+    name: 'English Standard Version',
+    language: 'en',
+    kind: 'licensed-api',
+    license: 'Licensed via the ESV API. Attribution required on every rendering.',
+    attribution: 'Scripture quotations are from the ESV® Bible.',
+    verified: true,
+  },
+  {
+    code: 'KRV',
+    name: '개역한글',
+    language: 'ko',
+    kind: 'public-domain',
+    license: 'Public-domain status CONTESTED. Quarantined pending a legal decision.',
+    attribution: null,
+    verified: false,
+  },
+]
+
+/**
+ * A plan-follower suggestion: an INTENT to fire a cue, never a fired cue.
+ *
+ * `canAutoFire` defaults to false, which is the safe default and also the honest one — most
+ * suggestions reach the operator needing a confirmation, and a fixture that defaulted the other
+ * way would quietly make every test assert the dangerous path.
+ */
+export function mockCueSuggestion(overrides: Partial<CueSuggestion> = {}): CueSuggestion {
+  return {
+    id: 'suggestion-1',
+    detector: 'plan',
+    cueId: 'cue-slide-1',
+    reference: null,
+    confidence: 0.86,
+    why: 'matched "PLACEHOLDER ANCHOR PHRASE"',
+    at: MOCK_NOW,
+    canAutoFire: false,
+    ...overrides,
+  }
+}
+
+/** A scripture suggestion. Carries the reference; the text is resolved separately, or not at all. */
+export function mockScriptureSuggestion(overrides: Partial<CueSuggestion> = {}): CueSuggestion {
+  return mockCueSuggestion({
+    id: 'suggestion-scripture',
+    detector: 'scripture',
+    cueId: null,
+    reference: mockScriptureReference(),
+    confidence: CONFIDENCE_EXACT,
+    why: 'heard "PLACEHOLDER PRIMING PHRASE" then a reference',
+    ...overrides,
+  })
+}
+
+/** A hot-phrase suggestion. */
+export function mockHotPhraseSuggestion(overrides: Partial<CueSuggestion> = {}): CueSuggestion {
+  return mockCueSuggestion({
+    id: 'suggestion-hotphrase',
+    detector: 'hotphrase',
+    cueId: 'cue-welcome',
+    confidence: 0.99,
+    why: 'heard the hot phrase "PLACEHOLDER HOT PHRASE"',
+    ...overrides,
+  })
+}
+
+/** One configured hot phrase. */
+export function mockHotPhrase(overrides: Partial<HotPhrase> = {}): HotPhrase {
+  return {
+    id: 'phrase-1',
+    phrase: 'PLACEHOLDER HOT PHRASE',
+    cueId: 'cue-welcome',
+    enabled: true,
+    ...overrides,
+  }
+}
+
+/** The engine at rest: assisting, aligned to nothing, nothing pending. */
+export function mockCueEngineState(overrides: Partial<CueEngineState> = {}): CueEngineState {
+  return { ...idleCueEngineState(), ...overrides }
+}
+
+/** The engine with one suggestion awaiting the operator, following a loaded plan. */
+export function mockPendingCueEngineState(
+  pending: CueSuggestion | null = mockCueSuggestion(),
+  overrides: Partial<CueEngineState> = {},
+): CueEngineState {
+  return mockCueEngineState({ alignment: 'aligned', position: 0, pending, ...overrides })
+}
+
+/**
+ * Automation halted by the master switch.
+ *
+ * Note what is **not** in here: nothing about the stream, the recording, or the overlay. PANIC
+ * halts the engine and touches none of them, and the shape of this fixture is the first place that
+ * has to stay true.
+ */
+export function mockPanickedCueEngineState(
+  overrides: Partial<CueEngineState> = {},
+): CueEngineState {
+  return mockCueEngineState({ panicked: true, pending: null, ...overrides })
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -938,6 +1188,16 @@ function defaultResponses(): MockResponses {
     asrStop: null,
     asrPushAudio: ok(undefined),
     asrListDevices: ok(undefined),
+    cueGetState: ok(idleCueEngineState()),
+    cueGetSettings: ok(defaultCueEngineSettings()),
+    cueSetSettings: null,
+    cueSetMode: null,
+    cueConfirm: null,
+    cueDismiss: null,
+    cuePanic: null,
+    cueResume: null,
+    cueResolveScripture: null,
+    cueListTranslations: ok(MOCK_TRANSLATIONS),
   }
 }
 
@@ -993,6 +1253,16 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     asrStop: [],
     asrPushAudio: [],
     asrListDevices: [],
+    cueGetState: [],
+    cueGetSettings: [],
+    cueSetSettings: [],
+    cueSetMode: [],
+    cueConfirm: [],
+    cueDismiss: [],
+    cuePanic: [],
+    cueResume: [],
+    cueResolveScripture: [],
+    cueListTranslations: [],
   }
 
   // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
@@ -1040,6 +1310,18 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
   let asrSettings: AsrSettings = responses.asrGetSettings.ok
     ? responses.asrGetSettings.value
     : defaultAsrSettings()
+
+  // A seventh separate snapshot, and the most consequential separation in the file. The cue engine
+  // emits INTENTS; something else applies them. So `cueConfirm` below moves a suggestion out of
+  // `pending` and into `recent` and touches **nothing else** — not `planSnapshot`, not
+  // `overlaySnapshot`, not `goLiveSnapshot`. A renderer test therefore cannot come to depend on the
+  // engine writing authoritative state, because in this fake it demonstrably does not.
+  let cueSnapshot: CueEngineState = responses.cueGetState.ok
+    ? responses.cueGetState.value
+    : idleCueEngineState()
+  let cueSettings: CueEngineSettings = responses.cueGetSettings.ok
+    ? responses.cueGetSettings.value
+    : defaultCueEngineSettings()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -1486,6 +1768,106 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onStatus: (callback) => on(IpcEvent.asrStatus, callback),
       onTranscript: (callback) => on(IpcEvent.asrTranscript, callback),
+    },
+    cue: {
+      getState: () => {
+        calls.cueGetState.push(calls.cueGetState.length)
+        if (responses.cueGetState.ok) cueSnapshot = responses.cueGetState.value
+        return Promise.resolve(responses.cueGetState)
+      },
+      getSettings: () => {
+        calls.cueGetSettings.push(calls.cueGetSettings.length)
+        if (responses.cueGetSettings.ok) cueSettings = responses.cueGetSettings.value
+        return Promise.resolve(responses.cueGetSettings)
+      },
+      setSettings: (settings) => {
+        calls.cueSetSettings.push(settings)
+        const scripted = responses.cueSetSettings
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        cueSettings = settings
+        // The mode lives in both the settings and the state, because the operator changes it from
+        // the trust dial and the panel prints what is actually in force.
+        cueSnapshot = { ...cueSnapshot, mode: settings.mode }
+        return Promise.resolve(ok(cueSettings))
+      },
+      setMode: (options) => {
+        calls.cueSetMode.push(options.mode)
+        const scripted = responses.cueSetMode
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        cueSettings = { ...cueSettings, mode: options.mode }
+        // `panicked` is deliberately untouched. Picking a mode is not a resume, and a fake that
+        // quietly cleared the flag here would hide exactly the regression that matters.
+        cueSnapshot = { ...cueSnapshot, mode: options.mode }
+        return Promise.resolve(ok(cueSnapshot))
+      },
+      confirm: (options) => {
+        calls.cueConfirm.push(options)
+        const scripted = responses.cueConfirm
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        const pending = cueSnapshot.pending
+        if (pending === null || pending.id !== options.suggestionId) {
+          // Confirming a suggestion that is no longer pending is not a no-op worth hiding: it means
+          // the operator's tap raced a re-sync, and the UI must not report that anything fired.
+          return Promise.resolve(
+            err(ErrorCode.NOT_FOUND, `no pending suggestion with id ${options.suggestionId}`),
+          )
+        }
+        cueSnapshot = {
+          ...cueSnapshot,
+          pending: null,
+          recent: [pending, ...cueSnapshot.recent].slice(0, 10),
+        }
+        return Promise.resolve(ok(cueSnapshot))
+      },
+      dismiss: (options) => {
+        calls.cueDismiss.push(options)
+        const scripted = responses.cueDismiss
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        // A veto always succeeds, even against a suggestion that has already gone. "There was
+        // nothing to reject" and "your rejection failed" must never be confusable mid-service.
+        cueSnapshot = { ...cueSnapshot, pending: null }
+        return Promise.resolve(ok(cueSnapshot))
+      },
+      panic: () => {
+        calls.cuePanic.push(calls.cuePanic.length)
+        const scripted = responses.cuePanic
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        cueSnapshot = { ...cueSnapshot, panicked: true, pending: null }
+        return Promise.resolve(ok(cueSnapshot))
+      },
+      resume: () => {
+        calls.cueResume.push(calls.cueResume.length)
+        const scripted = responses.cueResume
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        cueSnapshot = { ...cueSnapshot, panicked: false }
+        return Promise.resolve(ok(cueSnapshot))
+      },
+      resolveScripture: (options) => {
+        calls.cueResolveScripture.push(options)
+        const scripted = responses.cueResolveScripture
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        return Promise.resolve(
+          ok(
+            mockResolvedScripture({
+              reference: options.reference,
+              translation: options.translation ?? cueSettings.translation,
+            }),
+          ),
+        )
+      },
+      listTranslations: () => {
+        calls.cueListTranslations.push(calls.cueListTranslations.length)
+        return Promise.resolve(responses.cueListTranslations)
+      },
+      onState: (callback) => on(IpcEvent.cueState, callback),
+      onSuggestion: (callback) => on(IpcEvent.cueSuggestion, callback),
     },
     config: {
       get: () => {

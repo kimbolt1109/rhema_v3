@@ -78,6 +78,13 @@
  *    this boundary that is not zod-parsed, not logged per call and not rate-limited: it fires ten
  *    times a second for the length of a service, and the reasoning is written out at
  *    `audioChunkArg`.
+ *  - **Standing Rule 1 / BLUEPRINT.md §4 — the cue engine cannot act from here.** The ten `cue:*`
+ *    handlers can read the engine, tune it, accept or reject a *named* suggestion, and switch it
+ *    off. There is no `cueFire`: the engine emits intents and something else applies them, which is
+ *    what makes a veto instant. `cuePanic` is the one handler in this file that never returns an
+ *    `Err` — an operator hitting the panic switch must never meet an error dialog — and it halts
+ *    automation without touching OBS, the stream, the recording, the overlay or the plan pointer,
+ *    because `CueEngineLike` has no verb for any of them.
  *  - **Untrusted file paths are checked before the plan service sees them.** The renderer is the
  *    less-trusted side, and `planOpen`/`planSave`/`planImportDeck` name files on disk. A supplied
  *    path must be absolute, carry the expected extension and (for a read) actually be a file;
@@ -95,6 +102,7 @@ import { z } from 'zod'
 import { getAsrService } from '@main/asr'
 import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
+import { getCueEngine } from '@main/cue'
 import { getGoLiveService } from '@main/golive'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
@@ -112,6 +120,8 @@ import { CAMERA_SLOTS, cameraConfigSchema } from '@shared/camera'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import type { AppConfig } from '@shared/config'
 import { obsConfigSchema } from '@shared/config'
+import { TRUST_MODES, cueEngineSettingsSchema, idleCueEngineState } from '@shared/cue'
+import type { CueEngineSettings, CueEngineState, CueSuggestion, TrustMode } from '@shared/cue'
 import type { GoLiveState } from '@shared/golive'
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
@@ -136,6 +146,8 @@ import { cuePayloadSchemas, servicePlanSchema } from '@shared/plan'
 import type { Cue, CueOptions, CuePayload, CueTrigger, CueType, ServicePlan } from '@shared/plan'
 import { err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
+import { scriptureReferenceSchema } from '@shared/scripture'
+import type { ResolvedScripture, ScriptureReference, TranslationSource } from '@shared/scripture'
 import { broadcastTemplateSchema, createBroadcastSchema } from '@shared/youtube'
 import type { Broadcast, BroadcastTemplate, YouTubeStatus } from '@shared/youtube'
 
@@ -433,6 +445,92 @@ export interface AsrServiceLike {
   onTranscript(listener: (segment: TranscriptSegment) => void): Unsubscribe | void
 }
 
+/**
+ * The minimum this module needs from the cue engine (`src/main/cue`).
+ *
+ * BLUEPRINT.md §4. This is the most dangerous seam in the file, and its shape is where several of
+ * the phase's safety rules stop being prose:
+ *
+ *  - **There is no `fire`, no `apply`, no `show`.** The engine produces `CueSuggestion`s — an
+ *    *intent* — and something else applies them. The only verbs reachable from the process
+ *    boundary are `confirm` and `dismiss`, and both name a specific `suggestionId`. That id is
+ *    what makes a veto instant: `syncToActual` (in `@shared/cue`) drops the pending suggestion the
+ *    moment the plan moves by any other means, so a confirm that was already in flight when the
+ *    operator advanced by hand names a suggestion that no longer exists and does nothing. The
+ *    operator taking over manually does not race a suggestion formed a second ago; they win by
+ *    construction.
+ *  - **Nothing here can make automation more dangerous than the mode allows.** `setMode` is the
+ *    entire dial. A cue's own `confirmAlways`, a below-threshold confidence and an unresolved
+ *    verse each BLOCK an auto-fire (`shouldAutoFire`, `canAutoShow`); there is no verb on this
+ *    seam that compels one, and adding one would mean widening this interface first.
+ *  - **`panic()` takes no argument and `resume()` is separate.** Panic halts automation and
+ *    nothing else — the seam has no OBS verb, no output verb and no overlay verb, so it is
+ *    structurally incapable of touching the stream or the recording. Automation coming back on its
+ *    own would be exactly the surprise the switch exists to prevent, so re-engaging is a distinct,
+ *    explicitly operator-initiated call.
+ *  - **`resolveScripture` returns text; nothing in this repository authors it.** Standing Rule 4.
+ *    The detectors emit `ScriptureReference`s, which have no text field at all; a
+ *    `ResolvedScripture` is produced at runtime by a licensed API or a verified public-domain
+ *    source, and `listTranslations` is how the UI learns which of those are actually selectable —
+ *    a translation whose public-domain status is unconfirmed reports `verified: false` and must
+ *    never be offered.
+ *
+ * Structural, like every other seam here, and for the usual binding reason: the concrete engine
+ * consumes a live transcript and may reach a network resolver, and no test in this repo may do
+ * either. The whole IPC contract is provable against a plain object.
+ */
+export interface CueEngineLike {
+  /** The whole engine in one struct — mode, alignment, position, pending, recent, panicked. */
+  getState(): ClientCall<CueEngineState>
+  getSettings(): ClientCall<CueEngineSettings>
+  /**
+   * Persist operator settings — the trust mode, the hot phrases, the thresholds, the translation.
+   *
+   * Already validated and length-bounded by the time it arrives; see `cueSettingsArg`.
+   */
+  setSettings(settings: CueEngineSettings): ClientCall<CueEngineSettings>
+  /** The trust dial. Resolves with the resulting state so the UI never guesses at the mode. */
+  setMode(mode: TrustMode): ClientCall<CueEngineState>
+  /** Accept a specific pending suggestion. A stale id is a no-op, not a mis-fire. */
+  confirm(suggestionId: string): ClientCall<CueEngineState>
+  /** Reject a specific pending suggestion. */
+  dismiss(suggestionId: string): ClientCall<CueEngineState>
+  /** Halt all automation. Never touches OBS, the stream, the recording or the overlay. */
+  panic(): ClientCall<CueEngineState>
+  /** Re-engage automation after a panic. Operator-initiated only, always. */
+  resume(): ClientCall<CueEngineState>
+  onState(listener: (state: CueEngineState) => void): Unsubscribe | void
+  onSuggestion(listener: (suggestion: CueSuggestion) => void): Unsubscribe | void
+}
+
+/**
+ * The minimum this module needs from the scripture resolver (`src/main/cue/ScriptureResolver`).
+ *
+ * A *separate* seam from `CueEngineLike`, and separate on purpose rather than by accident. The
+ * engine resolves verse text as an internal step of firing a scripture cue — that is its own
+ * business, behind its own private method. What the two `cue:*` scripture channels need is
+ * something different: an on-demand lookup the operator drives (they tapped a detected reference
+ * and want to see it before deciding) and the catalogue of what this machine may legally offer.
+ * Wiring those through the engine would mean widening the engine's public surface for the benefit
+ * of a panel, and the panel does not need the engine at all.
+ *
+ * The split also means the two degrade independently, which is the behaviour Standing Rule 5 asks
+ * for: an engine with no resolver still follows the plan and still fires hot phrases, and a
+ * resolver with no engine still answers "what does John 3:16 say?" for a manual operator.
+ *
+ * Note what crosses in each direction. In: a `ScriptureReference` — a type with no text field. Out:
+ * a `ResolvedScripture` the resolver obtained **at runtime** from a licensed API or a verified
+ * public-domain download. Standing Rule 4 holds because no verse text is authored in this
+ * repository, and `listTranslations` is where the quarantine rule lives — a translation whose
+ * public-domain status is contested (the Korean KRV) is absent from that list rather than present
+ * and disabled, so nothing downstream can select it.
+ */
+export interface ScriptureResolverLike {
+  resolve(reference: ScriptureReference, translation?: string): ClientCall<ResolvedScripture>
+  /** What this machine may actually offer. Quarantined translations are absent, not disabled. */
+  listTranslations(): ClientCall<readonly TranslationSource[]>
+}
+
 /** The slice of Electron's `OpenDialogReturnValue` used here. */
 export interface OpenDialogResultLike {
   readonly canceled: boolean
@@ -584,6 +682,35 @@ export interface RegisterIpcDeps {
    * Pass `null` to say "there is no ASR service" explicitly and skip the default lookup.
    */
   readonly asr?: AsrServiceLike | null
+  /**
+   * The cue engine (BLUEPRINT.md §4).
+   *
+   * Optional for exactly the reason the other six are: `src/main/index.ts` calls
+   * `registerIpc({ config, logger, obs, overlay, youtube, goLive, plan })` and a required tenth key
+   * would fail to compile. Defaults to the process-wide singleton from `@main/cue`.
+   *
+   * A `null` here is the *ordinary* state rather than an exceptional one, and it costs the operator
+   * nothing that matters. The engine is an assistant: with no engine at all the plan still advances
+   * on SPACE, `planFireCue` still fires a cue by hand, the cameras still switch, the overlays still
+   * fire and OBS still streams. Standing Rule 1 — the manual path is the one everything degrades
+   * to, and nothing in this block sits between a keypress and a cue.
+   *
+   * Pass `null` to say "there is no cue engine" explicitly and skip the default lookup.
+   */
+  readonly cue?: CueEngineLike | null
+  /**
+   * The scripture resolver behind `cueResolveScripture` and `cueListTranslations`.
+   *
+   * Optional and defaulting to **absent** rather than to a singleton lookup, because resolution is
+   * the one cue capability that genuinely may not exist on a given machine: with no `ESV_API_KEY`,
+   * no `API_BIBLE_KEY` and no verified public-domain translation downloaded there is nothing to
+   * resolve against. The two channels then answer `NOT_CONFIGURED` naming the keys, and every other
+   * part of the engine is untouched — the plan-follower and the hot-phrase detector need no
+   * scripture at all, and a detected reference is still offered for the operator to confirm.
+   *
+   * Kept separate from `cue` so the two degrade independently. See {@link ScriptureResolverLike}.
+   */
+  readonly scripture?: ScriptureResolverLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -1001,6 +1128,97 @@ const audioChunkArg: ArgValidator<ArrayBuffer> = (raw) => {
 }
 
 // ---------------------------------------------------------------------------
+// Cue engine argument validation (BLUEPRINT.md §4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Operator cue-engine settings, validated at the process boundary as well as inside the engine.
+ *
+ * `cueEngineSettingsSchema` is doing more work here than a shape check. Two of its bounds are
+ * safety properties rather than hygiene:
+ *
+ *  - **`hotPhrases` is capped at 200 entries of 2..120 characters.** Those phrases are matched
+ *    against a live transcript continuously, for the length of a service, on the process that also
+ *    holds the OBS websocket. They are matched *literally* and case-insensitively by the engine —
+ *    they are never compiled into a pattern — so there is no user-supplied quantifier to nest and
+ *    no catastrophic-backtracking surface to defend. The bound is what stops the linear scan from
+ *    becoming quadratic in operator-supplied data anyway.
+ *  - **`autoFireThreshold` is clamped to 0..1.** A threshold outside that range would compare
+ *    against confidences that can never reach it (harmless) or that always do (an engine that
+ *    auto-fires everything). The second is the failure that cannot be undone in front of a
+ *    congregation, so it is refused here rather than normalised somewhere downstream.
+ *
+ * An invalid settings object is `Err(INVALID_ARG)` and the engine is **never called at all** — a
+ * half-typed settings form must not be able to replace a working configuration mid-service.
+ */
+const cueSettingsArg: ArgValidator<CueEngineSettings> = zodArg(cueEngineSettingsSchema)
+
+/**
+ * `cueSetMode`'s envelope — the trust dial.
+ *
+ * `z.enum(TRUST_MODES)` is the load-bearing part, for the same reason `z.enum(CAMERA_SLOTS)` is on
+ * `cameraSelect`: the renderer cannot invent a fourth mode, and an unknown one is
+ * `Err(INVALID_ARG)` with the engine never called. A mode string that fell through to the engine
+ * and failed an exhaustive `switch` there would leave the dial in an undefined position, which on
+ * this particular dial means "nobody can say whether the next suggestion fires itself".
+ */
+const cueModeArg: ArgValidator<{ mode: TrustMode }> = zodArg(
+  z.object({ mode: z.enum(TRUST_MODES) })
+)
+
+/**
+ * The envelope for `cueConfirm` / `cueDismiss`.
+ *
+ * The id is *required* — there is deliberately no "confirm whatever is pending" form. A bare
+ * confirm would be a race the operator loses: the engine drops its pending suggestion the instant
+ * the plan moves by any other means (`syncToActual`), so a confirm formed against the old
+ * suggestion must be able to *miss*. Naming the id is what lets it miss instead of firing whatever
+ * happens to be pending by the time it arrives.
+ *
+ * Bounded at 64 characters to match `cueSchema`'s own id bound in `@shared/plan`.
+ */
+const suggestionIdArg: ArgValidator<{ suggestionId: string }> = zodArg(
+  z.object({ suggestionId: z.string().min(1).max(64) })
+)
+
+const resolveScriptureSchema = z.object({
+  reference: scriptureReferenceSchema,
+  translation: z.string().min(1).max(20).optional()
+})
+
+/**
+ * `cueResolveScripture`'s envelope.
+ *
+ * The reference is parsed with `scriptureReferenceSchema` — the same schema the detector's output
+ * is described by — so a chapter of 0, a verse of 900 or a `band` outside the three named ones is
+ * refused here and the resolver is never called. That matters more than it looks: the resolver
+ * turns this struct into a request against a licensed API or a public-domain file, and a reference
+ * the detector could not have produced is either a bug or an attempt to make Verger fetch
+ * something arbitrary.
+ *
+ * Rebuilt field by field rather than passed through, for the reason `logRecordArg` is:
+ * `exactOptionalPropertyTypes` refuses `{ translation: undefined }` where the request type declares
+ * `translation?: string`. Omitting the key is the only assignable form — and it is the form the
+ * engine wants, since "absent" means "use the operator's configured translation" rather than
+ * "resolve against `undefined`".
+ *
+ * Note what this validator does *not* do and could not do: there is no verse text on the way in.
+ * `ScriptureReference` has no text field, so nothing crossing this boundary in this direction can
+ * carry scripture content (Standing Rule 4).
+ */
+const resolveScriptureArg: ArgValidator<{
+  reference: ScriptureReference
+  translation?: string
+}> = (raw) => {
+  const parsed = resolveScriptureSchema.safeParse(raw)
+  if (!parsed.success) {
+    return err('INVALID_ARG', 'the scripture reference failed validation', describeIssues(parsed.error))
+  }
+  const { reference, translation } = parsed.data
+  return ok(translation === undefined ? { reference } : { reference, translation })
+}
+
+// ---------------------------------------------------------------------------
 // Rate limiting
 // ---------------------------------------------------------------------------
 
@@ -1192,6 +1410,68 @@ function asrUnavailable(): Result<never> {
     'speech recognition is not available',
     'set DEEPGRAM_API_KEY in .env or configure the local model; the service runs manually meanwhile'
   )
+}
+
+/**
+ * The answer the nine non-panic cue channels give when there is no engine object at all.
+ *
+ * `NOT_CONFIGURED`, not `INTERNAL`, and the `detail` is the whole point: an operator whose
+ * suggestion panel is empty must be told, in the same breath, that nothing they actually need has
+ * gone. The cue engine is an *assistant*. With no engine at all the plan still advances on SPACE,
+ * a cue still fires by hand, the cameras still switch and OBS still streams — which is Standing
+ * Rule 1 stated as a fallback rather than as an aspiration.
+ *
+ * `cuePanic` deliberately does **not** use this. See its handler.
+ */
+function cueUnavailable(): Result<never> {
+  return err(
+    'NOT_CONFIGURED',
+    'the cue engine is not available',
+    'automation is off; the plan still advances on SPACE and cues still fire by hand'
+  )
+}
+
+/**
+ * The answer the two scripture channels give when the engine has no resolver attached.
+ *
+ * `NOT_CONFIGURED`, and the detail names the two keys, exactly as `youtubeUnavailable` does. With
+ * no licensed key and no verified public-domain translation on disk there is nothing to resolve
+ * against — that is a configuration fact, not a failure — and the rest of the cue engine is
+ * unaffected: the plan-follower and hot-phrase detectors need no scripture at all, and detected
+ * references are still offered for the operator to confirm.
+ */
+function scriptureResolutionUnavailable(): Result<never> {
+  return err(
+    'NOT_CONFIGURED',
+    'scripture resolution is not available',
+    'set ESV_API_KEY or API_BIBLE_KEY in .env, or download a verified public-domain translation'
+  )
+}
+
+/**
+ * The state `cuePanic` reports when it could not get one from the engine.
+ *
+ * Deliberately a *successful* `Result`. An operator hitting the panic switch must never see an
+ * error dialog — the switch exists for the moment when something has already gone wrong in front
+ * of a congregation, and an app that answers a panic with a modal has failed at the one job the
+ * button has.
+ *
+ * The struct is not cosmetic either. The engine never writes authoritative state: suggestions are
+ * applied by the layer above, and that layer refuses to apply anything while the state it is
+ * holding says `panicked: true` / `enabled: false` / `mode: 'manual'`. So a panic that could not
+ * reach the engine still halts application at the boundary the operator can see, and `lastError`
+ * carries the reason so the UI can say "automation is off; the engine did not confirm" rather than
+ * pretending everything is fine.
+ */
+function panickedCueState(detail: string): CueEngineState {
+  return {
+    ...idleCueEngineState(),
+    enabled: false,
+    mode: 'manual',
+    pending: null,
+    panicked: true,
+    lastError: detail
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1435,6 +1715,66 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
+  /**
+   * The cue engine, or `null` if there is not one. Resolved once, like the other six.
+   *
+   * Separate from every other lookup, and this separation carries Standing Rule 1 the same way the
+   * ASR one does — more so, in fact, because this is the subsystem that would otherwise be *acting*
+   * on the operator's behalf. An engine that cannot be constructed leaves the plan pointer, the
+   * cameras, the overlay, the go-live orchestrator and OBS completely untouched. The operator loses
+   * a set of suggestions, not a service.
+   *
+   * Note also what is not wired: the engine is not handed the plan service, the overlay server or
+   * the camera service by this file. It gets no privileged path to any of them. Whatever applies a
+   * confirmed suggestion does so through the same `plan:*` channels an operator's SPACE key uses,
+   * which is what makes "a manual move always wins" implementable rather than aspirational.
+   */
+  const cue: CueEngineLike | null = resolveCueEngine()
+
+  function resolveCueEngine(): CueEngineLike | null {
+    if (deps.cue !== undefined) return deps.cue
+    try {
+      // The transcript source is handed over here rather than looked up inside `@main/cue`,
+      // because this file has already resolved the ASR service and a second `getAsrService()`
+      // would perform the settings-file read a second time. With no recogniser we pass none, and
+      // the engine is simply idle — which is the correct state for a machine with no microphone
+      // (Standing Rule 1).
+      //
+      // The adapter exists only because this file's `AsrServiceLike.onTranscript` is typed as
+      // *possibly* returning an unsubscribe (so a client returning `void` still satisfies it),
+      // while the engine wants one it can definitely call on dispose.
+      const transcripts = asr
+      return getCueEngine({
+        logger: deps.logger,
+        ...(transcripts === null
+          ? {}
+          : {
+              asr: {
+                onTranscript: (listener: (segment: TranscriptSegment) => void): Unsubscribe => {
+                  const unsubscribe = transcripts.onTranscript(listener)
+                  return typeof unsubscribe === 'function'
+                    ? unsubscribe
+                    : (): void => {
+                        // The client kept no handle, so there is nothing to release.
+                      }
+                }
+              }
+            })
+      })
+    } catch (cause) {
+      log.warn('the cue engine is unavailable; cue IPC will report NOT_CONFIGURED', { cause })
+      return null
+    }
+  }
+
+  /**
+   * The scripture resolver, or `null`. No singleton lookup — see the dep's doc comment.
+   *
+   * A `null` here is an ordinary configuration state, not a failure, and it is scoped to exactly
+   * two channels. Nothing else in the cue block reads it.
+   */
+  const scripture: ScriptureResolverLike | null = deps.scripture ?? null
+
   /** Native file dialogs. `null` means "no dialog here" — the plan channels then need a path. */
   const dialogs: DialogLike | null = deps.dialog === undefined ? (dialog ?? null) : deps.dialog
 
@@ -1663,6 +2003,40 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       )
     } catch (cause) {
       log.error('failed to subscribe to the ASR service', { cause })
+    }
+  }
+
+  // The cue-engine fan-out. Two feeds, and they are separate for a reason that is not symmetry.
+  //
+  // `cueState` is a whole `CueEngineState` snapshot — mode, alignment, position, the pending
+  // suggestion, the recent ones, `panicked` and `lastError` — pushed on every change. It is what a
+  // reloaded control window recovers from, and it is what the layer above consults before applying
+  // anything: an `enabled: false` / `panicked: true` snapshot is a refusal to act, not just a
+  // greyed-out badge.
+  //
+  // `cueSuggestion` carries one `CueSuggestion` at a time and exists because the "Y / N" prompt is
+  // latency-sensitive in a way a state snapshot is not — the operator is deciding in the two or
+  // three seconds before the moment passes. The payload is an INTENT and nothing else: a detector,
+  // a cue id or a reference, a confidence, a reason, and `canAutoFire`. Broadcasting it changes
+  // nothing anywhere; the engine has not fired and cannot fire from this file.
+  //
+  // Note what the suggestion payload cannot carry: `CueSuggestion.reference` is a
+  // `ScriptureReference`, which has no text field. No verse text crosses this event, ever
+  // (Standing Rule 4) — text is fetched separately, on demand, through `cueResolveScripture`.
+  if (cue !== null) {
+    try {
+      registerUnsubscribe(
+        cue.onState((state) => {
+          broadcast(IpcEvent.cueState, state)
+        })
+      )
+      registerUnsubscribe(
+        cue.onSuggestion((suggestion) => {
+          broadcast(IpcEvent.cueSuggestion, suggestion)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the cue engine', { cause })
     }
   }
 
@@ -2201,6 +2575,221 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return resolveCall(asr.listDevices(devices))
   })
 
+  // --- cue engine (BLUEPRINT.md §4) ----------------------------------------
+  //
+  // Ten channels, and the single most important thing about them is what is *missing*: there is no
+  // `cueFire`. The engine emits `CueSuggestion`s — intents — and something else applies them. This
+  // boundary can read the engine, tune it, accept or reject a named suggestion, and switch it off.
+  // It cannot make it act, and no future edit can teach it to without widening `CueEngineLike`
+  // first.
+  //
+  // Three properties are enforced here rather than trusted:
+  //
+  //  1. **Nothing can force an auto-fire.** `cueSetMode` is the entire dial and it is enum-bounded.
+  //     A cue's `confirmAlways`, a below-threshold confidence and an unresolved verse each *block*
+  //     an auto-fire (`shouldAutoFire` / `canAutoShow` in `@shared/cue` and `@shared/scripture`);
+  //     no argument on this boundary compels one. A cue may always be made safer than the service
+  //     default, never more dangerous.
+  //  2. **A confirm names its suggestion.** There is no "confirm whatever is pending" form, because
+  //     that would be a race the operator loses. `syncToActual` drops the pending suggestion the
+  //     instant the plan moves by any other means, so an in-flight confirm must be able to *miss* —
+  //     and it does, because the id it carries no longer matches anything.
+  //  3. **A dead engine costs nothing that matters.** Nine of the ten channels answer
+  //     `NOT_CONFIGURED` with no engine and the tenth still succeeds. The plan advances on SPACE,
+  //     `planFireCue` fires by hand, the cameras switch, OBS streams. Standing Rule 1.
+  //
+  // And Standing Rule 4 runs through the whole block: the two scripture-shaped channels traffic in
+  // `ScriptureReference` on the way in — a type with no text field — and text comes back only from
+  // `cueResolveScripture`, resolved at runtime by a licensed API or a verified public-domain
+  // source. Nothing in this file, this repository or any fixture in it authors a verse.
+
+  safeHandle(IpcChannel.cueGetState, noArg, async () => {
+    if (cue === null) return cueUnavailable()
+    return resolveCall(cue.getState())
+  })
+
+  safeHandle(IpcChannel.cueGetSettings, noArg, async () => {
+    if (cue === null) return cueUnavailable()
+    return resolveCall(cue.getSettings())
+  })
+
+  /**
+   * Save operator settings — trust mode, hot phrases, thresholds, translation.
+   *
+   * `cueSettingsArg` has already run, so the engine is never handed an unbounded hot-phrase list or
+   * an out-of-range threshold. An invalid payload is `Err(INVALID_ARG)` and the engine is not
+   * called at all: a half-typed settings form must not be able to replace a working configuration
+   * in the middle of a service, and an `autoFireThreshold` of `-1` reaching the engine would be an
+   * engine that auto-fires everything.
+   */
+  safeHandle(IpcChannel.cueSetSettings, cueSettingsArg, async (settings) => {
+    if (cue === null) return cueUnavailable()
+    return resolveCall(cue.setSettings(settings))
+  })
+
+  /**
+   * The trust dial.
+   *
+   * Note that this handler does not interpret the mode, does not compare it to the current one and
+   * does not refuse `auto`. Whether `auto` is even reachable while `panicked` is the engine's
+   * decision — it holds the panic flag, and a second copy of that rule here is how the two drift
+   * apart. What this layer guarantees is narrower and checkable: the engine only ever receives one
+   * of the three named modes.
+   */
+  safeHandle(IpcChannel.cueSetMode, cueModeArg, async ({ mode }) => {
+    if (cue === null) return cueUnavailable()
+    log.info('the cue trust mode was changed', { mode, at: new Date(now()).toISOString() })
+    return resolveCall(cue.setMode(mode))
+  })
+
+  safeHandle(IpcChannel.cueConfirm, suggestionIdArg, async ({ suggestionId }) => {
+    if (cue === null) return cueUnavailable()
+    return resolveCall(cue.confirm(suggestionId))
+  })
+
+  safeHandle(IpcChannel.cueDismiss, suggestionIdArg, async ({ suggestionId }) => {
+    if (cue === null) return cueUnavailable()
+    return resolveCall(cue.dismiss(suggestionId))
+  })
+
+  /**
+   * PANIC — the master switch, and the most important handler in this file.
+   *
+   * Everything about it is shaped by one requirement: **an operator hitting panic must never see an
+   * error.** The button exists for the moment when something has already gone wrong in front of a
+   * congregation. An app that answers it with a modal, a rejection or a red toast has failed at the
+   * only job the switch has.
+   *
+   * So, in order:
+   *
+   *  1. **The press is logged at `info`, with a timestamp, before anything is attempted.** The fact
+   *     worth recording is that the operator pressed it — not the outcome. If the engine then
+   *     throws, or the process dies half a second later, the rolling log still answers "when did
+   *     they panic?", which is the first question anyone asks afterwards.
+   *  2. **Every failure path returns `ok`.** An absent engine, an `Err` from the engine and an
+   *     exception out of the engine all resolve with a renderable `CueEngineState` carrying
+   *     `panicked: true`, `enabled: false`, `mode: 'manual'` and a `lastError` explaining what
+   *     happened. That is not a cosmetic lie: the engine never writes authoritative state, so the
+   *     layer that applies suggestions is the layer holding this snapshot, and a snapshot that says
+   *     `panicked` is a refusal to apply anything. A panic that could not reach the engine still
+   *     stops cues at the boundary the operator can see, and the UI can show both PANIC and the
+   *     reason.
+   *  3. **The `try/catch` is here rather than only in `safeHandle`.** `safeHandle` converts a throw
+   *     into `Err(INTERNAL)` — correct for every other channel and wrong for this one, because
+   *     `Err` is exactly what must not come back. This catch runs first and converts the throw into
+   *     a successful, panicked state instead.
+   *
+   * And note what panic does *not* do. It stops automation and nothing else: no OBS call, no output
+   * touched, no plan pointer moved, no overlay cleared. `CueEngineLike` has no verb for any of
+   * those, so it is not a discipline this body observes — it is a thing this body cannot do.
+   * Panicking mid-service must never take a congregation's stream off the air.
+   */
+  safeHandle(IpcChannel.cuePanic, noArg, async (_arg, event) => {
+    const at = new Date(now()).toISOString()
+    log.info('PANIC requested — halting all cue automation', {
+      channel: IpcChannel.cuePanic,
+      who: describeSender(event),
+      at
+    })
+
+    if (cue === null) {
+      // Not an error: with no engine there was no automation to halt, and the operator gets the
+      // state they asked for.
+      log.warn('PANIC recorded with no cue engine attached; automation was already off', { at })
+      return ok(panickedCueState('the cue engine was never created; automation was already off'))
+    }
+
+    try {
+      const result = await resolveCall(cue.panic())
+      if (!result.ok) {
+        log.error('PANIC was recorded but the engine reported a failure', {
+          at,
+          code: result.error.code,
+          message: result.error.message
+        })
+        return ok(panickedCueState(result.error.message))
+      }
+
+      if (!result.value.panicked) {
+        // Reported rather than overwritten. The engine's own state is what actually governs
+        // whether it keeps suggesting; a snapshot forced to `panicked: true` here would tell the
+        // operator automation had stopped while the engine carried on, which is the worse of the
+        // two lies. Loud in the log instead.
+        log.error('PANIC returned a state that does not report panicked; the engine may still run', {
+          at,
+          mode: result.value.mode
+        })
+      } else {
+        log.info('PANIC applied; all cue automation is halted', { at, mode: result.value.mode })
+      }
+      return result
+    } catch (cause) {
+      const error = toAppError(cause)
+      log.error('PANIC was recorded but the engine threw; reporting automation as halted', {
+        at,
+        code: error.code,
+        message: error.message
+      })
+      return ok(panickedCueState(error.message))
+    }
+  })
+
+  /**
+   * Re-engage automation after a panic.
+   *
+   * Deliberately a separate, explicit call, and deliberately *not* forgiving in the way `cuePanic`
+   * is. Panic must always succeed; resume has no such requirement, and an operator whose resume
+   * failed is in a strictly safer position than one whose panic did — automation stays off. So this
+   * one is an ordinary handler: `NOT_CONFIGURED` with no engine, whatever the engine says
+   * otherwise. Nothing anywhere in this file calls it on the operator's behalf.
+   */
+  safeHandle(IpcChannel.cueResume, noArg, async (_arg, event) => {
+    if (cue === null) return cueUnavailable()
+    log.info('cue automation resume requested', {
+      channel: IpcChannel.cueResume,
+      who: describeSender(event),
+      at: new Date(now()).toISOString()
+    })
+    return resolveCall(cue.resume())
+  })
+
+  /**
+   * Fetch the text for a detected reference.
+   *
+   * Standing Rule 4 in one handler. What crosses on the way in is a `ScriptureReference` — book,
+   * chapter, verse, confidence, band — a type with no text field, validated against the same schema
+   * the detector's output is described by. What comes back is a `ResolvedScripture` the engine
+   * obtained *at runtime* from a licensed API or a verified public-domain translation. No verse text
+   * is authored in this repository, committed to it, or present in any fixture that exercises this
+   * channel.
+   *
+   * The translation is optional and, when absent, the key is omitted rather than sent as
+   * `undefined`: the engine then uses the operator's configured translation, which is also the only
+   * place the "unverified translations are never selectable" rule can be enforced consistently.
+   */
+  safeHandle(IpcChannel.cueResolveScripture, resolveScriptureArg, async (options) => {
+    if (scripture === null) return scriptureResolutionUnavailable()
+    return resolveCall(
+      options.translation === undefined
+        ? scripture.resolve(options.reference)
+        : scripture.resolve(options.reference, options.translation)
+    )
+  })
+
+  /**
+   * The translations that may actually be selected.
+   *
+   * The engine is the only thing that can answer this, because the quarantine rule in
+   * `docs/v2-notes/LEGAL_AND_CONTENT.md` is about provenance rather than about files: a translation
+   * whose public-domain status is unconfirmed — the Korean KRV specifically — reports
+   * `verified: false` and must not be offered just because a file for it exists on disk. This layer
+   * forwards the catalogue and adds nothing to it.
+   */
+  safeHandle(IpcChannel.cueListTranslations, noArg, async () => {
+    if (scripture === null) return scriptureResolutionUnavailable()
+    return resolveCall(scripture.listTranslations())
+  })
+
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
 
   safeHandle(IpcChannel.logWrite, logRecordArg, async (record) => {
@@ -2314,7 +2903,9 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     youtube: youtube === null ? 'unavailable' : 'attached',
     goLive: goLive === null ? 'unavailable' : 'attached',
     plan: plan === null ? 'unavailable' : 'attached',
-    asr: asr === null ? 'unavailable' : 'attached'
+    asr: asr === null ? 'unavailable' : 'attached',
+    cue: cue === null ? 'unavailable' : 'attached',
+    scripture: scripture === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------
@@ -2334,7 +2925,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
 
     // Covers the OBS status/scene-list subscriptions, the overlay state/info ones, the camera
     // state one, the YouTube status one, the go-live state one, the plan state/import-progress
-    // pair and the ASR status/transcript pair alike: all of them were pushed
+    // pair, the ASR status/transcript pair and the cue state/suggestion pair alike: all of them
+    // were pushed
     // onto `unsubscribers` by `registerUnsubscribe`, so no subsystem is left holding a listener
     // into a disposed bridge — a YouTube poll that outlived the bridge would keep pushing at dead
     // windows for the rest of the process, and the go-live poller is a health loop that runs at
