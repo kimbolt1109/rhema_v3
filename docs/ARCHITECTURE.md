@@ -29,9 +29,10 @@ explains the shape of the system and records the contracts each phase must satis
 > | §3 IPC surface | **Contract, not inventory.** `src/shared/ipc.ts` did not exist. The conventions, envelope shape, error codes, and `safeHandle` steps below are binding requirements drawn from `CLAUDE.md` and `v2-notes/PROTOCOL.md`. **No channel is enumerated here, because inventing one would be worse than omitting it.** Replace this section with the real registry, read from `src/shared/ipc.ts`, once it exists. |
 > | §4 OBS client state machine | **Contract, not inventory.** `src/shared/obs.ts` did not exist. The required states and transitions are derived from the Phase-1 prompt and Standing Rule 2; the concrete backoff numbers are explicitly *not yet chosen* and are marked as such. |
 > | §5 OBS-is-the-engine | **Binding rule**, from `BLUEPRINT.md` §2 / Standing Rule 2. |
-> | §6 Phases 2–10 module layout | **Planned. NOT YET BUILT.** |
+> | §6 Overlay layer | **Mixed — see the status box in §6.** The protocol, network constants, and IPC surface were read directly from `src/shared/{overlay,net,ipc}.ts` and are verified. The main-process server and the overlay page were being written in parallel and were **not on disk** when this section was written. |
+> | §7 Phases 2–10 module layout | **Planned. NOT YET BUILT.** |
 >
-> Nothing in this file describes a running feature except where §1 and §2 say "verified".
+> Nothing in this file describes a running feature except where §1, §2, and §6 say "verified".
 
 ---
 
@@ -386,9 +387,197 @@ This is Standing Rule 2 and it constrains code, not just intentions.
 
 ---
 
-## 6. Planned module layout for Phases 2–10 — **NOT YET BUILT**
+## 6. The overlay layer (Phase 2)
 
-Everything in this section is plan. None of it exists.
+> **Status.** Verified by reading the files on disk: [`src/shared/overlay.ts`](../src/shared/overlay.ts)
+> (protocol, state, reducer), [`src/shared/net.ts`](../src/shared/net.ts) (ports, addresses, URL
+> builders), and the `overlay*` entries in [`src/shared/ipc.ts`](../src/shared/ipc.ts). Those three
+> are the Phase-2 contract and they typecheck.
+>
+> **Not verified:** `src/main/overlay/` (the HTTP + WebSocket server) and `src/overlay/` (the browser
+> page) did **not exist** when this section was written — they were being built in parallel. Every
+> statement below about *those* modules is a requirement placed on them by the shared contract, not
+> an observation of code. The operator-facing setup guide is [`OBS_SETUP.md`](./OBS_SETUP.md), which
+> carries the same caveat: no step in it has been run against a real OBS.
+
+### 6.1 What the layer is, and why it is a layer
+
+`BLUEPRINT.md` §6: **the lower-third is its own layer, not a slide.** An OBS scene is
+`camera source(s) + a persistent "Overlays" browser source on top`, and that browser source is
+shared into every camera scene. Because the overlay is a separate compositing layer inside OBS:
+
+- switching cameras never touches overlay state — OBS re-composites, the page is not even reloaded;
+- showing a lower-third never touches the camera — Verger sends one overlay command and issues no
+  OBS request at all.
+
+That decoupling is the end of the transparent-PowerPoint problem (`BLUEPRINT.md` §1, problem 3), and
+it is a *structural* property: the two controls travel over different transports to different
+processes. The scene contract that makes it true is documented for the operator in
+[`OBS_SETUP.md`](./OBS_SETUP.md) §1–2, including the two OBS browser-source options
+(*Shutdown source when not visible*, *Refresh browser when scene becomes active*) that must be OFF
+because both destroy and recreate the page on a scene change.
+
+### 6.2 One server, one port
+
+The overlay server runs **in the main process** and is a single Node HTTP server on
+`OVERLAY_SERVER_PORT = 7320` serving two things:
+
+| Path | Protocol | Purpose |
+|---|---|---|
+| `OVERLAY_PAGE_PATH` = `/overlay` | HTTP | The static overlay page and its assets |
+| `OVERLAY_SOCKET_PATH` = `/ws` | WebSocket (upgrade on the same listener) | The state bus |
+
+One listener, not two. `net.ts` records why: v2 ran the static server and the socket as separate
+listeners on separate ports and gained nothing but a second number to keep in sync across docs,
+firewall rules, and settings. 7320 is inherited from v2's remote-control port rather than invented.
+
+Every URL is built by a function, never concatenated at a call site — `overlayOrigin()`,
+`overlayPageUrl()`, `overlaySocketUrl()`, all defaulting to loopback and 7320. The renderer's Overlay
+panel and `docs/OBS_SETUP.md` both render the output of `overlayPageUrl()`, so the operator cannot be
+handed a URL that disagrees with what the server is listening on. This is the direct fix for the v2
+failure recorded in `v2-notes/NETWORK_AND_HARDWARE.md`: a documented port table that drifted from the
+actual listeners, plus a `control_port` that sat in settings for months wired to nothing.
+
+### 6.3 Loopback-first bind posture
+
+Standing Rule 7, enforced in code:
+
+- The default bind is `LOOPBACK_ADDRESS` = `127.0.0.1`. OBS runs on the same machine and loads the
+  page over `http://127.0.0.1`, so nothing needs to be reachable off-box for the product to work.
+- `WILDCARD_ADDRESS` = `0.0.0.0` is named **only so the guard that rejects it reads clearly**.
+  `isAllowedBindAddress()` returns `false` for it unconditionally.
+- LAN exposure is an explicit opt-in **with a concrete interface IPv4 address**, which
+  `isAllowedBindAddress()` requires to be four numeric octets ≤ 255. Hostnames are rejected too —
+  they would have to be resolved, and could resolve differently later.
+- The host must be passed explicitly to `server.listen()` and to the WebSocket server rather than
+  relying on any default. A wildcard bind on a church network is how a production console ends up
+  reachable from the guest wifi.
+
+### 6.4 The protocol is **state-based**, not event-based
+
+This is the central design decision of the phase.
+
+An OBS browser source can be reloaded, hidden, or crash at any moment, and the operator will not
+notice until the congregation does. If the wire protocol were a stream of show/hide **events**, a
+reconnecting overlay would have missed everything that happened while it was gone and would come
+back **blank — during a service**.
+
+So: **the server owns the state; the overlay page is a pure function of it.**
+
+- Commands mutate server state.
+- After every mutation the server broadcasts a **full `OverlayState` snapshot**.
+- On connect, a client is sent the current snapshot **immediately**, before anything else happens.
+
+A crashed overlay reloads, receives the snapshot, and re-renders exactly what should be on screen.
+**Resync is not a special case — it is the only case.** There is deliberately no show/hide event
+stream to build a replay buffer for, no "catch-up" path to get wrong, and no way for the page and the
+server to hold different opinions for longer than one broadcast.
+
+```mermaid
+sequenceDiagram
+    participant R as Renderer (Overlay panel)
+    participant M as Main (overlay server)
+    participant O as Overlay page (OBS browser source)
+    R->>M: IPC verger:overlay:send { channel:'command', name:'lowerThird.show', payload }
+    M->>M: applyOverlayCommand(state, command) -> revision+1
+    M-->>R: Result of OverlayState + push verger:overlay:state
+    M->>O: { channel:'state', payload: full OverlayState }
+    O-->>M: { channel:'applied', payload:{ revision } }
+    Note over O: source crashes / is refreshed
+    O->>M: reconnect + { channel:'hello', payload:{ page, userAgent } }
+    M->>O: { channel:'state', payload: full OverlayState }
+    Note over O: re-renders whatever should be on screen
+```
+
+#### Envelope
+
+One discriminated union, discriminated on `channel`, with `payload` **always** present, in both
+directions. `v2-notes/PROTOCOL.md` §4 records that v2 ended up with three incompatible envelope
+shapes for one conceptual bus — including one whose secondary key name changed with the message type,
+and errors that skipped the payload wrapper entirely. One shape here.
+
+| Direction | `channel` | `payload` |
+|---|---|---|
+| server → overlay | `state` | the full `OverlayState` |
+| server → overlay | `ping` | `{ ts }` |
+| server → overlay | `error` | `{ code, message }` |
+| overlay → server | `hello` | `{ page, userAgent }` — sent once on connect, so the server can log which overlay attached |
+| overlay → server | `applied` | `{ revision }` — confirms the overlay rendered a revision |
+| overlay → server | `pong` | `{ ts }` |
+
+Everything inbound is validated with Zod at the boundary: `overlayClientMessageSchema` for
+overlay → server, `overlayCommandSchema` (a discriminated union on `name`, with a per-command payload
+schema in `overlayCommandPayloadSchemas`) for control → server. The schemas **are** the types via
+`z.infer` — there is no parallel hand-written interface to drift from them.
+
+`OverlayState.revision` increments on every mutation, and the overlay echoes back the revision it has
+applied. That is what lets the control UI say "the overlay is 2 revisions behind" instead of
+diverging silently. `OverlayServerInfo.clients` (§6.6) carries the same intent for a different
+failure: an operator who sees `0` attached clients mid-service knows immediately that OBS's Overlays
+source has died.
+
+### 6.5 The reducer is the single mutation point
+
+```ts
+applyOverlayCommand(state: OverlayState, command: OverlayCommand): OverlayState
+```
+
+**Pure.** No clock, no I/O, no `this`. It is the only place overlay state changes, it bumps
+`revision` on every command, and its `switch` ends in a `const unreachable: never = command`, so
+adding a command name without handling it fails to compile rather than silently no-op'ing on stage.
+
+`clearAll` is deliberately a separate command from the per-layer hides: it is the destructive
+"blank everything" action. `v2-notes/SHORTCUTS_AND_A11Y.md` records that v2 shipped it as an instant
+keypress and had to walk that back, so in the UI it is a **held** action, never a tap, and it is never
+wired to the same control as "hand back from the AI" (Standing Rule 6).
+
+#### The layer-independence guarantee, and where it is tested
+
+The three layers — `lowerThird`, `scripture`, `slide` — are separate keys on `OverlayState`, and
+nothing in the protocol lets one layer's command name reach another layer's sub-object. The
+independence is enforced by the **shape of the data**, not by reviewer discipline.
+
+Because the reducer is pure, the guarantee is directly assertable: applying any `lowerThird.*`
+command must leave `scripture` and `slide` byte-identical, and vice versa, for **every** command.
+`src/shared/overlay.ts` names `src/main/overlay/reducer.test.ts` as the file that asserts exactly
+that. *(That test file did not exist when this section was written — see the status box above. If it
+has since been placed elsewhere, correct this reference rather than leaving two answers.)* Phase 3
+extends the same guarantee across transports: a camera switch is an obs-websocket call that issues no
+overlay command, and a lower-third is an overlay command that issues no OBS call.
+
+### 6.6 The IPC surface (verified against `src/shared/ipc.ts`)
+
+The renderer never speaks to the overlay server directly — it has no socket and no port. It goes
+through the preload bridge's `overlay` group, and main relays.
+
+| Kind | Channel | Payload → result |
+|---|---|---|
+| request | `verger:overlay:get-state` | `void` → `Result<OverlayState>` |
+| request | `verger:overlay:send` | `OverlayCommand` → `Result<OverlayState>` |
+| request | `verger:overlay:get-server-info` | `void` → `Result<OverlayServerInfo>` |
+| event | `verger:overlay:state` | `OverlayState` |
+| event | `verger:overlay:server-info` | `OverlayServerInfo` |
+
+`OverlayServerInfo` is `{ running, host, port, pageUrl, clients, lastError }` — everything the Overlay
+panel needs to tell the operator whether the layer is healthy, plus the exact URL to paste into OBS.
+`send` resolves with the **resulting state**, not an ack, which keeps the "state is the only
+currency" property on the IPC side of the boundary too. All of it goes through `safeHandle` (§3.3)
+and returns `Result<T>` — nothing throws across the boundary (Standing Rule: errors are values).
+
+### 6.7 Content rules that touch this layer
+
+`ScriptureState.text` is **supplied at runtime and never authored in this repo** — Standing Rule 4.
+It arrives from a licensed API or a verified public-domain translation loaded at runtime, and
+`attribution` (required by those licences) is rendered whenever present. Tests and fixtures use
+obvious placeholders. An unresolvable reference shows the reference plus "verse text unavailable",
+never invented text.
+
+---
+
+## 7. Planned module layout for Phases 2–10 — **NOT YET BUILT**
+
+Everything in this section is plan except where a line is marked BUILT. The two Phase-2 `overlay`
+entries below are specified in detail in §6; the tree is only their intended location.
 
 ```
 src/

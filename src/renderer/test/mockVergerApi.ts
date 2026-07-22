@@ -18,13 +18,17 @@ import type {
   AppVersions,
   IpcEventPayload,
   IpcEventValue,
+  OverlayServerInfo,
   Unsubscribe,
   VergerApi,
 } from '@shared/ipc'
 import { IpcEvent } from '@shared/ipc'
 import type { LogRecord } from '@shared/log'
+import { LOOPBACK_ADDRESS, OVERLAY_SERVER_PORT, overlayPageUrl } from '@shared/net'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
 import { initialObsStatus } from '@shared/obs'
+import type { OverlayCommand, OverlayState } from '@shared/overlay'
+import { applyOverlayCommand, emptyOverlayState } from '@shared/overlay'
 import type { Result } from '@shared/result'
 import { ErrorCode, err, ok } from '@shared/result'
 
@@ -38,6 +42,17 @@ export interface MockResponses {
   configGet: Result<ConfigSummary>
   logWrite: Result<void>
   getVersions: Result<AppVersions>
+  overlayGetState: Result<OverlayState>
+  /**
+   * What `overlay.send` resolves with.
+   *
+   * `null` — the default — means "behave like the real server": run the shared reducer over the
+   * fake's own snapshot and return the result. A test that needs a refusal assigns an `Err` here
+   * instead. Nothing in the renderer may reduce overlay state itself, so the reduction has to
+   * live on this side of the boundary to be realistic.
+   */
+  overlaySend: Result<OverlayState> | null
+  overlayGetServerInfo: Result<OverlayServerInfo>
 }
 
 /** Everything the fake recorded. Assert against this instead of on spies. */
@@ -50,6 +65,10 @@ export interface MockCalls {
   readonly configGet: number[]
   readonly logWrite: LogRecord[]
   readonly getVersions: number[]
+  readonly overlayGetState: number[]
+  /** Every command the UI sent, in order. The layer-independence assertions read this. */
+  readonly overlaySend: OverlayCommand[]
+  readonly overlayGetServerInfo: number[]
 }
 
 export interface MockVergerApi {
@@ -108,6 +127,42 @@ export function mockSceneList(overrides: Partial<ObsSceneList> = {}): ObsSceneLi
   }
 }
 
+/**
+ * A running overlay server with one browser source attached.
+ *
+ * `pageUrl` comes from `@shared/net`, never from a string literal here — the whole point of that
+ * module is that the URL an operator is told to paste into OBS is derived from the same constants
+ * the server binds with, in tests as well as in production.
+ */
+export function mockOverlayServerInfo(
+  overrides: Partial<OverlayServerInfo> = {},
+): OverlayServerInfo {
+  return {
+    running: true,
+    host: LOOPBACK_ADDRESS,
+    port: OVERLAY_SERVER_PORT,
+    pageUrl: overlayPageUrl(),
+    clients: 1,
+    lastError: null,
+    ...overrides,
+  }
+}
+
+/**
+ * An overlay snapshot with a lower-third up.
+ *
+ * Standing Rule 4: no scripture text is authored here or anywhere else in the repo. Where a test
+ * needs a verse body it passes an obvious placeholder.
+ */
+export function mockOverlayState(overrides: Partial<OverlayState> = {}): OverlayState {
+  return {
+    ...emptyOverlayState(),
+    lowerThird: { visible: true, line1: '홍길동', line2: '찬양 인도', template: 'bar' },
+    revision: 4,
+    ...overrides,
+  }
+}
+
 function defaultResponses(): MockResponses {
   return {
     getStatus: ok(initialObsStatus('idle', MOCK_NOW)),
@@ -118,6 +173,9 @@ function defaultResponses(): MockResponses {
     configGet: ok(MOCK_CONFIG_SUMMARY),
     logWrite: ok(undefined),
     getVersions: ok(MOCK_APP_VERSIONS),
+    overlayGetState: ok(emptyOverlayState()),
+    overlaySend: null,
+    overlayGetServerInfo: ok(mockOverlayServerInfo()),
   }
 }
 
@@ -142,7 +200,16 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     configGet: [],
     logWrite: [],
     getVersions: [],
+    overlayGetState: [],
+    overlaySend: [],
+    overlayGetServerInfo: [],
   }
+
+  // The fake's own copy of the server-owned overlay state, so `send` can behave like the real
+  // server: reduce, then hand back a full snapshot.
+  let overlaySnapshot: OverlayState = responses.overlayGetState.ok
+    ? responses.overlayGetState.value
+    : emptyOverlayState()
 
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
@@ -183,6 +250,28 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onStatus: (callback) => on(IpcEvent.obsStatus, callback),
       onSceneList: (callback) => on(IpcEvent.obsSceneList, callback),
+    },
+    overlay: {
+      getState: () => {
+        calls.overlayGetState.push(calls.overlayGetState.length)
+        // Keep the reducible snapshot in step with whatever the test configured, so a test that
+        // assigns `responses.overlayGetState` after construction still gets a coherent `send`.
+        if (responses.overlayGetState.ok) overlaySnapshot = responses.overlayGetState.value
+        return Promise.resolve(responses.overlayGetState)
+      },
+      send: (command) => {
+        calls.overlaySend.push(command)
+        const scripted = responses.overlaySend
+        if (scripted !== null) return Promise.resolve(scripted)
+        overlaySnapshot = applyOverlayCommand(overlaySnapshot, command)
+        return Promise.resolve(ok(overlaySnapshot))
+      },
+      getServerInfo: () => {
+        calls.overlayGetServerInfo.push(calls.overlayGetServerInfo.length)
+        return Promise.resolve(responses.overlayGetServerInfo)
+      },
+      onState: (callback) => on(IpcEvent.overlayState, callback),
+      onServerInfo: (callback) => on(IpcEvent.overlayServerInfo, callback),
     },
     config: {
       get: () => {

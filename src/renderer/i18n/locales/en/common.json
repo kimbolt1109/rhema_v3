@@ -14,6 +14,11 @@
     },
     "phasePending": "Not built yet",
     "phasePendingDetail": "Arrives in a later phase.",
+    "sectionsLabel": "Console sections",
+    "section": {
+      "connection": "Connection",
+      "overlay": "Overlay"
+    },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
   },
@@ -90,12 +95,102 @@
     "lastError": "Last error"
   },
 
+  "overlay": {
+    "title": "Overlay",
+    "subtitle": "Each layer is independent. Switching cameras never touches these, and showing one of these never touches the camera.",
+    "subsystem": {
+      "unknown": "Checking",
+      "stopped": "Stopped",
+      "attached": "Live",
+      "noClients": "No overlay attached"
+    },
+    "server": {
+      "title": "Overlay server",
+      "stateLabel": "Server",
+      "running": "Running",
+      "stopped": "Stopped",
+      "address": "Bound to",
+      "clients": "Attached overlays",
+      "clientsValue": "{{total}}",
+      "obsUrlLabel": "Paste this into an OBS Browser Source",
+      "obsUrlHint": "Add one Browser Source named \"Overlays\" to every camera scene, on top of the camera. Turn OFF \"Shutdown source when not visible\".",
+      "copy": "Copy URL",
+      "copied": "Copied"
+    },
+    "warning": {
+      "noClientsTitle": "No overlay is attached",
+      "noClientsBody": "A layer is marked visible but no browser source is connected, so nothing is actually on screen. Check the Overlays source in OBS — it has probably been closed, hidden, or shut down. Right-click it and choose Refresh."
+    },
+    "bridgeUnavailable": {
+      "title": "The privileged bridge did not load",
+      "body": "Verger cannot reach its own main process, so the overlay server cannot be controlled. Restart the app; if this persists, the log file will say why."
+    },
+    "readout": {
+      "title": "On screen now",
+      "revision": "Revision {{revision}}",
+      "lowerThird": "Lower third",
+      "scripture": "Scripture",
+      "slide": "Slide",
+      "visible": "Visible",
+      "hidden": "Hidden"
+    },
+    "lowerThird": {
+      "title": "Lower third",
+      "line1": "Line 1",
+      "line1Hint": "Usually the name, e.g. 홍길동.",
+      "line2": "Line 2",
+      "line2Hint": "Usually the role, e.g. Worship leader. Optional.",
+      "template": "Template",
+      "templateOption": {
+        "bar": "Bar",
+        "boxed": "Boxed",
+        "minimal": "Minimal"
+      },
+      "show": "Show lower third",
+      "hide": "Hide lower third"
+    },
+    "scripture": {
+      "title": "Scripture",
+      "reference": "Reference",
+      "referenceHint": "For example 요한복음 3:16. Required.",
+      "text": "Verse text (supplied at runtime)",
+      "textHint": "Verger never ships verse text. Paste text from your licensed provider, or let a later phase fetch it from the configured Bible API with its attribution.",
+      "translation": "Translation",
+      "translationHint": "The short name shown beside the reference, e.g. 개역개정.",
+      "attribution": "Attribution",
+      "attributionHint": "Required by most Bible licences. Leave blank if your source needs none.",
+      "show": "Show scripture",
+      "hide": "Hide scripture"
+    },
+    "slide": {
+      "title": "Slide",
+      "src": "Image URL or path",
+      "srcHint": "Served by the overlay server, e.g. slides/point1.png.",
+      "show": "Show slide",
+      "hide": "Hide slide"
+    },
+    "clear": {
+      "title": "Clear everything",
+      "description": "Blanks all three layers at once. It sits away from the SHOW buttons on purpose, and it only fires after a deliberate hold — a slip of the hand must never blank the congregation's screen.",
+      "label": "Clear all overlays"
+    }
+  },
+
+  "holdButton": {
+    "accessibleName": "{{action}} — hold for {{seconds}} seconds to confirm",
+    "hint": "Hold {{seconds}}s",
+    "holding": "Holding {{action}}. Keep holding to confirm.",
+    "completed": "{{action}} — done."
+  },
+
   "actions": {
     "connect": "Connect",
     "disconnect": "Disconnect",
     "connecting": "Connecting…",
     "reload": "Reload",
     "retry": "Try again",
+    "show": "Show",
+    "hide": "Hide",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "dismiss": "Dismiss"

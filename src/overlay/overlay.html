@@ -1,0 +1,126 @@
+<!doctype html>
+<!--
+  Verger — the OVERLAY BROWSER SOURCE.
+
+  This is what the congregation sees. OBS loads it as a Browser Source layered on TOP of the
+  camera source(s) in every scene (BLUEPRINT.md §6), and composites it over the live video using
+  the page's ALPHA CHANNEL.
+
+  Three consequences follow, and every one of them is load-bearing:
+
+  1. THE PAGE MUST STAY TRANSPARENT. Any opaque background — including plain black — is painted
+     over the camera and blacks out the broadcast. See the first rule in overlay.css.
+
+  2. THERE IS NO BUILD STEP. These are plain static files served straight off the overlay HTTP
+     server: no bundler, no npm, no TypeScript, no framework. That is deliberate — a broadcast
+     output surface that cannot be broken by a toolchain upgrade the morning of a service is
+     worth more than any ergonomics a framework would buy. Hence `protocol.js`, a hand-kept JS
+     mirror of `src/shared/overlay.ts`, instead of importing the shared types.
+
+  3. THE PAGE IS A PURE FUNCTION OF SERVER STATE. It renders whole `OverlayState` snapshots and
+     never a show/hide event stream, so a crashed or reloaded browser source resyncs by simply
+     reconnecting. See the header comment in overlay.js.
+
+  The Content-Security-Policy below is deliberately tight. Everything this page needs is served
+  by the same loopback origin that served the page:
+    - default-src 'self'  — no CDN, no external font, no analytics. OBS booths are frequently
+                            offline, and an overlay that needs the internet to render text is an
+                            overlay that fails during the one hour it matters.
+    - script-src  'self'  — no inline script, no eval. Scripture text and speaker names arrive
+                            from an API and are rendered with textContent; this is the second
+                            line of defence behind that.
+    - connect-src 'self' ws://127.0.0.1:* ws://localhost:*
+                          — the overlay control socket only. 'self' covers the ws:// upgrade on
+                            the origin that served the page (including an explicitly opted-in
+                            LAN bind); the loopback literals are stated anyway so the intended
+                            posture is readable rather than inferred (Standing Rule 7).
+    - img-src     'self' data: blob:
+                          — slide images are served by the overlay server itself. A `slide.src`
+                            arriving from the control app can therefore never pull a remote
+                            asset into a live broadcast.
+
+  `frame-ancestors` is deliberately absent: Chromium ignores it when it arrives via <meta> and
+  logs an error for every page load. It belongs on the response header instead, which is the
+  overlay server's job (src/main/overlay/).
+-->
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verger Overlay</title>
+    <!--
+      An inline empty icon, purely so the browser does not fire a /favicon.ico request that the
+      overlay server has no reason to answer. A 404 per page load is harmless but it is noise in
+      the one console an operator might be asked to read out over the phone.
+    -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./overlay.css" />
+  </head>
+
+  <body>
+    <!--
+      The three layers are SIBLINGS, never nested. Independence is the product requirement
+      (BLUEPRINT.md §6), so it is expressed in the document structure: no layer is inside
+      another, no layer's styles cascade into another, and each is positioned and animated on
+      its own. Showing a lower-third cannot move the scripture, and hiding the slide cannot
+      touch either.
+
+      Paint order is bottom-to-top in source order: slide (full-frame background art) is behind
+      scripture, which is behind the lower-third.
+    -->
+
+    <!-- ── Layer: slide ──────────────────────────────────────────────────────────────── -->
+    <!-- Two frames so a slide change cross-fades instead of flashing through transparent. -->
+    <section id="slide" class="layer layer--slide" aria-hidden="true">
+      <img class="slide__frame is-active" alt="" decoding="async" />
+      <img class="slide__frame" alt="" decoding="async" />
+    </section>
+
+    <!-- ── Layer: scripture ──────────────────────────────────────────────────────────── -->
+    <section id="scripture" class="layer layer--scripture" aria-hidden="true">
+      <div class="scripture__scrim"></div>
+      <div class="scripture__body">
+        <p class="scripture__text" id="scripture-text"></p>
+        <p class="scripture__meta">
+          <span class="scripture__reference" id="scripture-reference"></span>
+          <span class="scripture__translation" id="scripture-translation" hidden></span>
+        </p>
+        <!--
+          Licensed translations (ESV, API.Bible) require their attribution line to be displayed
+          wherever the text is. Standing Rule 4 / docs/v2-notes/LEGAL_AND_CONTENT.md: it renders
+          whenever the server supplies one, and there is no way to switch it off.
+        -->
+        <p class="scripture__attribution" id="scripture-attribution" hidden></p>
+      </div>
+    </section>
+
+    <!-- ── Layer: lower-third ────────────────────────────────────────────────────────── -->
+    <!-- `data-template` is the only thing that selects a look; all three live in overlay.css. -->
+    <section id="lower-third" class="layer layer--lower-third" data-template="bar" aria-hidden="true">
+      <div class="lower-third__box">
+        <span class="lower-third__accent" aria-hidden="true"></span>
+        <div class="lower-third__lines">
+          <p class="lower-third__line1" id="lower-third-line1"></p>
+          <p class="lower-third__line2" id="lower-third-line2" hidden></p>
+        </div>
+      </div>
+    </section>
+
+    <!--
+      Setup aid only. Hidden unless the page is loaded with `?debug=1`, so an operator who
+      pastes the plain URL into OBS can never accidentally broadcast diagnostics.
+    -->
+    <aside id="debug" class="debug" hidden>
+      <div class="debug__row"><span class="debug__key">socket</span><span class="debug__val" id="debug-socket">—</span></div>
+      <div class="debug__row"><span class="debug__key">state</span><span class="debug__val" id="debug-status">starting</span></div>
+      <div class="debug__row"><span class="debug__key">rev</span><span class="debug__val" id="debug-revision">—</span></div>
+      <div class="debug__row"><span class="debug__key">last</span><span class="debug__val" id="debug-note">—</span></div>
+    </aside>
+
+    <script type="module" src="./overlay.js"></script>
+  </body>
+</html>

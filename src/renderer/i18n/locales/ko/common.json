@@ -14,6 +14,11 @@
     },
     "phasePending": "준비 중",
     "phasePendingDetail": "다음 단계에서 추가됩니다.",
+    "sectionsLabel": "콘솔 화면",
+    "section": {
+      "connection": "연결",
+      "overlay": "오버레이"
+    },
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "버전 정보를 가져올 수 없습니다"
   },
@@ -89,12 +94,102 @@
     "lastError": "마지막 오류"
   },
 
+  "overlay": {
+    "title": "오버레이",
+    "subtitle": "각 레이어는 서로 독립적입니다. 카메라를 전환해도 오버레이는 그대로 있고, 오버레이를 띄워도 카메라는 바뀌지 않습니다.",
+    "subsystem": {
+      "unknown": "확인 중",
+      "stopped": "중지됨",
+      "attached": "송출 중",
+      "noClients": "오버레이 미연결"
+    },
+    "server": {
+      "title": "오버레이 서버",
+      "stateLabel": "서버",
+      "running": "실행 중",
+      "stopped": "중지됨",
+      "address": "바인딩 주소",
+      "clients": "연결된 오버레이",
+      "clientsValue": "{{total}}개",
+      "obsUrlLabel": "OBS 브라우저 소스에 붙여넣을 주소",
+      "obsUrlHint": "\"Overlays\"라는 브라우저 소스를 만들어 모든 카메라 장면의 카메라 위에 올리세요. \"보이지 않을 때 소스 종료\"는 꺼 두어야 합니다.",
+      "copy": "주소 복사",
+      "copied": "복사됨"
+    },
+    "warning": {
+      "noClientsTitle": "연결된 오버레이가 없습니다",
+      "noClientsBody": "표시 중인 레이어가 있지만 연결된 브라우저 소스가 없어 화면에는 아무것도 나오지 않습니다. OBS의 Overlays 소스를 확인하세요. 닫혔거나 숨겨졌거나 종료된 상태일 수 있습니다. 소스를 우클릭해 새로 고침하세요."
+    },
+    "bridgeUnavailable": {
+      "title": "내부 브리지를 불러오지 못했습니다",
+      "body": "Verger가 자체 메인 프로세스에 접근할 수 없어 오버레이 서버를 제어할 수 없습니다. 앱을 다시 시작하세요. 계속되면 로그 파일에 원인이 기록됩니다."
+    },
+    "readout": {
+      "title": "현재 화면 상태",
+      "revision": "리비전 {{revision}}",
+      "lowerThird": "하단 자막",
+      "scripture": "성경 구절",
+      "slide": "슬라이드",
+      "visible": "표시 중",
+      "hidden": "숨김"
+    },
+    "lowerThird": {
+      "title": "하단 자막",
+      "line1": "첫째 줄",
+      "line1Hint": "보통 이름을 씁니다. 예: 홍길동",
+      "line2": "둘째 줄",
+      "line2Hint": "보통 역할을 씁니다. 예: 찬양 인도. 비워 둘 수 있습니다.",
+      "template": "템플릿",
+      "templateOption": {
+        "bar": "바",
+        "boxed": "박스",
+        "minimal": "미니멀"
+      },
+      "show": "하단 자막 표시",
+      "hide": "하단 자막 숨기기"
+    },
+    "scripture": {
+      "title": "성경 구절",
+      "reference": "장절",
+      "referenceHint": "예: 요한복음 3:16. 필수 항목입니다.",
+      "text": "본문 (실행 중 입력)",
+      "textHint": "Verger는 성경 본문을 포함하지 않습니다. 사용 중인 라이선스 제공처의 본문을 붙여넣거나, 이후 단계에서 설정한 성경 API가 출처와 함께 가져오도록 하세요.",
+      "translation": "역본",
+      "translationHint": "장절 옆에 표시할 짧은 이름. 예: 개역개정",
+      "attribution": "출처 표기",
+      "attributionHint": "대부분의 성경 라이선스가 요구합니다. 필요 없으면 비워 두세요.",
+      "show": "성경 구절 표시",
+      "hide": "성경 구절 숨기기"
+    },
+    "slide": {
+      "title": "슬라이드",
+      "src": "이미지 주소 또는 경로",
+      "srcHint": "오버레이 서버가 제공하는 경로입니다. 예: slides/point1.png",
+      "show": "슬라이드 표시",
+      "hide": "슬라이드 숨기기"
+    },
+    "clear": {
+      "title": "전체 지우기",
+      "description": "세 레이어를 한 번에 지웁니다. 표시 버튼과 일부러 멀리 떨어뜨려 두었고, 길게 눌러야만 실행됩니다. 손이 미끄러져 회중 화면이 꺼지는 일은 없어야 합니다.",
+      "label": "오버레이 전체 지우기"
+    }
+  },
+
+  "holdButton": {
+    "accessibleName": "{{action}} — {{seconds}}초 동안 길게 눌러 확인",
+    "hint": "{{seconds}}초 길게 누르기",
+    "holding": "{{action}} 누르는 중입니다. 계속 누르고 계세요.",
+    "completed": "{{action}} 완료."
+  },
+
   "actions": {
     "connect": "연결",
     "disconnect": "연결 해제",
     "connecting": "연결 중…",
     "reload": "새로 고침",
     "retry": "다시 시도",
+    "show": "표시",
+    "hide": "숨기기",
     "showPassword": "비밀번호 표시",
     "hidePassword": "비밀번호 숨기기",
     "dismiss": "닫기"

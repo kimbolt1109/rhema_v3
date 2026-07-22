@@ -2,9 +2,9 @@
  * Main-process IPC registration — the trusted half of the process bridge.
  *
  * This module owns exactly one `ipcMain.handle` per `IpcChannel` value and the fan-out of
- * OBS events to every open window. `registerIpc` returns a disposer; calling it removes
- * every handler and every subscription, so a hot reload or a quit cannot leave a second
- * generation of handlers wired to a dead client.
+ * OBS and overlay events to every open window. `registerIpc` returns a disposer; calling it
+ * removes every handler and every subscription, so a hot reload or a quit cannot leave a
+ * second generation of handlers wired to a dead client.
  *
  * ## `safeHandle`
  *
@@ -39,12 +39,18 @@
  *  - `configGet` returns the `ConfigSummary` projection *only* — key names and booleans. By
  *    construction it cannot carry a secret value, which is why `AppConfig` never crosses
  *    this boundary.
+ *  - **Rule 7 / BLUEPRINT.md §6** — the overlay channels carry *whole state snapshots*, never
+ *    show/hide events. `overlaySend` resolves with the resulting `OverlayState` and the
+ *    `overlayState` event pushes a full snapshot to every window, which is the same contract
+ *    the overlay server holds with the browser source. Resync is not a special case here
+ *    either.
  */
 
 import { BrowserWindow, app, ipcMain } from 'electron'
 import { z } from 'zod'
 
 import { summarize } from '@main/config/env'
+import { getOverlayServer } from '@main/overlay'
 import { getSecretsStore } from '@main/secrets/secrets'
 import type { AppConfig } from '@shared/config'
 import { obsConfigSchema } from '@shared/config'
@@ -55,11 +61,15 @@ import type {
   IpcEventValue,
   IpcRequest,
   IpcResponse,
+  OverlayServerInfo,
   Unsubscribe
 } from '@shared/ipc'
 import type { LogRecord } from '@shared/log'
 import type { Logger } from '@shared/log'
+import { LOOPBACK_ADDRESS, OVERLAY_SERVER_PORT, overlayPageUrl } from '@shared/net'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
+import { overlayCommandSchema } from '@shared/overlay'
+import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
 
@@ -110,13 +120,13 @@ export interface IpcMainLike {
 type Awaitable<T> = T | Promise<T>
 
 /**
- * What an OBS client method may hand back.
+ * What a subsystem client method may hand back.
  *
- * Deliberately permissive: the OBS module is written by another hand, and whether
+ * Deliberately permissive: the OBS and overlay modules are written by other hands, and whether
  * `getStatus()` returns a bare `ObsStatus` or a `Result<ObsStatus>`, synchronously or not,
- * is its business. `resolveObsCall` normalises all four shapes.
+ * is their business. `resolveCall` normalises all four shapes.
  */
-type ObsCall<T> = Awaitable<T | Result<T>>
+type ClientCall<T> = Awaitable<T | Result<T>>
 
 /**
  * The minimum this module needs from the OBS client.
@@ -126,12 +136,36 @@ type ObsCall<T> = Awaitable<T | Result<T>>
  * is actually callable.
  */
 export interface ObsClientLike {
-  getStatus(): ObsCall<ObsStatus>
-  getSceneList(): ObsCall<ObsSceneList>
-  connect(config?: ObsConnectionConfig): ObsCall<ObsStatus>
-  disconnect(): ObsCall<ObsStatus>
+  getStatus(): ClientCall<ObsStatus>
+  getSceneList(): ClientCall<ObsSceneList>
+  connect(config?: ObsConnectionConfig): ClientCall<ObsStatus>
+  disconnect(): ClientCall<ObsStatus>
   onStatus(listener: (status: ObsStatus) => void): Unsubscribe | void
   onSceneList(listener: (sceneList: ObsSceneList) => void): Unsubscribe | void
+}
+
+/**
+ * The minimum this module needs from the overlay server (`src/main/overlay`).
+ *
+ * Structural for the same reason `ObsClientLike` is — but here it also buys something the OBS
+ * seam does not need: the overlay server owns a live HTTP + WebSocket listener, and this file
+ * must be registrable with no listener at all (unit tests, and the window between app start
+ * and the server binding 127.0.0.1).
+ *
+ * Note what is *absent*: there is no `showLowerThird`, no `hide`, no per-layer method. The
+ * only mutation verb is `send(command)`, and the only readback is a full `OverlayState`
+ * snapshot. That is the state-based contract of `@shared/overlay` reaching all the way into
+ * the IPC layer — an event-shaped API here would let a reloaded browser source come back blank.
+ */
+export interface OverlayServerLike {
+  /** The current snapshot. Authoritative even when the listener is down. */
+  getState(): ClientCall<OverlayState>
+  /** Apply a command and resolve with the resulting snapshot. */
+  send(command: OverlayCommand): ClientCall<OverlayState>
+  /** Listener liveness and attached browser-source count. */
+  getInfo(): ClientCall<OverlayServerInfo>
+  onState(listener: (state: OverlayState) => void): Unsubscribe | void
+  onInfo(listener: (info: OverlayServerInfo) => void): Unsubscribe | void
 }
 
 /** The slice of `SecretsStore` used by `obsSetConfig`. */
@@ -150,6 +184,18 @@ export interface RegisterIpcDeps {
   readonly obs: ObsClientLike
   readonly config: AppConfig
   readonly logger: Logger
+  /**
+   * The overlay server.
+   *
+   * Optional, and for a structural reason rather than a stylistic one: `src/main/index.ts`
+   * calls `registerIpc({ config, logger, obs })`, and under excess/missing-property checking a
+   * required fourth key would simply fail to compile. Defaults to the process-wide singleton
+   * from `@main/overlay`; if that cannot be resolved the overlay handlers degrade to
+   * `Err(NOT_CONNECTED)` and a not-running `OverlayServerInfo` rather than throwing.
+   *
+   * Pass `null` to say "there is no overlay server" explicitly and skip the default lookup.
+   */
+  readonly overlay?: OverlayServerLike | null
   /** Windows to fan events out to, and the set a sender must belong to. */
   readonly getWindows?: () => readonly WindowLike[]
   /** Defaults to Electron's `ipcMain`. */
@@ -198,6 +244,16 @@ function zodArg<S extends z.ZodType>(schema: S): ArgValidator<z.output<S>> {
 const noArg: ArgValidator<void> = zodArg(z.void())
 
 const obsConfigArg: ArgValidator<ObsConnectionConfig> = zodArg(obsConfigSchema)
+
+/**
+ * Overlay commands are validated here *as well as* inside the overlay server.
+ *
+ * Not redundant: this is the process boundary and the server is not. A malformed command must
+ * be refused before it can reach the reducer, because the reducer's exhaustive `switch` is
+ * written against a `name` union it trusts — and because a command that reaches the server is
+ * a command that gets broadcast to every attached browser source.
+ */
+const overlayCommandArg: ArgValidator<OverlayCommand> = zodArg(overlayCommandSchema)
 
 const logRecordSchema = z.object({
   ts: z.number(),
@@ -272,15 +328,50 @@ function looksLikeResult(value: unknown): value is Result<unknown> {
 }
 
 /**
- * Await an OBS client call and normalise it to a `Result`.
+ * Await a subsystem client call and normalise it to a `Result`.
  *
  * A client that already returns `Result<T>` is passed through; one that returns a bare `T`
  * is wrapped. The cast is safe because `looksLikeResult` has ruled out the `Result` branch —
  * TypeScript simply cannot subtract it from the union.
  */
-async function resolveObsCall<T>(call: ObsCall<T>): Promise<Result<T>> {
+async function resolveCall<T>(call: ClientCall<T>): Promise<Result<T>> {
   const settled = await call
   return looksLikeResult(settled) ? (settled as Result<T>) : ok(settled as T)
+}
+
+// ---------------------------------------------------------------------------
+// Overlay degradation
+// ---------------------------------------------------------------------------
+
+/**
+ * What `overlayGetServerInfo` reports when there is no server object at all.
+ *
+ * Deliberately a successful `Result` carrying `running: false` rather than an `Err`: the
+ * Overlay panel's whole job is to render this struct, and an operator who sees
+ * `running: false, clients: 0` next to the loopback URL knows exactly what is wrong.
+ * `pageUrl` still comes from `@shared/net`, so the URL shown for copy-into-OBS is the same
+ * one the server will bind when it does come up (Standing Rule 7 — loopback, never a wildcard).
+ */
+/**
+ * The answer `overlayGetState` / `overlaySend` give when there is no server object at all.
+ *
+ * `NOT_CONNECTED` rather than `INTERNAL`: an absent overlay server is an expected, recoverable
+ * state (Standing Rule 5 — the subsystem reports itself unavailable and the app keeps running),
+ * not a bug in Verger.
+ */
+function overlayUnavailable(): Result<never> {
+  return err('NOT_CONNECTED', 'the overlay server is not available')
+}
+
+function offlineOverlayInfo(detail: string): OverlayServerInfo {
+  return {
+    running: false,
+    host: LOOPBACK_ADDRESS,
+    port: OVERLAY_SERVER_PORT,
+    pageUrl: overlayPageUrl(),
+    clients: 0,
+    lastError: detail
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +403,28 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
   const unsubscribers: Unsubscribe[] = []
   const logBucket = createTokenBucket(LOG_BUCKET_CAPACITY, LOG_BUCKET_REFILL_PER_MS, now)
   let disposed = false
+
+  /**
+   * The overlay server, or `null` if there is not one.
+   *
+   * Resolved once, here, rather than per call: `getOverlayServer()` is a lazy singleton and
+   * calling it repeatedly inside a handler would hide a construction failure behind whichever
+   * button the operator happened to press. A `null` here is a first-class state — every
+   * overlay handler has a defined answer for it.
+   */
+  const overlay: OverlayServerLike | null = resolveOverlayServer()
+
+  function resolveOverlayServer(): OverlayServerLike | null {
+    if (deps.overlay !== undefined) return deps.overlay
+    try {
+      return getOverlayServer()
+    } catch (cause) {
+      log.warn('the overlay server is unavailable; overlay IPC will report NOT_CONNECTED', {
+        cause
+      })
+      return null
+    }
+  }
 
   // --- sender validation ---------------------------------------------------
 
@@ -404,19 +517,40 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     log.error('failed to subscribe to the OBS client', { cause })
   }
 
+  // The overlay fan-out mirrors the browser-source contract one level up: every window gets a
+  // full `OverlayState` snapshot after every mutation, never a show/hide event. A control
+  // window that reloads mid-service is then in exactly the position a reloaded browser source
+  // is in — one snapshot away from correct.
+  if (overlay !== null) {
+    try {
+      registerUnsubscribe(
+        overlay.onState((state) => {
+          broadcast(IpcEvent.overlayState, state)
+        })
+      )
+      registerUnsubscribe(
+        overlay.onInfo((info) => {
+          broadcast(IpcEvent.overlayServerInfo, info)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the overlay server', { cause })
+    }
+  }
+
   // --- handlers ------------------------------------------------------------
 
-  safeHandle(IpcChannel.obsGetStatus, noArg, async () => resolveObsCall(deps.obs.getStatus()))
+  safeHandle(IpcChannel.obsGetStatus, noArg, async () => resolveCall(deps.obs.getStatus()))
 
   safeHandle(IpcChannel.obsGetSceneList, noArg, async () =>
-    resolveObsCall(deps.obs.getSceneList())
+    resolveCall(deps.obs.getSceneList())
   )
 
   safeHandle(IpcChannel.obsConnect, obsConfigArg, async (config) =>
-    resolveObsCall(deps.obs.connect(config))
+    resolveCall(deps.obs.connect(config))
   )
 
-  safeHandle(IpcChannel.obsDisconnect, noArg, async () => resolveObsCall(deps.obs.disconnect()))
+  safeHandle(IpcChannel.obsDisconnect, noArg, async () => resolveCall(deps.obs.disconnect()))
 
   safeHandle(IpcChannel.obsSetConfig, obsConfigArg, async (config) => {
     persistObsPassword(config.password)
@@ -425,12 +559,46 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     // interesting — "already disconnected" is the common case — so it is swallowed and the
     // connect attempt is what the operator actually sees the result of.
     try {
-      await resolveObsCall(deps.obs.disconnect())
+      await resolveCall(deps.obs.disconnect())
     } catch (cause) {
       log.debug('disconnect before reconfiguring failed; connecting anyway', { cause })
     }
 
-    return resolveObsCall(deps.obs.connect(config))
+    return resolveCall(deps.obs.connect(config))
+  })
+
+  // --- overlay -------------------------------------------------------------
+
+  safeHandle(IpcChannel.overlayGetState, noArg, async () => {
+    if (overlay === null) return overlayUnavailable()
+    return resolveCall(overlay.getState())
+  })
+
+  safeHandle(IpcChannel.overlaySend, overlayCommandArg, async (command) => {
+    // `overlayCommandArg` has already run — the server is never handed an unvalidated command.
+    if (overlay === null) return overlayUnavailable()
+
+    // A command accepted while nothing is listening would leave the control UI showing a
+    // lower-third that no browser source can possibly be rendering. Zero *clients* is fine
+    // (the snapshot is waiting for them on reconnect); zero *listener* is not.
+    const info = await resolveCall(overlay.getInfo())
+    if (info.ok && !info.value.running) {
+      return err(
+        'NOT_CONNECTED',
+        'the overlay server is not running',
+        `command=${command.name}${info.value.lastError === null ? '' : `; ${info.value.lastError}`}`
+      )
+    }
+
+    return resolveCall(overlay.send(command))
+  })
+
+  safeHandle(IpcChannel.overlayGetServerInfo, noArg, async () => {
+    // Never an `Err`: "the overlay server is down" is information the panel renders, not a
+    // failure the panel has to special-case.
+    if (overlay === null) return ok(offlineOverlayInfo('the overlay server was never created'))
+    const info = await resolveCall(overlay.getInfo())
+    return info.ok ? info : ok(offlineOverlayInfo(info.error.message))
   })
 
   safeHandle(IpcChannel.configGet, noArg, async () => ok(summarize(deps.config)))
@@ -502,7 +670,10 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
-  log.debug('registered IPC handlers', { channels: registeredChannels.length })
+  log.debug('registered IPC handlers', {
+    channels: registeredChannels.length,
+    overlay: overlay === null ? 'unavailable' : 'attached'
+  })
 
   // --- disposal ------------------------------------------------------------
 
@@ -519,11 +690,13 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
     registeredChannels.length = 0
 
+    // Covers the OBS status/scene-list subscriptions and the overlay state/info ones alike:
+    // both were pushed onto `unsubscribers` by `registerUnsubscribe`.
     for (const unsubscribe of unsubscribers) {
       try {
         unsubscribe()
       } catch (cause) {
-        log.warn('failed to unsubscribe from the OBS client', { cause })
+        log.warn('failed to unsubscribe from a subsystem client', { cause })
       }
     }
     unsubscribers.length = 0

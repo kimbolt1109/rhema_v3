@@ -100,3 +100,84 @@ One cycle entry per phase. Appended, never rewritten.
 ### Remaining delta
 
 Phases 2-10.
+
+---
+
+## Cycle 2 — Phase 2: Overlay server, WebSocket bus, and the independent layer (2026-07-23)
+
+**Green.** `tsc --noEmit` clean on both projects · `vitest run` 289 tests / 14 files passing ·
+`electron-vite build` succeeds · the running app serves the overlay and pushes state on connect.
+
+### Delta closed
+
+- **Overlay protocol** (`src/shared/overlay.ts`) — three independent layers (`lowerThird`,
+  `scripture`, `slide`), seven commands, one `channel`-discriminated envelope with `payload`
+  always present, and zod schemas that *are* the types. `applyOverlayCommand` is the single,
+  pure mutation point.
+- **Network constants** (`src/shared/net.ts`) — one port declared once (7320), loopback-first,
+  `isAllowedBindAddress` rejects `0.0.0.0`. Both the code and `docs/OBS_SETUP.md` read from it,
+  so the documented URL cannot drift from the bound one.
+- **Overlay server** (`src/main/overlay/`) — Express 5 + `ws` sharing ONE HTTP server;
+  WebSocket upgrades accepted only on `/ws`. Inbound frames zod-validated and size-capped
+  (64 KiB); a bad frame gets an error reply and keeps the connection. Heartbeat terminates a
+  browser source that misses two pongs, so a dead overlay cannot linger in the client count.
+- **Overlay page** (`src/overlay/`) — framework-free static HTML/CSS/JS, transparent
+  background, three independently-animated layers, Korean-aware typography (`word-break:
+  keep-all`), `textContent` only (never `innerHTML`), and forever-reconnect with backoff.
+- **Control panel** — Overlay panel with per-layer controls, a live state readout, the
+  paste-into-OBS URL, and a `HoldButton` for CLEAR ALL.
+- **Docs** — `docs/OBS_SETUP.md` (the scene contract and exact browser-source settings).
+
+### The decision this phase turns on
+
+**State-based, not event-based.** An OBS browser source can crash or be reloaded mid-service.
+Had the wire protocol been a stream of show/hide *events*, a reconnecting overlay would have
+missed everything that happened while it was gone and come back blank — during a service. So
+the server owns the state and the page is a pure function of it: every mutation broadcasts a
+full snapshot, and a snapshot is sent immediately on connect. **Resync is not a special case,
+it is the only case.** Verified against the live app: a socket that says nothing receives the
+complete state the instant it opens.
+
+### Defects found and fixed during verification
+
+- **The overlay server was never started.** `src/main/index.ts` constructed nothing and called
+  no `start()`, so port 7320 never bound, the page was never served, and OBS could never have
+  loaded the browser source. Every unit test passed and the build was green. Cause: an
+  orchestration error — every agent was forbidden from editing `index.ts` to prevent write
+  conflicts, and no one was given ownership of wiring it in. Now started on `ready` and stopped
+  on `will-quit`.
+- **The advertised URL 404'd.** `express.static` was configured `index: ['index.html']` while
+  the page file is `overlay.html`, so `http://127.0.0.1:7320/overlay` redirected to `/overlay/`
+  and returned *Cannot GET*. The single URL an operator pastes into OBS produced a blank
+  overlay. The existing test asserted `pageUrl` was the right **string** — which it was. Fixed,
+  and replaced with a test that actually `fetch`es the URL and the three assets. Asserting a
+  URL string is not the same as asserting the URL works.
+- **The OBS client had a null logger.** `getObsClient()` was called with no arguments, so all
+  OBS diagnostics went nowhere. Now passed the real logger.
+- Found by the server agent itself: `removeAllListeners()` before `terminate()` stripped `ws`'s
+  own internal close listener, so `wss.close()` waited forever for a client that would never
+  report in and `stop()` hung. Fixed, with bounded close deadlines.
+
+### Verification performed
+
+- `npx tsc --noEmit` on both projects — silent, exit 0.
+- `npx vitest run` — 14 files, 289 tests passing. Includes 40 reducer tests asserting that for
+  **every** command the two untargeted layers are referentially identical (the blueprint's
+  layer-independence guarantee as an executable assertion), and real-socket integration tests
+  covering the disconnect/reconnect resync path.
+- **Live app**: launched the built app, `curl -sL http://127.0.0.1:7320/overlay` → HTTP 200,
+  7,453 bytes; a raw `ws` client received `{channel:'state', payload:{…revision:0}}` on open
+  before sending anything.
+
+### Not verified (and why)
+
+- **Never loaded as a real OBS Browser Source.** OBS is not installed. The page has been
+  fetched and parsed but not composited over live video, so the transparency guarantee rests on
+  CSS review, not observation.
+- The overlay page's rendering and reconnect logic has no automated coverage — it is
+  framework-free browser JS with no test harness in this phase. Phase 10's Playwright e2e is
+  where it gets driven.
+
+### Remaining delta
+
+Phases 3-10.

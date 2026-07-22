@@ -1,0 +1,464 @@
+/* =============================================================================================
+   Verger overlay — broadcast stylesheet.
+
+   Designed for a 1920x1080 OBS Browser Source composited over live camera video. Every size is
+   expressed in viewport units so the same sheet is correct at 1280x720 or 3840x2160 without a
+   second breakpoint.
+
+   Written by hand, no build step (see overlay.html).
+   ============================================================================================= */
+
+/* ---------------------------------------------------------------------------------------------
+   THE ONE NON-NEGOTIABLE RULE
+   ---------------------------------------------------------------------------------------------
+   `background: transparent` is not styling. OBS renders this page off-screen and composites the
+   result over the camera using its ALPHA channel. If `html` or `body` paints ANY opaque colour —
+   including the browser default white, and including a "safe" black — that colour is what goes
+   to air: the congregation sees a solid rectangle instead of the pastor. It is the single worst
+   bug this file can have, it is invisible while developing in a normal browser tab (which paints
+   its own white page behind you), and it is only discovered live.
+
+   `margin: 0` because the UA's default 8px body margin would shift every layer off its safe area.
+   `overflow: hidden` because a scrollbar is an opaque strip of chrome down the side of the
+   broadcast, and because a long scripture passage must clip rather than push the page taller.
+
+   Nothing below this line may reintroduce a background on the root elements.
+   --------------------------------------------------------------------------------------------- */
+html,
+body {
+  background: transparent;
+  margin: 0;
+  overflow: hidden;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+}
+
+/* The Browser Source may have "interact" enabled; nothing here is interactive. */
+body {
+  pointer-events: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root {
+  /* ── Safe area ──────────────────────────────────────────────────────────────────────────
+     ~5% inset on every edge. Broadcast convention, and it also keeps text clear of YouTube's
+     player chrome and of the caption bar on a projected feed. */
+  --safe-x: 5vw;
+  --safe-y: 5vh;
+
+  /* ── Typography ─────────────────────────────────────────────────────────────────────────
+     Korean-first (BLUEPRINT.md), so the Hangul faces lead the stack: Malgun Gothic ships with
+     Windows, Apple SD Gothic Neo with macOS, Noto Sans KR is the common Linux/OBS-portable
+     fallback. All three also carry a complete Latin set, so a mixed "홍길동 / Guest Speaker"
+     caption stays in ONE typeface instead of visibly switching mid-line. No webfont: OBS booths
+     are routinely offline, and a font that fails to load is a lower-third that reflows on air. */
+  --font-sans: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Segoe UI', system-ui,
+    -apple-system, sans-serif;
+
+  /* ── Colour ─────────────────────────────────────────────────────────────────────────────
+     Mirrors the renderer's accent tokens (src/renderer/styles/index.css) but one step brighter:
+     #6366f1 is tuned for a dark booth UI and goes muddy over a lit stage, #818cf8 holds up. */
+  --accent: #818cf8;
+  --ink: #ffffff;
+  --ink-muted: rgba(255, 255, 255, 0.78);
+
+  /* Scrims. The camera behind us may be a bright window or a white shirt under key light, so
+     white text alone is not reliably legible — every layer carries its own darkening. */
+  --scrim-strong: rgba(6, 6, 12, 0.82);
+  --scrim-soft: rgba(6, 6, 12, 0.55);
+  --scrim-none: rgba(6, 6, 12, 0);
+
+  /* Belt-and-braces on top of the scrims: a hard shadow for edge definition plus a wide soft
+     one that separates the glyphs from busy video. */
+  --text-shadow: 0 0.2vh 0.5vh rgba(0, 0, 0, 0.9), 0 0 2.2vh rgba(0, 0, 0, 0.6);
+
+  /* ── Motion ─────────────────────────────────────────────────────────────────────────────
+     In is slower and eased-out (it should feel like it settles); out is faster and eased-in (it
+     should get off screen without drawing attention). Durations are broadcast-sane: fast enough
+     that the operator does not wait, slow enough that a 30fps encoder renders the motion. */
+  --dur-in: 460ms;
+  --dur-out: 300ms;
+  --ease-in: cubic-bezier(0.36, 0, 0.66, -0.06);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layers
+   ---------------------------------------------------------------------------------------------
+   Three absolutely-positioned siblings, each its own stacking context. They never overlap in the
+   DOM and never share a transform, so animating one cannot move another — the independence
+   guarantee of BLUEPRINT.md §6, expressed in CSS.
+
+   Visibility is driven ONLY by the `.is-visible` class, which overlay.js sets from the state
+   snapshot. `display` is never used: it cannot be transitioned, so a `display: none` layer would
+   pop in and out with a single-frame jump instead of animating. `visibility` is used alongside
+   opacity so a hidden layer stops being composited at all once its exit finishes — the delayed
+   transition on it is what defers that until the animation is over.
+   --------------------------------------------------------------------------------------------- */
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  visibility: hidden;
+  font-family: var(--font-sans);
+  color: var(--ink);
+
+  /* Korean wraps at word boundaries, not mid-morpheme. Without `keep-all`, Chromium breaks
+     Hangul anywhere it likes and "찬양 인도" can split across two lines mid-word. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+
+  transition:
+    opacity var(--dur-out) var(--ease-in),
+    transform var(--dur-out) var(--ease-in),
+    visibility 0s linear var(--dur-out);
+  will-change: opacity, transform;
+}
+
+.layer.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--dur-in) var(--ease-out),
+    transform var(--dur-in) var(--ease-out),
+    visibility 0s linear 0s;
+}
+
+/* Paint order: slide is background art, scripture sits over it, the lower-third is always on
+   top because it is the layer most likely to be shown while something else already is. */
+.layer--slide {
+  z-index: 1;
+}
+.layer--scripture {
+  z-index: 2;
+}
+.layer--lower-third {
+  z-index: 3;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layer: slide — cross-fade
+   ---------------------------------------------------------------------------------------------
+   Two stacked <img> frames. overlay.js loads the incoming image into whichever frame is idle and
+   only then swaps `.is-active`, so a slide change dissolves from the old image to the new one. A
+   single <img> would flash the transparent camera between `src` assignments.
+   --------------------------------------------------------------------------------------------- */
+.slide__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* letterbox rather than crop — a slide's edges usually carry content */
+  opacity: 0;
+  transition: opacity var(--dur-in) var(--ease-out);
+}
+
+.slide__frame.is-active {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layer: scripture — fade and rise
+   ---------------------------------------------------------------------------------------------
+   Centred in the frame, NOT anchored to the bottom. The two layers are independent and can
+   therefore be on air at the same time — a verse up while the reader's name is captioned is a
+   normal thing to want — so scripture takes the middle band and the lower-third keeps the bottom
+   fifth. They cannot collide because neither one's box reaches into the other's.
+   --------------------------------------------------------------------------------------------- */
+.layer--scripture {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 6vh; /* biased just below centre, clear of the speaker's head in a medium shot */
+  transform: translateY(2.4vh);
+}
+
+.layer--scripture.is-visible {
+  transform: translateY(0);
+}
+
+/* A soft elliptical vignette rather than a band. A rectangle floating mid-frame would read as a
+   graphic; this just darkens the video behind the words and dissolves out on every edge, so the
+   camera image never gains a visible horizon. */
+.scripture__scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 80% 44% at 50% calc(50% - 3vh),
+    var(--scrim-strong) 0%,
+    var(--scrim-soft) 56%,
+    var(--scrim-none) 100%
+  );
+}
+
+.scripture__body {
+  position: relative;
+  width: calc(100% - (var(--safe-x) * 2));
+  max-width: 82%;
+  text-align: center;
+  text-shadow: var(--text-shadow);
+}
+
+/* `min(vh, vw)` keeps the type sane if the page is opened in a window that is not 16:9 — a
+   phone-shaped browser tab during setup would otherwise render enormous glyphs. */
+.scripture__text {
+  margin: 0 0 1.6vh;
+  font-size: min(5vh, 5.6vw);
+  font-weight: 600;
+  line-height: 1.42;
+  letter-spacing: -0.005em;
+}
+
+.scripture__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 1.2vw;
+  margin: 0;
+}
+
+.scripture__reference {
+  font-size: min(3.2vh, 3.6vw);
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+
+.scripture__translation {
+  font-size: min(2.3vh, 2.6vw);
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Licence attribution. Small, but never optional and never omitted — see overlay.html. */
+.scripture__attribution {
+  margin: 1vh 0 0;
+  font-size: min(1.7vh, 1.9vw);
+  font-weight: 400;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layer: lower-third — slides up from the lower third
+   ---------------------------------------------------------------------------------------------
+   Anchored bottom-left, sitting in the lower third of frame as the name implies. Entrance is a
+   vertical slide because that is what reads as a lower-third; a fade alone reads as a mistake.
+   --------------------------------------------------------------------------------------------- */
+.layer--lower-third {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0 var(--safe-x) var(--safe-y);
+  transform: translateY(4.5vh);
+}
+
+.layer--lower-third.is-visible {
+  transform: translateY(0);
+}
+
+.lower-third__box {
+  display: flex;
+  align-items: stretch;
+  gap: 1.1vw;
+  max-width: 70%;
+  text-shadow: var(--text-shadow);
+}
+
+.lower-third__accent {
+  flex: 0 0 auto;
+  /* Explicit, because the templates below set `align-items: center` on the box — which would
+     otherwise collapse this empty span to zero height and silently delete the stripe. */
+  align-self: stretch;
+  width: 0.42vw;
+  min-width: 4px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.lower-third__lines {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.5vh;
+  min-width: 0;
+}
+
+.lower-third__line1 {
+  margin: 0;
+  font-size: min(4.8vh, 5.4vw);
+  font-weight: 700;
+  line-height: 1.16;
+  letter-spacing: -0.01em;
+}
+
+.lower-third__line2 {
+  margin: 0;
+  font-size: min(2.9vh, 3.3vw);
+  font-weight: 500;
+  line-height: 1.24;
+  color: var(--ink-muted);
+}
+
+/* ── Template: bar ──────────────────────────────────────────────────────────────────────────
+   The default. A full-bleed horizontal band with a hard accent edge — the most legible of the
+   three over any camera image, and the one to reach for when the background is unknown. */
+.layer--lower-third[data-template='bar'] {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+[data-template='bar'] .lower-third__box {
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 2.2vh var(--safe-x);
+  background: linear-gradient(to right, var(--scrim-strong) 0%, var(--scrim-strong) 58%, var(--scrim-none) 100%);
+  border-left: 0.55vw solid var(--accent);
+}
+
+[data-template='bar'] .lower-third__accent {
+  display: none;
+}
+
+/* ── Template: boxed ────────────────────────────────────────────────────────────────────────
+   A contained card. Reads as more designed than `bar` and leaves more of the frame visible;
+   good over a static wide shot where a full-width band would feel heavy. */
+[data-template='boxed'] .lower-third__box {
+  align-items: center;
+  padding: 2vh 2.4vw 2vh 1.8vw;
+  background: var(--scrim-strong);
+  border-radius: 0.9vh;
+  border-bottom: 0.42vh solid var(--accent);
+  box-shadow: 0 1.2vh 3.4vh rgba(0, 0, 0, 0.42);
+}
+
+[data-template='boxed'] .lower-third__accent {
+  width: 0.34vw;
+}
+
+/* ── Template: minimal ──────────────────────────────────────────────────────────────────────
+   No panel at all: a rule and text carried by their shadows. The lightest touch, for a clean
+   background. It leans hardest on --text-shadow, which is why that value is deliberately heavy
+   rather than tasteful. */
+[data-template='minimal'] .lower-third__box {
+  gap: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+[data-template='minimal'] .lower-third__accent {
+  display: none;
+}
+
+[data-template='minimal'] .lower-third__lines {
+  padding-left: 0;
+  border-left: 0;
+}
+
+[data-template='minimal'] .lower-third__line1 {
+  padding-bottom: 0.7vh;
+  /* A short accent rule under the name, sized to the text rather than the container. */
+  background-image: linear-gradient(to right, var(--accent), var(--accent));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 3.4vw 0.34vh;
+}
+
+[data-template='minimal'] .lower-third__line2 {
+  margin-top: 0.6vh;
+  color: var(--ink);
+  text-shadow: var(--text-shadow);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Debug HUD (`?debug=1`)
+   ---------------------------------------------------------------------------------------------
+   A setup aid for pointing OBS at the right URL, never something an operator leaves on. It is
+   pinned top-left, well inside the safe area, and is the ONLY opaque element in this sheet.
+   --------------------------------------------------------------------------------------------- */
+.debug {
+  position: fixed;
+  top: 1.6vh;
+  left: 1.6vh;
+  z-index: 99;
+  min-width: 22vh;
+  padding: 1vh 1.4vh;
+  background: rgba(6, 6, 12, 0.86);
+  border: 1px solid rgba(129, 140, 248, 0.45);
+  border-radius: 0.6vh;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 1.5vh;
+  line-height: 1.6;
+  color: #e5e7eb;
+}
+
+.debug[hidden] {
+  display: none;
+}
+
+.debug__row {
+  display: flex;
+  gap: 1vh;
+  justify-content: space-between;
+}
+
+.debug__key {
+  color: #9ca3af;
+}
+
+.debug__val {
+  color: #e5e7eb;
+  text-align: right;
+  word-break: break-all;
+}
+
+.debug__val[data-status='open'] {
+  color: #22c55e;
+}
+
+.debug__val[data-status='connecting'] {
+  color: #818cf8;
+}
+
+.debug__val[data-status='closed'] {
+  color: #ef4444;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Reduced motion
+   ---------------------------------------------------------------------------------------------
+   Honoured even here. The overlay is a projected/streamed surface, and vestibular triggers are a
+   real accessibility concern for a congregation, not only for a UI. Transforms are dropped
+   entirely — layers cross-fade in place rather than sliding — and the fade is kept (rather than
+   cut to zero) because an instant hard cut of a full-frame slide is its own kind of jolt.
+   --------------------------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .layer,
+  .layer.is-visible {
+    transform: none;
+    transition:
+      opacity 140ms linear,
+      visibility 0s linear 140ms;
+  }
+
+  .layer.is-visible {
+    transition:
+      opacity 140ms linear,
+      visibility 0s linear 0s;
+  }
+
+  .slide__frame {
+    transition: opacity 140ms linear;
+  }
+}

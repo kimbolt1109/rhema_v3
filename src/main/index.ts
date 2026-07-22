@@ -29,11 +29,13 @@ import { createLogger } from '@main/logging/logger'
 import type { Logger } from '@main/logging/logger'
 import { registerIpc } from '@main/ipc/register'
 import { getObsClient } from '@main/obs'
+import { getOverlayServer } from '@main/overlay'
 import { createMainWindow } from '@main/window'
 
 let logger: Logger | null = null
 let disposeIpc: (() => void) | null = null
 let mainWindow: BrowserWindow | null = null
+let overlayServer: ReturnType<typeof getOverlayServer> | null = null
 
 // ---------------------------------------------------------------------------
 // Crash capture — installed immediately, before `ready`
@@ -105,6 +107,15 @@ if (!hasSingleInstanceLock) {
         report('warn', 'failed to dispose IPC handlers on quit', { cause })
       }
     }
+
+    // Release port 7320 so the next launch can bind it. Fire-and-forget: `will-quit` does not
+    // await, and holding up the quit for a socket close would be worse than a late close.
+    const overlay = overlayServer
+    overlayServer = null
+    if (overlay !== null) {
+      void overlay.stop()
+    }
+
     logger?.info('verger is shutting down')
   })
 }
@@ -135,8 +146,32 @@ function onReady(): void {
     log.warn('configuration warning', { key: warning.key, detail: warning.message })
   }
 
-  const obs = getObsClient()
-  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs }))
+  const obs = getObsClient({ logger: log })
+
+  // The overlay server must be STARTED here, not merely constructed. OBS loads the overlay as
+  // a browser source over http://127.0.0.1:7320/overlay, so if nothing binds that port the
+  // congregation screen has no overlay layer at all — the whole point of Phase 2. Every unit
+  // test passed with this line missing, which is exactly why it is called out.
+  const overlay = getOverlayServer({ logger: log })
+  overlayServer = overlay
+  void overlay.start().then((result) => {
+    if (result.ok) {
+      log.info('overlay server listening', {
+        pageUrl: result.value.pageUrl,
+        host: result.value.host,
+        port: result.value.port
+      })
+    } else {
+      // Standing Rule 5: a subsystem that cannot start degrades visibly and never blocks the
+      // app. The Overlay panel renders this as "server stopped" with the error.
+      log.error('overlay server failed to start', {
+        code: result.error.code,
+        detail: result.error.message
+      })
+    }
+  })
+
+  disposeIpc = toDisposer(registerIpc({ config, logger: log, obs, overlay }))
 
   mainWindow = createMainWindow({ logger: log })
 }

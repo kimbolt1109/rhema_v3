@@ -18,7 +18,25 @@
 import type { ConfigSummary, ObsConfig } from './config'
 import type { LogRecord } from './log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
+import type { OverlayCommand, OverlayState } from './overlay'
 import type { Result } from './result'
+
+/**
+ * Live status of the overlay HTTP + WebSocket server.
+ *
+ * `clients` is the number of attached browser sources. An operator seeing `0` while a service
+ * is running knows immediately that OBS's Overlays source has died — which is exactly the
+ * failure BLUEPRINT.md §9 says must be visible rather than silent.
+ */
+export interface OverlayServerInfo {
+  readonly running: boolean
+  readonly host: string
+  readonly port: number
+  /** The URL to paste into an OBS Browser Source. */
+  readonly pageUrl: string
+  readonly clients: number
+  readonly lastError: string | null
+}
 
 /**
  * Renderer -> main request channels.
@@ -35,6 +53,9 @@ export const IpcChannel = {
   configGet: 'verger:config:get',
   logWrite: 'verger:log:write',
   appGetVersions: 'verger:app:get-versions',
+  overlayGetState: 'verger:overlay:get-state',
+  overlaySend: 'verger:overlay:send',
+  overlayGetServerInfo: 'verger:overlay:get-server-info',
 } as const
 
 /** Union of every request channel string. */
@@ -49,6 +70,8 @@ export const IpcEvent = {
   obsStatus: 'verger:obs:status',
   obsSceneList: 'verger:obs:scene-list',
   logRecord: 'verger:log:record',
+  overlayState: 'verger:overlay:state',
+  overlayServerInfo: 'verger:overlay:server-info',
 } as const
 
 /** Union of every event channel string. */
@@ -83,6 +106,9 @@ export interface IpcRequest {
   [IpcChannel.configGet]: void
   [IpcChannel.logWrite]: LogRecord
   [IpcChannel.appGetVersions]: void
+  [IpcChannel.overlayGetState]: void
+  [IpcChannel.overlaySend]: OverlayCommand
+  [IpcChannel.overlayGetServerInfo]: void
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -95,6 +121,9 @@ export interface IpcResponse {
   [IpcChannel.configGet]: Result<ConfigSummary>
   [IpcChannel.logWrite]: Result<void>
   [IpcChannel.appGetVersions]: Result<AppVersions>
+  [IpcChannel.overlayGetState]: Result<OverlayState>
+  [IpcChannel.overlaySend]: Result<OverlayState>
+  [IpcChannel.overlayGetServerInfo]: Result<OverlayServerInfo>
 }
 
 /** The payload pushed on each event channel. */
@@ -102,6 +131,8 @@ export interface IpcEventPayload {
   [IpcEvent.obsStatus]: ObsStatus
   [IpcEvent.obsSceneList]: ObsSceneList
   [IpcEvent.logRecord]: LogRecord
+  [IpcEvent.overlayState]: OverlayState
+  [IpcEvent.overlayServerInfo]: OverlayServerInfo
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -127,6 +158,16 @@ export interface VergerApi {
     onStatus(callback: (status: ObsStatus) => void): Unsubscribe
     /** Subscribe to scene-list changes. Returns an unsubscribe function. */
     onSceneList(callback: (sceneList: ObsSceneList) => void): Unsubscribe
+  }
+  readonly overlay: {
+    getState(): Promise<Result<OverlayState>>
+    /** Send a command; resolves with the resulting state. */
+    send(command: OverlayCommand): Promise<Result<OverlayState>>
+    getServerInfo(): Promise<Result<OverlayServerInfo>>
+    /** Subscribe to overlay state changes. Returns an unsubscribe function. */
+    onState(callback: (state: OverlayState) => void): Unsubscribe
+    /** Subscribe to server up/down and client-count changes. */
+    onServerInfo(callback: (info: OverlayServerInfo) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

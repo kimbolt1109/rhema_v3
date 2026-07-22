@@ -35,9 +35,16 @@ import type { IpcRendererEvent } from 'electron'
 
 import type { ConfigSummary, ObsConfig } from '@shared/config'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
-import type { AppVersions, IpcEventValue, Unsubscribe, VergerApi } from '@shared/ipc'
+import type {
+  AppVersions,
+  IpcEventValue,
+  OverlayServerInfo,
+  Unsubscribe,
+  VergerApi
+} from '@shared/ipc'
 import type { LogRecord } from '@shared/log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from '@shared/obs'
+import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import type { Result } from '@shared/result'
 
 /** A listener that has already had the Electron event object removed. */
@@ -89,6 +96,28 @@ const api: VergerApi = {
       subscribe<ObsStatus>(IpcEvent.obsStatus, callback),
     onSceneList: (callback: (sceneList: ObsSceneList) => void): Unsubscribe =>
       subscribe<ObsSceneList>(IpcEvent.obsSceneList, callback)
+  },
+
+  /**
+   * The overlay layer (BLUEPRINT.md §6).
+   *
+   * `send` resolves with the *resulting* `OverlayState`, and `onState` delivers a full
+   * snapshot after every mutation — never a show/hide event. The renderer therefore never
+   * accumulates overlay state of its own; it renders whatever the last snapshot said, which is
+   * the same contract the overlay page itself lives under. A control window that reloads
+   * mid-service recovers by calling `getState()` once, exactly as a reloaded browser source
+   * recovers from the snapshot the server pushes on connect.
+   */
+  overlay: {
+    getState: (): Promise<Result<OverlayState>> => ipcRenderer.invoke(IpcChannel.overlayGetState),
+    send: (command: OverlayCommand): Promise<Result<OverlayState>> =>
+      ipcRenderer.invoke(IpcChannel.overlaySend, command),
+    getServerInfo: (): Promise<Result<OverlayServerInfo>> =>
+      ipcRenderer.invoke(IpcChannel.overlayGetServerInfo),
+    onState: (callback: (state: OverlayState) => void): Unsubscribe =>
+      subscribe<OverlayState>(IpcEvent.overlayState, callback),
+    onServerInfo: (callback: (info: OverlayServerInfo) => void): Unsubscribe =>
+      subscribe<OverlayServerInfo>(IpcEvent.overlayServerInfo, callback)
   },
 
   config: {
