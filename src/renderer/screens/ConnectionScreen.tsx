@@ -20,7 +20,7 @@ import { Info, Layers, Plug, Unplug } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { obsUrlSchema } from '@shared/config'
+import { normalizeObsUrl, obsUrlSchema } from '@shared/config'
 
 import { Button } from '../components/Button'
 import { StatusIndicator } from '../components/StatusIndicator'
@@ -59,7 +59,11 @@ export function ConnectionScreen(): React.JSX.Element {
 
   const urlError = useMemo(() => {
     if (!submitted) return undefined
-    return obsUrlSchema.safeParse(url).success ? undefined : t('connection.urlInvalid')
+    // Validate what we would actually CONNECT with, not the raw text — so a bare `127.0.0.1:4455`
+    // or a lone `4455` (both completed by `normalizeObsUrl`) are not flagged as invalid.
+    return obsUrlSchema.safeParse(normalizeObsUrl(url)).success
+      ? undefined
+      : t('connection.urlInvalid')
   }, [submitted, url, t])
 
   const showDisconnect = LIVE_STATES.has(status.state)
@@ -67,10 +71,15 @@ export function ConnectionScreen(): React.JSX.Element {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
     setSubmitted(true)
-    if (!obsUrlSchema.safeParse(url).success) return
+    // Complete whatever the operator pasted from OBS (a bare IP, host:port, or a lone port) into a
+    // real `ws://host:port`, then show them the result so they learn the shape, then connect with
+    // it. This is what turns OBS's three separate boxes into one working connection.
+    const normalized = normalizeObsUrl(url)
+    if (normalized !== url) setUrl(normalized)
+    if (!obsUrlSchema.safeParse(normalized).success) return
     // An empty field means "OBS has authentication turned off" — `null`, not `''`. The
     // distinction is load-bearing in `src/shared/obs.ts`.
-    void connect({ url, password: password.length === 0 ? null : password })
+    void connect({ url: normalized, password: password.length === 0 ? null : password })
   }
 
   return (

@@ -24,6 +24,7 @@
 
 import { config as loadDotenv } from 'dotenv'
 
+import { normalizeObsUrl } from '@shared/config'
 import type {
   AppConfig,
   ConfigSummary,
@@ -92,9 +93,12 @@ export function loadConfig(env: EnvSource): AppConfig {
   const warnings: ConfigWarning[] = []
 
   // --- OBS ---------------------------------------------------------------
+  // Normalise the same way the Connection screen does, so `OBS_WEBSOCKET_URL=127.0.0.1:4455` or a
+  // bare `4455` in `.env` is completed to a real `ws://host:port` rather than reported unusable.
   const obsUrlRaw = raw(env, 'OBS_WEBSOCKET_URL')
-  const obsUrlPresent = obsUrlRaw !== undefined && obsUrlRaw.length > 0
-  const obsUrlValid = obsUrlPresent && isValidObsUrl(obsUrlRaw)
+  const obsUrl = obsUrlRaw === undefined ? undefined : normalizeObsUrl(obsUrlRaw)
+  const obsUrlPresent = obsUrl !== undefined && obsUrl.length > 0
+  const obsUrlValid = obsUrlPresent && isValidObsUrl(obsUrl)
 
   if (obsUrlPresent && !obsUrlValid) {
     warnings.push({
@@ -109,7 +113,7 @@ export function loadConfig(env: EnvSource): AppConfig {
   const obsPassword = obsPasswordRaw === undefined ? null : obsPasswordRaw
 
   const obs: ObsConfig | null =
-    obsUrlValid && obsUrlRaw !== undefined ? { url: obsUrlRaw, password: obsPassword } : null
+    obsUrlValid && obsUrl !== undefined ? { url: obsUrl, password: obsPassword } : null
 
   // --- Google / YouTube ---------------------------------------------------
   const googleClientId = optional(env, 'GOOGLE_CLIENT_ID')

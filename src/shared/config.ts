@@ -103,6 +103,63 @@ export const obsUrlSchema = z
     message: 'must start with ws:// or wss://',
   })
 
+/** obs-websocket v5's default port. Used to complete a URL that omits one. */
+export const OBS_DEFAULT_WS_PORT = 4455
+
+/**
+ * Coerce whatever an operator pasted from OBS into a usable `ws://host:port` URL.
+ *
+ * OBS's "Show Connect Info" lists a Server IP, a Server Port and a Server Password as three
+ * separate boxes — none of them a URL. Left to assemble one by hand, the two easy mistakes both
+ * fail with a cryptic connection error:
+ *
+ *  - a bare host (`127.0.0.1`, or `ws://127.0.0.1` with no port) → the URL defaults to port 80,
+ *    which is never where obs-websocket listens (`ECONNREFUSED …:80`);
+ *  - a bare port (`4455`) → parsed as the 32-bit integer IP `0.0.17.103` (`ENETUNREACH`).
+ *
+ * This makes both of them just work. It adds the `ws://` scheme when missing and fills in
+ * {@link OBS_DEFAULT_WS_PORT} when no port was given, but it never overrides a host or port the
+ * operator actually typed. Pure, so it runs identically on the `.env` value and on the field.
+ */
+export function normalizeObsUrl(input: string): string {
+  const trimmed = input.trim()
+  if (trimmed.length === 0) return ''
+
+  // A lone port number → loopback on that port. This is the OBS "Port" box pasted on its own.
+  if (/^\d{1,5}$/.test(trimmed)) {
+    return `ws://127.0.0.1:${trimmed}`
+  }
+
+  // Already carries a scheme: complete a missing port for ws/wss, and otherwise leave it be so a
+  // non-ws scheme (a browser URL, say) is rejected by validation with a clear message rather than
+  // silently rewritten.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    return withDefaultPort(trimmed)
+  }
+
+  // No scheme: only complete it when the input actually LOOKS like a host or host:port. A garbled
+  // value like `ws//missing-colon` must stay malformed and be reported "not configured" — not be
+  // rescued into a connection to a nonsense host.
+  if (/^[a-z0-9._-]+(:\d{1,5})?$/i.test(trimmed)) {
+    return withDefaultPort(`ws://${trimmed}`)
+  }
+
+  return trimmed
+}
+
+/** Parse a ws/wss URL and fill in {@link OBS_DEFAULT_WS_PORT} if it has no port. */
+function withDefaultPort(candidate: string): string {
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return candidate
+    if (parsed.port === '') parsed.port = String(OBS_DEFAULT_WS_PORT)
+    // `URL.toString()` appends a trailing `/`; obs-websocket wants a bare origin.
+    return parsed.toString().replace(/\/$/, '')
+  } catch {
+    return candidate
+  }
+}
+
 /** Validation schema for {@link ObsConfig}, used at the IPC boundary. */
 export const obsConfigSchema = z.object({
   url: obsUrlSchema,

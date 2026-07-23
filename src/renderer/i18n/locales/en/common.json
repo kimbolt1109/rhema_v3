@@ -68,10 +68,10 @@
     "formLabel": "OBS connection settings",
     "urlLabel": "OBS WebSocket address",
     "urlPlaceholder": "ws://127.0.0.1:4455",
-    "urlHint": "Loopback by default. Use the address shown in OBS under Tools → WebSocket Server Settings.",
+    "urlHint": "From OBS → Tools → WebSocket Server Settings → Show Connect Info you get a Server IP, a Port and a Password in separate boxes. Paste the IP here (or IP:port, or just the port) — it becomes ws://…:4455 for you.",
     "urlInvalid": "Must be a ws:// or wss:// address.",
     "passwordLabel": "Password",
-    "passwordHint": "Leave blank if you turned authentication off in OBS.",
+    "passwordHint": "OBS's Server Password from the same screen. Leave blank if you turned authentication off.",
     "notConfigured": {
       "title": "OBS is not set up yet",
       "body": "Install OBS Studio 30 or newer, open Tools → WebSocket Server Settings, enable the server, then copy the address and password into the fields below.",
