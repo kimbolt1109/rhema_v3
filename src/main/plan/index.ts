@@ -22,6 +22,8 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { createNullLogger } from '@main/logging/logger'
 import { getCameraService } from '@main/camera'
@@ -172,17 +174,60 @@ const lazyObs: PlanObsLike = {
       : getObsClient().call(requestType, requestData)
 }
 
+/** Directory of the running main bundle: `out/main` in production, `src/main/plan` under vitest. */
+const MODULE_DIR = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * Locate the bundled PowerPoint helper (resources/powerpoint/export-slides.ps1) so the importer can
+ * render every slide via PowerPoint. Packaged: it lands under `process.resourcesPath` as an
+ * extraResource. Dev / tests: it sits in the repo's `resources/`. Returns `undefined` when it is not
+ * found, in which case the importer simply falls back to LibreOffice / embedded pictures.
+ */
+function resolvePowerPointScript(): string | undefined {
+  const candidates: string[] = []
+  if (typeof process.resourcesPath === 'string' && process.resourcesPath.length > 0) {
+    candidates.push(join(process.resourcesPath, 'powerpoint', 'export-slides.ps1'))
+  }
+  candidates.push(join(process.cwd(), 'resources', 'powerpoint', 'export-slides.ps1'))
+  candidates.push(join(MODULE_DIR, '..', '..', 'resources', 'powerpoint', 'export-slides.ps1'))
+  candidates.push(join(MODULE_DIR, '..', '..', '..', 'resources', 'powerpoint', 'export-slides.ps1'))
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return candidate
+    } catch {
+      // keep trying
+    }
+  }
+  return undefined
+}
+
+const POWERPOINT_SCRIPT_PATH = resolvePowerPointScript()
+
 /**
  * The deck importer seam, bound to `deckImport.ts`.
  *
  * `detect()` probes for a converter and reports `available: false` with an explanation when there
  * is none — which is the state of the machine Phase 6 was built on, and the reason the UI can
  * disable import and say what to install rather than failing at click time.
+ *
+ * The bundled PowerPoint helper path is passed through, so on Windows with PowerPoint installed the
+ * importer renders every slide via PowerPoint; without it, it falls back to LibreOffice / embedded.
  */
 const realDeckImporter: PlanDeckImporterLike = {
   detect: () => detectImporter(),
   import: async (deckPath, options) =>
-    importDeck(deckPath, { assetDir: options.assetDir, onProgress: options.onProgress })
+    importDeck(deckPath, {
+      assetDir: options.assetDir,
+      onProgress: options.onProgress,
+      // Auto-anchor every in-app import from the slide's own text, so read-aloud parts follow the
+      // spoken word. This is safe: the default trust mode is 'assist', so an anchored cue only ever
+      // SUGGESTS the slide — it never self-fires until the operator opts into 'auto'. The extracted
+      // text lives only in the operator's local plan and is never logged.
+      deriveAnchors: true,
+      ...(POWERPOINT_SCRIPT_PATH !== undefined
+        ? { powerPointScriptPath: POWERPOINT_SCRIPT_PATH }
+        : {})
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -89,6 +89,13 @@ extraResources:
     to: asr
     filter:
       - '**/*'
+  # The PowerPoint slide-render helper (COM automation via PowerShell). Resolved at runtime as
+  # `join(process.resourcesPath, 'powerpoint', 'export-slides.ps1')` — see resolvePowerPointScript in
+  # src/main/plan/index.ts. Preferred over LibreOffice on Windows because it renders EVERY slide.
+  - from: resources/powerpoint
+    to: powerpoint
+    filter:
+      - '**/*'
 
 asar: true
 npmRebuild: false
