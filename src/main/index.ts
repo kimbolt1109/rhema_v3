@@ -19,12 +19,14 @@
  * and the app still launches.
  */
 
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { BrowserWindow, app } from 'electron'
 
 import { loadConfigFromDisk, summarize } from '@main/config/env'
 import type { AppConfig } from '@main/config/env'
+import { loadPortableConfig } from '@main/config/portable'
+import type { PortableConfigResult } from '@main/config/portable'
 import { createLogger } from '@main/logging/logger'
 import type { Logger } from '@main/logging/logger'
 import { registerIpc } from '@main/ipc/register'
@@ -146,7 +148,25 @@ if (!hasSingleInstanceLock) {
 // ---------------------------------------------------------------------------
 
 function onReady(): void {
-  const config: AppConfig = loadConfigFromDisk()
+  // Resolve the operator's external config.json (next to the launcher) FIRST, so its OBS values are
+  // in the environment before dotenv runs and before anything reads config. In a dev run this is
+  // inert — it manages no file and applies no overrides, so the `.env` flow is byte-for-byte the
+  // same. See src/main/config/portable.ts.
+  const portable = loadPortableConfig({
+    isPackaged: app.isPackaged,
+    exeDir: dirname(app.getPath('exe'))
+  })
+  for (const [key, value] of Object.entries(portable.envOverrides)) {
+    // config.json is the source of truth for OBS in a portable build. Setting it here — before
+    // dotenv runs — means a stray .env cannot override it, because dotenv never overwrites a
+    // variable that is already set.
+    process.env[key] = value
+  }
+
+  const config: AppConfig =
+    portable.envFilePath !== null
+      ? loadConfigFromDisk({ envFilePath: portable.envFilePath })
+      : loadConfigFromDisk()
 
   const log = createLogger({
     directory: join(app.getPath('userData'), 'logs'),
@@ -163,11 +183,24 @@ function onReady(): void {
     packaged: app.isPackaged,
     config: summarize(config)
   })
+
+  // Where the config came from — safe fields only. NEVER log `portable.envOverrides`: it carries the
+  // OBS password.
+  log.info('portable config resolved', {
+    source: portable.source,
+    managed: portable.managed,
+    configPath: portable.configPath,
+    overlayPort: portable.overlayPort,
+    asrEngine: portable.asrEngine
+  })
+  for (const warning of portable.warnings) {
+    log.warn('portable config warning', { detail: warning })
+  }
   for (const warning of config.warnings) {
     log.warn('configuration warning', { key: warning.key, detail: warning.message })
   }
 
-  const services = composeServices(log)
+  const services = composeServices(log, portable)
   disposeServices = services.dispose
 
   disposeIpc = toDisposer(
@@ -246,14 +279,20 @@ interface ComposedServices {
  * degrades visibly and never blocks the app (Standing Rule 5) — the window opens either way, and
  * the operator can still drive OBS by hand.
  */
-function composeServices(log: Logger): ComposedServices {
+function composeServices(log: Logger, portable: PortableConfigResult): ComposedServices {
   const obs = getObsClient({ logger: log })
 
   // The overlay server must be STARTED here, not merely constructed. OBS loads the overlay as
   // a browser source over http://127.0.0.1:7320/overlay, so if nothing binds that port the
   // congregation screen has no overlay layer at all — the whole point of Phase 2. Every unit
   // test passed with this line missing, which is exactly why it is called out.
-  const overlay = getOverlayServer({ logger: log })
+  const overlay = getOverlayServer({
+    logger: log,
+    // An operator can move the overlay off 7320 in config.json (a port clash on a strange PC). The
+    // Overlay panel reads the *actual* bound port from getInfo(), so the URL it shows an operator to
+    // paste into OBS always matches. Dev leaves this unset and keeps the 7320 default.
+    ...(portable.managed ? { port: portable.overlayPort } : {})
+  })
   overlayServer = overlay
   void overlay.start().then((result) => {
     if (result.ok) {
