@@ -776,3 +776,48 @@ would need it.
 ## Cycle 10 — COMPLETE
 
 Blueprint achieved across all ten prompts. Awaiting human review and a real-environment dry run.
+
+## Cycle 11 — Portable build, self-serve PowerPoint rendering, auto-anchor, Preflight, operator docs
+
+Post-blueprint work driven by a real operator preparing to test on a church PC. Branch
+`portable-and-ui`.
+
+Delivered:
+
+- **External `config.json`** next to the launcher (OBS host/port/password, overlay port, ASR
+  engine), resolved deterministically beside the exe when packaged; the dev `.env` flow is
+  byte-for-byte unchanged.
+- **Portable `--dir` packaging** — `npm run portable` builds a copy-to-USB `win-unpacked` folder
+  (audit confirmed zero native deps) with `START.bat` (drive-letter-safe, pause-on-crash),
+  `config.json`, the operator docs, and the pre-baked plans.
+- **Local-Whisper packaging fix** — the packaged app now resolves the faster-whisper runtime under
+  `process.resourcesPath` (was hardcoded to `process.cwd()` with `isPackaged:false`, so offline
+  transcription could never start when packaged).
+- **Opt-in auto-anchor from slide text** — importing a deck can pre-fill each slide's trigger from
+  its own words, so read-aloud parts auto-advance. Safe under the default assist mode (suggests,
+  never self-fires). Slide text is read only when asked, lives only in the operator's local plan,
+  and is never logged; tests use placeholder strings (Standing Rule 4).
+- **In-app PowerPoint slide rendering (the important one)** — real-deck testing exposed that
+  LibreOffice's one-shot `--convert-to png` renders only slide 1, leaving text-only slides blank.
+  Added a PowerPoint renderer, preferred on Windows: the importer spawns a bundled PowerShell COM
+  helper (`resources/powerpoint/export-slides.ps1`) that opens the deck READ-ONLY with macros
+  force-disabled — in PowerPoint's own process, not inside Electron — and exports every slide. The
+  app now renders every slide itself; it falls back to LibreOffice then embedded pictures.
+- **Preflight screen** (auto-shown on first launch on a new machine) — OBS / scenes /
+  overlay-server / browser-source / audio-device / config checks with plain-language fixes, plus
+  Test-lower-third and Test-camera-scenes buttons reusing the real overlay/camera paths.
+- **Operator docs shipped on the USB** — `RUNBOOK.md`, `obs/OBS-SETUP.md`, `SETUP-ASR.bat`,
+  `ASR-SETUP.md` (shortcuts, panic semantics, and setup steps verified against the source).
+
+Verification update (correcting the Cycle 10 "never verified" list):
+
+- **A real `.pptx` HAS now been converted.** LibreOffice *and* PowerPoint were installed this
+  session; the operator's two real decks (102 and 48 slides) were imported through the app's own
+  `importDeck` via PowerPoint — 102/102 and 48/48 slides rendered, 75 and 43 slides auto-anchored,
+  0 invalid cues — and baked into the USB folder as ready-to-open plans.
+- Still unverified and owed to the on-site test: a real live OBS connection, a real dry-run go-live
+  with recording confirmed, real speech transcribed against a live mic, and the installer remains
+  unsigned. The GUI has not been launched headlessly — the operator's church-PC test is the final
+  proof.
+
+1964 unit tests green; tsc node + web clean; i18n audit PASS.

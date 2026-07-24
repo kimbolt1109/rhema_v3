@@ -46,6 +46,7 @@ import { GoLivePanel } from './screens/GoLivePanel'
 import { GoLiveSettings } from './screens/GoLiveSettings'
 import { OverlayPanel } from './screens/OverlayPanel'
 import { PlanEditor } from './screens/PlanEditor'
+import { PreflightScreen } from './screens/PreflightScreen'
 import { ShortcutSettings } from './screens/ShortcutSettings'
 import { StatusDashboard, StatusStrip } from './screens/StatusDashboard'
 import { TranscriptPanel } from './screens/TranscriptPanel'
@@ -58,6 +59,9 @@ import { useYouTubeStore } from './store/youtubeStore'
 
 /** The console sections a tab can select. */
 const SECTIONS = [
+  // Preflight leads the list: on a machine that has never run Verger it is auto-selected on first
+  // launch (see `initialSection`), so a new operator lands on the readiness checklist.
+  { id: 'preflight', labelKey: 'app.section.preflight' },
   { id: 'connection', labelKey: 'app.section.connection' },
   // Cameras sit ahead of Overlay because they are the busiest live surface, and Camera setup sits
   // last because it is a soundcheck task, not a service one.
@@ -89,6 +93,23 @@ const SECTIONS = [
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
+
+/**
+ * Which tab to show first. On a machine that has never run Verger, open Preflight so a new operator
+ * lands on the readiness checklist; afterwards, default to the Connection screen. The marker lives in
+ * localStorage — renderer-only, no IPC — and its absence is exactly what "a new machine" means here.
+ */
+function initialSection(): SectionId {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('verger.preflightSeen') === null) {
+      localStorage.setItem('verger.preflightSeen', '1')
+      return 'preflight'
+    }
+  } catch {
+    // Private-mode / storage-disabled: fall through to the normal default.
+  }
+  return 'connection'
+}
 
 /** Reflect the active UI language onto `<html lang>` so the OS/AT picks the right voice. */
 function useDocumentLanguage(): void {
@@ -328,6 +349,8 @@ function SectionView({
   onBindingsChange: (next: readonly KeyBinding[]) => void
 }): React.JSX.Element {
   switch (section) {
+    case 'preflight':
+      return <PreflightScreen />
     case 'connection':
       return <ConnectionScreen />
     case 'camera':
@@ -388,7 +411,7 @@ export function App(): React.JSX.Element {
   useCueSubsystem()
   useHealthSubsystem()
 
-  const [section, setSection] = useState<SectionId>('connection')
+  const [section, setSection] = useState<SectionId>(initialSection)
 
   // One dispatcher for the session. Created here rather than inside the panel so a pedal or a
   // Stream Deck added in Phase 10 has a single object to bind against.

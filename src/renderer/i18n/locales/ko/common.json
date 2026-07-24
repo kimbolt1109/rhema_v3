@@ -18,6 +18,7 @@
     "phasePendingDetail": "다음 단계에서 추가됩니다.",
     "sectionsLabel": "콘솔 화면",
     "section": {
+      "preflight": "점검",
       "connection": "연결",
       "camera": "카메라",
       "overlay": "오버레이",

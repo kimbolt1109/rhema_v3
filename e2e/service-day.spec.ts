@@ -216,7 +216,7 @@ test.describe('service day — the real app, end to end', () => {
     // disappearing from the nav — or being added and never wired, which is exactly what happened
     // to ShortcutSettings in Phase 10 — fails here rather than going unnoticed.
     const tabs = page.getByRole('tab')
-    await expect(tabs).toHaveCount(12)
+    await expect(tabs).toHaveCount(13)
 
     // If locale pinning failed, this is where it says so rather than three tests later.
     await expect(page.getByRole('tab', { name: 'Connection' })).toBeVisible()

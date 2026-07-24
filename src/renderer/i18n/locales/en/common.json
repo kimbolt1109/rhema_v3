@@ -18,6 +18,7 @@
     "phasePendingDetail": "Arrives in a later phase.",
     "sectionsLabel": "Console sections",
     "section": {
+      "preflight": "Preflight",
       "connection": "Connection",
       "camera": "Cameras",
       "overlay": "Overlay",
