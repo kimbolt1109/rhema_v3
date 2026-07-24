@@ -62,6 +62,9 @@ export const SOFFICE_ENV_VAR = 'VERGER_SOFFICE'
 /** Backend id reported when slides were rendered by LibreOffice. */
 export const BACKEND_LIBREOFFICE = 'libreoffice'
 
+/** Reported when PowerPoint rendered the slides (preferred on Windows; renders every slide). */
+export const BACKEND_POWERPOINT = 'powerpoint'
+
 /** Backend id reported when slide pictures were extracted from the package instead. */
 export const BACKEND_EMBEDDED_MEDIA = 'embedded-media'
 
@@ -195,6 +198,46 @@ export function detectImporter(options: ImporterProbeOptions = {}): DeckImporter
 export function canImportWithoutRenderer(status: DeckImporterStatus): boolean {
   return status.available || status.backend === BACKEND_EMBEDDED_MEDIA
 }
+
+/**
+ * Candidate `POWERPNT.EXE` locations, across Click-to-Run and MSI Office layouts. Windows only —
+ * PowerPoint automation is a Windows COM feature.
+ */
+export function powerPointCandidates(options: ImporterProbeOptions = {}): string[] {
+  const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
+  if (platform !== 'win32') return []
+
+  const roots = [
+    env['ProgramFiles'] ?? 'C:\\Program Files',
+    env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  ]
+  const versions = ['Office16', 'Office15', 'Office14']
+  const candidates: string[] = []
+  for (const root of roots) {
+    for (const version of versions) {
+      candidates.push(`${root}\\Microsoft Office\\root\\${version}\\POWERPNT.EXE`)
+      candidates.push(`${root}\\Microsoft Office\\${version}\\POWERPNT.EXE`)
+    }
+  }
+  return candidates
+}
+
+/**
+ * The installed PowerPoint executable, or `null`. Stat-only, never spawns. Its path is only a
+ * presence signal — the actual render is driven through COM by the bundled `export-slides.ps1`, not
+ * by launching this exe directly.
+ */
+export function detectPowerPoint(options: ImporterProbeOptions = {}): string | null {
+  const isFile = options.isFile ?? defaultIsFile
+  for (const candidate of powerPointCandidates(options)) {
+    if (isFile(candidate)) return candidate
+  }
+  return null
+}
+
+/** PowerPoint gets a longer leash than LibreOffice: exporting 100+ slides one by one is not instant. */
+export const POWERPOINT_TIMEOUT_MS = 300_000
 
 // ---------------------------------------------------------------------------
 // Path containment
@@ -346,6 +389,19 @@ export interface DeckImportOptions {
   readonly onProgress?: (progress: DeckImportProgress) => void
   /** A pre-detected importer status. Default: {@link detectImporter} run now. */
   readonly importer?: DeckImporterStatus
+  /**
+   * Absolute path to the bundled PowerPoint helper (resources/powerpoint/export-slides.ps1). When set
+   * AND PowerPoint is detected on Windows, it is PREFERRED over LibreOffice, because it renders EVERY
+   * slide (LibreOffice's one-shot PNG export only emits the first). Resolved by src/main/plan/index.ts.
+   */
+  readonly powerPointScriptPath?: string
+  /**
+   * The detected PowerPoint executable path, or `null` to force-skip PowerPoint. `undefined` (the
+   * default) runs {@link detectPowerPoint}. Injected in tests.
+   */
+  readonly powerPointExe?: string | null
+  /** The PowerShell used to run the helper. Default `powershell.exe`. Injected in tests. */
+  readonly powerShell?: string
   /** Override any of the parser's bounds. */
   readonly limits?: Partial<PptxLimits>
   /**
@@ -368,7 +424,7 @@ export interface DeckImportOptions {
 
 /** What an import produced. */
 export interface DeckImportResult {
-  /** {@link BACKEND_LIBREOFFICE} when any slide was rendered, otherwise {@link BACKEND_EMBEDDED_MEDIA}. */
+  /** The renderer that produced the images: {@link BACKEND_POWERPOINT}, {@link BACKEND_LIBREOFFICE}, or {@link BACKEND_EMBEDDED_MEDIA}. */
   readonly backend: string
   /**
    * One `slide` cue per slide, in deck order. Each is `trigger.mode = 'manual'` unless `deriveAnchors`
@@ -478,6 +534,65 @@ async function renderWithConverter(
 }
 
 /**
+ * Render EVERY slide with PowerPoint via the bundled COM helper, into a scratch dir, in slide order.
+ *
+ * Same contract as {@link renderWithConverter}: returns an empty list on any failure so the caller
+ * falls back rather than aborting. The untrusted deck is opened by PowerPoint in its own process with
+ * macros disabled (see resources/powerpoint/export-slides.ps1) — never inside the Electron main
+ * process.
+ */
+async function renderWithPowerPoint(
+  powerShell: string,
+  scriptPath: string,
+  deckPath: string,
+  scratchDir: string,
+  timeoutMs: number,
+  spawnFn: DeckSpawn,
+  warnings: string[]
+): Promise<Uint8Array[]> {
+  try {
+    await mkdir(scratchDir, { recursive: true })
+    const result = await spawnFn(
+      powerShell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+        '-Deck',
+        deckPath,
+        '-Out',
+        scratchDir
+      ],
+      { cwd: scratchDir, timeoutMs }
+    )
+    if (result.timedOut) {
+      warnings.push('PowerPoint took too long and was stopped; the other renderer was used instead.')
+      return []
+    }
+    if (result.failure !== null || (result.code !== 0 && result.code !== null)) {
+      warnings.push('PowerPoint could not render the slides; the other renderer was used instead.')
+      return []
+    }
+    const produced = (await readdir(scratchDir)).filter((name) => /\.(png|jpe?g)$/i.test(name))
+    produced.sort(compareNumeric)
+    const images: Uint8Array[] = []
+    for (const name of produced) {
+      const contained = resolveWithinDir(scratchDir, name)
+      if (!contained.ok) continue
+      images.push(new Uint8Array(await readFile(contained.value)))
+    }
+    return images
+  } catch (cause) {
+    warnings.push('PowerPoint rendering failed; the other renderer was used instead.')
+    void cause
+    return []
+  }
+}
+
+/**
  * Import a `.pptx` as a run of manual slide cues.
  *
  * Order of operations, and why: the package is size-checked and magic-byte-checked before it is
@@ -554,7 +669,29 @@ export async function importDeck(
   // --- render, if a renderer exists -------------------------------------------------------------
   const importer = options.importer ?? detectImporter()
   let rendered: Uint8Array[] = []
-  if (importer.available && importer.executablePath !== null) {
+  let renderedBy: string | null = null
+
+  // Prefer PowerPoint when present (Windows): it renders EVERY slide, where LibreOffice's one-shot
+  // PNG export only produces the first. Driving COM needs the bundled helper script — without it we
+  // cannot use PowerPoint and go straight to LibreOffice / embedded pictures.
+  const powerPointExe =
+    options.powerPointExe === undefined ? detectPowerPoint() : options.powerPointExe
+  if (options.powerPointScriptPath !== undefined && powerPointExe !== null) {
+    const scratchDir = join(options.tempDir ?? tmpdir(), `verger-deck-pp-${newId()}`)
+    rendered = await renderWithPowerPoint(
+      options.powerShell ?? 'powershell.exe',
+      options.powerPointScriptPath,
+      deckPath,
+      scratchDir,
+      POWERPOINT_TIMEOUT_MS,
+      options.spawn ?? spawnConverter,
+      warnings
+    )
+    if (rendered.length > 0) renderedBy = BACKEND_POWERPOINT
+  }
+
+  // Fall back to LibreOffice (first slide only) when PowerPoint rendered nothing.
+  if (rendered.length === 0 && importer.available && importer.executablePath !== null) {
     const scratchDir = join(options.tempDir ?? tmpdir(), `verger-deck-${newId()}`)
     rendered = await renderWithConverter(
       importer.executablePath,
@@ -564,12 +701,13 @@ export async function importDeck(
       options.spawn ?? spawnConverter,
       warnings
     )
+    if (rendered.length > 0) renderedBy = BACKEND_LIBREOFFICE
     if (rendered.length > 0 && rendered.length < slidesTotal) {
       warnings.push(
         `The renderer produced ${rendered.length} image${rendered.length === 1 ? '' : 's'} for ${slidesTotal} slides; the remaining slides fall back to their embedded pictures.`
       )
     }
-  } else {
+  } else if (rendered.length === 0) {
     warnings.push(
       'No slide renderer is installed, so embedded pictures were extracted instead of rendered slides. A text-only slide will have no image.'
     )
@@ -665,7 +803,7 @@ export async function importDeck(
     })
   }
 
-  const backend = usedRenderer ? BACKEND_LIBREOFFICE : BACKEND_EMBEDDED_MEDIA
+  const backend = usedRenderer ? (renderedBy ?? BACKEND_LIBREOFFICE) : BACKEND_EMBEDDED_MEDIA
   options.logger?.info('deck imported', {
     backend,
     slidesTotal,

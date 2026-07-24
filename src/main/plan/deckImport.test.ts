@@ -23,10 +23,12 @@ import { cueSchema } from '@shared/plan'
 import {
   BACKEND_EMBEDDED_MEDIA,
   BACKEND_LIBREOFFICE,
+  BACKEND_POWERPOINT,
   NO_RENDERER_DETAIL,
   SOFFICE_ENV_VAR,
   canImportWithoutRenderer,
   detectImporter,
+  detectPowerPoint,
   importDeck,
   missingAssetNote,
   resolveWithinDir,
@@ -186,6 +188,81 @@ describe('importDeck deriveAnchors', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) expect(at(result.value.cues, 0).trigger).toEqual({ mode: 'manual' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PowerPoint renderer (preferred on Windows — renders every slide)
+// ---------------------------------------------------------------------------
+
+describe('detectPowerPoint', () => {
+  it('finds POWERPNT.EXE in a Click-to-Run layout', () => {
+    const found = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE'
+    expect(
+      detectPowerPoint({ env: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', isFile: (p) => p === found })
+    ).toBe(found)
+  })
+
+  it('returns null when PowerPoint is absent', () => {
+    expect(detectPowerPoint({ env: {}, platform: 'win32', isFile: () => false })).toBeNull()
+  })
+
+  it('returns null off Windows (COM automation is Windows-only)', () => {
+    expect(detectPowerPoint({ env: {}, platform: 'linux', isFile: () => true })).toBeNull()
+  })
+})
+
+describe('importDeck PowerPoint backend', () => {
+  /** A spawn that behaves like export-slides.ps1: writes one PNG per slide into the -Out directory. */
+  function fakePowerPoint(count: number): DeckSpawn {
+    return async (_exe, args, _opts) => {
+      const outDir = args[args.indexOf('-Out') + 1]
+      if (outDir !== undefined) {
+        for (let i = 1; i <= count; i += 1) {
+          await writeFile(join(outDir, `slide-${String(i).padStart(3, '0')}.png`), PNG_1X1)
+        }
+      }
+      return { code: 0, timedOut: false, failure: null }
+    }
+  }
+
+  it('prefers PowerPoint and renders EVERY slide, including text-only ones', async () => {
+    await writeDeck([
+      { number: 1, images: ['image1.png'], placeholderText: 'PLACEHOLDER ONE' },
+      { number: 2, placeholderText: 'PLACEHOLDER TWO' },
+      { number: 3, placeholderText: 'PLACEHOLDER THREE' }
+    ])
+    const result = await importDeck(deckPath, {
+      assetDir,
+      newId: nextId,
+      importer: noRendererStatus,
+      powerPointScriptPath: 'C:\\fake\\export-slides.ps1',
+      powerPointExe: 'C:\\fake\\POWERPNT.EXE',
+      spawn: fakePowerPoint(3)
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.backend).toBe(BACKEND_POWERPOINT)
+      expect(result.value.slidesWithAsset).toBe(3)
+      expect(result.value.slidesMissingAsset).toEqual([])
+    }
+  })
+
+  it('skips PowerPoint when it is not detected and falls back cleanly', async () => {
+    await writeDeck([{ number: 1, images: ['image1.png'], placeholderText: 'PLACEHOLDER ONE' }])
+    const result = await importDeck(deckPath, {
+      assetDir,
+      newId: nextId,
+      importer: noRendererStatus,
+      powerPointScriptPath: 'C:\\fake\\export-slides.ps1',
+      powerPointExe: null,
+      spawn: fakePowerPoint(0)
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.backend).toBe(BACKEND_EMBEDDED_MEDIA)
+      expect(result.value.slidesWithAsset).toBe(1)
+    }
   })
 })
 
