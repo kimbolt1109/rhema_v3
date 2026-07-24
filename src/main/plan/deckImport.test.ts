@@ -140,6 +140,55 @@ function fakeConverter(count: number): DeckSpawn {
   }
 }
 
+/** A status that pretends no renderer exists, for driving the embedded-media fallback. */
+const noRendererStatus = {
+  available: false,
+  backend: BACKEND_EMBEDDED_MEDIA,
+  executablePath: null,
+  detail: NO_RENDERER_DETAIL
+} as const
+
+// ---------------------------------------------------------------------------
+// deriveAnchors — opt-in auto-anchor from slide text. Placeholders only (Standing Rule 4).
+// ---------------------------------------------------------------------------
+
+describe('importDeck deriveAnchors', () => {
+  it('builds an anchor trigger from a slide’s text when asked', async () => {
+    await writeDeck([{ number: 1, images: ['image1.png'], placeholderText: 'PLACEHOLDER LINE ONE' }])
+    const result = await importDeck(deckPath, {
+      assetDir,
+      importer: noRendererStatus,
+      newId: nextId,
+      deriveAnchors: true
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const cue = at(result.value.cues, 0)
+      expect(cue.trigger).toEqual({ mode: 'anchor', text: 'PLACEHOLDER LINE ONE' })
+      expect(cueSchema.safeParse(cue).success).toBe(true)
+    }
+  })
+
+  it('stays manual by default, even for a slide that has text', async () => {
+    await writeDeck([{ number: 1, images: ['image1.png'], placeholderText: 'PLACEHOLDER LINE ONE' }])
+    const result = await importDeck(deckPath, { assetDir, importer: noRendererStatus, newId: nextId })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(at(result.value.cues, 0).trigger).toEqual({ mode: 'manual' })
+  })
+
+  it('leaves an image-only slide manual even with deriveAnchors on', async () => {
+    await writeDeck([{ number: 1, images: ['image1.png'] }])
+    const result = await importDeck(deckPath, {
+      assetDir,
+      importer: noRendererStatus,
+      newId: nextId,
+      deriveAnchors: true
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(at(result.value.cues, 0).trigger).toEqual({ mode: 'manual' })
+  })
+})
+
 // ---------------------------------------------------------------------------
 // detectImporter
 // ---------------------------------------------------------------------------

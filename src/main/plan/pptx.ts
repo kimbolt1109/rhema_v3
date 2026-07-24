@@ -130,8 +130,11 @@ export interface PptxMediaRef {
 /**
  * One slide's structural metadata.
  *
- * There is deliberately no `text` and no `notes` field (Standing Rule 4). A slide is an opaque
- * image as far as Verger is concerned.
+ * By default there is NO text here — a slide is an opaque image, the original Standing Rule 4 stance.
+ * Slide text is read ONLY when {@link readPptx} is called with `{ includeText: true }`, which the
+ * deck importer passes when the operator opts in to "auto-create triggers from slide text". Even then
+ * the text is the operator's OWN service content: it is used to build a cue anchor, it is stored only
+ * in the operator's local plan file, and it is never logged (see {@link parseSlideText}).
  */
 export interface PptxSlideInfo {
   /** 1-based position in the deck AFTER numeric ordering. This is what "Slide 3" means. */
@@ -142,6 +145,12 @@ export interface PptxSlideInfo {
   readonly entryName: string
   /** Pictures this slide references, in document order where that could be determined. */
   readonly media: readonly PptxMediaRef[]
+  /**
+   * The slide's visible text, concatenated across runs and whitespace-normalised. Present ONLY when
+   * `readPptx(..., { includeText: true })` was requested, and only when the slide actually had text;
+   * `undefined` otherwise. Never logged anywhere.
+   */
+  readonly text?: string
 }
 
 /** What {@link readPptx} learned about a deck. */
@@ -548,11 +557,58 @@ export function parseSlideEmbedIds(xml: string): string[] {
 }
 
 /**
+ * Extract a slide's visible text — the ONE place `<a:t>` text runs are read, and only when the caller
+ * opted in via `readPptx(..., { includeText: true })`.
+ *
+ * The text is the operator's own slide content. It is concatenated across runs, XML-entity-decoded,
+ * and whitespace-collapsed into a single string the plan-follower can fuzzy-match against, then
+ * returned to become a cue anchor stored in the operator's local plan. It is NEVER logged here or
+ * downstream — the same discipline the rest of this module keeps for service content.
+ */
+export function parseSlideText(xml: string): string {
+  const parts: string[] = []
+  const pattern = /<a:t>([\s\S]*?)<\/a:t>/g
+  let match: RegExpExecArray | null = pattern.exec(xml)
+  while (match !== null) {
+    const run = match[1]
+    if (run !== undefined && run.length > 0) parts.push(decodeXmlEntities(run))
+    match = pattern.exec(xml)
+  }
+  return parts.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+/** Decode the five predefined XML entities plus numeric character references. `&amp;` is decoded last. */
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => fromCodePointSafe(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => fromCodePointSafe(parseInt(dec, 10)))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+function fromCodePointSafe(code: number): string {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return ''
+  try {
+    return String.fromCodePoint(code)
+  } catch {
+    return ''
+  }
+}
+
+/**
  * Read a `.pptx` package: which slides exist, in what order, and which pictures each one owns.
  *
- * Returns structure only. There is no code path in this function that produces slide text.
+ * Returns structure by default. Slide TEXT is read only when `options.includeText` is true — the
+ * opt-in path for auto-creating cue anchors from slide content (see {@link parseSlideText}).
  */
-export function readPptx(bytes: Uint8Array, overrides?: Partial<PptxLimits>): Result<PptxPackage> {
+export function readPptx(
+  bytes: Uint8Array,
+  overrides?: Partial<PptxLimits>,
+  options?: { readonly includeText?: boolean }
+): Result<PptxPackage> {
   const limits = resolveLimits(overrides)
 
   const directory = readZipDirectory(bytes, limits)
@@ -636,11 +692,20 @@ export function readPptx(bytes: Uint8Array, overrides?: Partial<PptxLimits>): Re
       for (const [id, target] of relMap) push(id, target)
     }
 
+    // Opt-in only: read the slide's own text so the importer can build an anchor from it. Reuses the
+    // XML already decoded above; a slide too large to have been extracted simply gets no text.
+    let slideText: string | undefined
+    if (options?.includeText === true && slideBytes !== undefined) {
+      const extractedText = parseSlideText(decodeUtf8(slideBytes))
+      if (extractedText.length > 0) slideText = extractedText
+    }
+
     slides.push({
       index: position + 1,
       slideNumber: slide.number,
       entryName: slide.name,
-      media
+      media,
+      ...(slideText !== undefined ? { text: slideText } : {})
     })
   }
 

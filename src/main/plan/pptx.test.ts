@@ -22,6 +22,7 @@ import {
   isSafeZipEntryName,
   parseSlideEmbedIds,
   parseSlideRels,
+  parseSlideText,
   readPptx,
   readZipDirectory,
   resolveLimits,
@@ -175,6 +176,43 @@ describe('resolveRelativeEntry', () => {
     expect(resolveRelativeEntry('ppt/slides', '../../../../../../etc/passwd')).toBeNull()
     expect(resolveRelativeEntry('ppt/slides', '/etc/passwd')).toBeNull()
     expect(resolveRelativeEntry('ppt/slides', 'C:\\x')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Opt-in slide text (auto-anchor). Placeholder strings only — Standing Rule 4.
+// ---------------------------------------------------------------------------
+
+describe('parseSlideText', () => {
+  it('concatenates a slide\u2019s <a:t> run, whitespace-collapsed', () => {
+    expect(parseSlideText(slideXml({ placeholderText: 'WELCOME PLACEHOLDER' }))).toBe(
+      'WELCOME PLACEHOLDER'
+    )
+  })
+
+  it('joins multiple runs and decodes XML entities (amp decoded last)', () => {
+    const xml = '<p:sld><a:t>ONE</a:t><a:t>TWO &amp; THREE</a:t><a:t>&#48;&#x34;</a:t></p:sld>'
+    expect(parseSlideText(xml)).toBe('ONE TWO & THREE 04')
+  })
+
+  it('returns empty string when a slide has no text', () => {
+    expect(parseSlideText(slideXml({ embedIds: ['rId2'] }))).toBe('')
+  })
+})
+
+describe('readPptx includeText', () => {
+  it('omits slide text by default — slides stay opaque images', () => {
+    const deck = buildDeck([{ number: 1, placeholderText: 'PLACEHOLDER LINE', images: ['image1.png'] }])
+    const parsed = readPptx(deck)
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(at(parsed.value.slides, 0).text).toBeUndefined()
+  })
+
+  it('includes slide text only when explicitly asked for it', () => {
+    const deck = buildDeck([{ number: 1, placeholderText: 'PLACEHOLDER LINE', images: ['image1.png'] }])
+    const parsed = readPptx(deck, undefined, { includeText: true })
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(at(parsed.value.slides, 0).text).toBe('PLACEHOLDER LINE')
   })
 })
 

@@ -348,6 +348,13 @@ export interface DeckImportOptions {
   readonly importer?: DeckImporterStatus
   /** Override any of the parser's bounds. */
   readonly limits?: Partial<PptxLimits>
+  /**
+   * Opt-in: read each slide's own text and set that cue's trigger to an `anchor` built from it, so a
+   * slide auto-advances when the words on it are spoken. Off by default — slides stay `manual`. The
+   * extracted text is the operator's own service content: it lives only in their local plan file and
+   * is never logged.
+   */
+  readonly deriveAnchors?: boolean
   /** Converter timeout. Default {@link CONVERT_TIMEOUT_MS}. */
   readonly convertTimeoutMs?: number
   /** Cue id factory. Default `crypto.randomUUID`. */
@@ -363,7 +370,10 @@ export interface DeckImportOptions {
 export interface DeckImportResult {
   /** {@link BACKEND_LIBREOFFICE} when any slide was rendered, otherwise {@link BACKEND_EMBEDDED_MEDIA}. */
   readonly backend: string
-  /** One `slide` cue per slide, in deck order, every one of them `trigger.mode = 'manual'`. */
+  /**
+   * One `slide` cue per slide, in deck order. Each is `trigger.mode = 'manual'` unless `deriveAnchors`
+   * was set and the slide had text, in which case its trigger is an `anchor` built from that text.
+   */
   readonly cues: readonly Cue[]
   readonly slidesTotal: number
   readonly slidesWithAsset: number
@@ -376,6 +386,20 @@ export interface DeckImportResult {
 /** The note attached to a cue whose slide produced no image. */
 export function missingAssetNote(slideNumber: number): string {
   return `Slide ${slideNumber} produced no image (a text-only slide, or a picture Verger cannot display). Attach an asset to this cue.`
+}
+
+/** Max characters kept as an anchor: long enough for a full slide line, short enough to stay a phrase. */
+const MAX_ANCHOR_CHARS = 500
+
+/**
+ * Turn a slide's raw text into a matchable anchor phrase, or '' when there is nothing usable (so the
+ * cue falls back to `manual`). The text arrives already whitespace-normalised from `parseSlideText`;
+ * this re-collapses defensively and caps the length.
+ */
+function normalizeAnchorText(text: string | undefined): string {
+  if (text === undefined) return ''
+  const collapsed = text.replace(/\s+/g, ' ').trim()
+  return collapsed.length > MAX_ANCHOR_CHARS ? collapsed.slice(0, MAX_ANCHOR_CHARS).trim() : collapsed
 }
 
 function emit(
@@ -471,6 +495,7 @@ export async function importDeck(
   const assetPrefix = options.assetPrefix ?? 'slides'
   const labelPrefix = options.labelPrefix ?? 'Slide'
   const newId = options.newId ?? (() => randomUUID())
+  const deriveAnchors = options.deriveAnchors ?? false
 
   emit(onProgress, { stage: 'reading', slidesDone: 0, slidesTotal: null, message: 'Reading deck' })
 
@@ -504,8 +529,8 @@ export async function importDeck(
     return err(ErrorCode.INVALID_ARG, 'that file is not a PowerPoint presentation')
   }
 
-  // --- parse the package (structure only; never text) ------------------------------------------
-  const parsed = readPptx(bytes, limits)
+  // --- parse the package (structure always; slide text only when deriveAnchors is set) ----------
+  const parsed = readPptx(bytes, limits, { includeText: deriveAnchors })
   if (!parsed.ok) {
     emit(onProgress, {
       stage: 'failed',
@@ -612,12 +637,19 @@ export async function importDeck(
         ? { asset: expectedAssetPath(assetPrefix, stem, slideNumber, '.png'), sourceSlide: slideNumber }
         : { asset: written.assetPath, sourceSlide: slideNumber }
 
+    // Opt-in anchor: when the operator asked to auto-create triggers AND this slide had text, the
+    // cue fires when those words are spoken. Otherwise it stays manual (operator-fired), as before.
+    const anchorText = deriveAnchors ? normalizeAnchorText(slide.text) : ''
+    const trigger =
+      anchorText.length > 0
+        ? { mode: 'anchor' as const, text: anchorText }
+        : { mode: 'manual' as const }
+
     const base = {
       id: newId().slice(0, 64),
       type: 'slide' as const,
       label: `${labelPrefix} ${slideNumber}`,
-      // Manual first: every imported cue is operator-fired until someone arms it (Phase 8).
-      trigger: { mode: 'manual' as const },
+      trigger,
       payload
     }
     cues.push(
