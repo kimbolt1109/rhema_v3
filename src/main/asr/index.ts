@@ -23,6 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { app } from 'electron'
 
@@ -37,7 +38,10 @@ import type { Result } from '@shared/result'
 import { AsrService } from './AsrService'
 import type { AsrProvider } from './AsrProvider'
 import { DeepgramProvider } from './DeepgramProvider'
-import { WhisperProvider } from './WhisperProvider'
+import { WhisperProvider, resolveWhisperRuntime } from './WhisperProvider'
+
+/** Directory of the running main bundle — `out/main` in production. Same derivation as overlay/index.ts. */
+const MODULE_DIR = fileURLToPath(new URL('.', import.meta.url))
 
 export { ASR_PROVIDER_LABELS, asrProviderLabel } from './AsrProvider'
 export type {
@@ -149,7 +153,22 @@ export function writeAsrSettingsFile(filePath: string, settings: AsrSettings): R
 export function createAsrProviders(config: AppConfig, logger: Logger): readonly AsrProvider[] {
   return [
     new DeepgramProvider({ apiKey: config.deepgramApiKey, logger }),
-    new WhisperProvider({ logger })
+    new WhisperProvider({
+      logger,
+      // Give the local engine the REAL packaged paths. `WhisperProvider` is Electron-free by design
+      // and defaults to a `process.cwd()`-based resolver that hardcodes `isPackaged: false` — so a
+      // PACKAGED build never looked under `process.resourcesPath`, where electron-builder unpacks the
+      // faster-whisper venv and sidecar, and local (offline) transcription could never start. This is
+      // the one place that knows the real values (audit blocker). In dev the venv is absent, so this
+      // still resolves to `not-configured`, exactly as before.
+      resolvePaths: () =>
+        resolveWhisperRuntime({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath ?? '',
+          moduleDir: MODULE_DIR,
+          repoRoot: process.cwd()
+        })
+    })
   ]
 }
 

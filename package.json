@@ -25,7 +25,9 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "package": "npm run build && electron-builder --win --config electron-builder.yml"
+    "package": "npm run build && electron-builder --win --config electron-builder.yml",
+    "package:portable": "npm run build && electron-builder --dir --win --config electron-builder.yml",
+    "portable": "npm run package:portable && node scripts/make-portable.mjs"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.7.0",

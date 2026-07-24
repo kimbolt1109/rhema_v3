@@ -1,0 +1,17 @@
+{
+  "_readme": "Verger settings — edit and save, then restart Verger. obs.host/obs.port/obs.password must match OBS > Tools > WebSocket Server Settings (Show Connect Info). See RUNBOOK.md next to this file. This file may sit on a USB stick; keep it beside START.bat.",
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": ""
+  },
+  "overlay": {
+    "port": 7320
+  },
+  "asr": {
+    "engine": "whisper"
+  },
+  "assets": {
+    "plan": ""
+  }
+}
