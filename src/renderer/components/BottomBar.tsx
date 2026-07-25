@@ -187,7 +187,14 @@ export function useBottomBarModel(now?: number): BottomBarModel {
     elapsed: ms === null ? null : formatElapsed(ms),
     nowLabel: nowCue === null ? null : nowCue.label,
     nextLabel: nextCue === null ? null : nextCue.label,
-    cameras: cameraButtons(cameraConfig, cameraState),
+    // `cameraButtons` answers "is a scene bound to this slot". The bar additionally requires a LIVE
+    // OBS, because switching the program scene is an obs-websocket call and there is nothing to call
+    // without one — a button that looks pressable and cannot possibly work is worse than a disabled
+    // one. The Camera panel in the drawer is where the reason is spelled out in words.
+    cameras: cameraButtons(cameraConfig, cameraState).map((camera) => ({
+      ...camera,
+      usable: camera.usable && obsState === 'connected',
+    })),
     lowerThirdVisible: lowerThird.visible,
     lowerThirdReady: lowerThird.line1.trim().length > 0,
     // Deliberately coarse. The full "why can't I go live" explanation lives in the GO LIVE screen
