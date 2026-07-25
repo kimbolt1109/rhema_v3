@@ -176,14 +176,18 @@ export function SlideGrid({
         className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center"
       >
         <LayoutGrid aria-hidden="true" className="h-12 w-12 text-text-muted" />
-        <h2 className="text-xl font-semibold text-text">{t('console.grid.empty.title')}</h2>
-        <p className="max-w-prose text-sm text-text-muted">{t('console.grid.empty.body')}</p>
+        <h2 className="text-balance text-title text-text">{t('console.grid.empty.title')}</h2>
+        <p className="max-w-prose text-pretty text-body text-text-muted">
+          {t('console.grid.empty.body')}
+        </p>
         {onOpenPlan === undefined ? null : (
+          // Opening a plan is a ready/go action, so it wears preview green as a border and a tint.
+          // The old `hover:bg-accent` would now paint a light chalk surface, which ERGO-1 forbids.
           <button
             type="button"
             data-testid="grid-open-plan"
             onClick={onOpenPlan}
-            className="inline-flex min-h-touch-lg items-center justify-center rounded-glass border border-accent bg-surface-2 px-6 font-medium text-text transition-colors duration-150 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex min-h-touch-lg items-center justify-center rounded-panel border border-live bg-live/10 px-6 text-label uppercase tracking-[0.08em] text-text shadow-edge transition-colors duration-[120ms] ease-instrument hover:bg-surface-3"
           >
             {t('console.grid.empty.action')}
           </button>
@@ -204,6 +208,10 @@ export function SlideGrid({
       <ul
         // `repeat(auto-fill, minmax(220px, 1fr))`: five columns at 1366px, eight at 1920, and a
         // 220×124 tile is far past the 44px floor without anybody having to pick a breakpoint.
+        //
+        // `gap-3` (12px) is STRUCTURAL, not taste. The NOW frame extends 5px beyond the tile box on
+        // every side (3px ring + 2px offset), so two adjacent frames consume 10px of the gap.
+        // Tightening this to `gap-2` makes the program frame collide with its neighbour.
         className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]"
       >
         {cues.map((cue, index) => {
@@ -228,7 +236,7 @@ export function SlideGrid({
               <button
                 type="button"
                 // `aria-current="step"` carries the operator's position for a screen reader, so the
-                // opacity difference below is never the only channel saying which slide is live.
+                // frame below is never the only channel saying which slide is live.
                 aria-current={isCurrent ? 'step' : undefined}
                 aria-label={t('console.grid.tile', { number: index + 1, label: cue.label })}
                 // Roving tabIndex — see the module note on why the arrows are not ours.
@@ -238,24 +246,41 @@ export function SlideGrid({
                   onSelect(cue.id)
                 }}
                 className={clsx(
-                  'group relative block w-full overflow-hidden rounded-glass border bg-surface',
-                  'transition-[transform,opacity,box-shadow] duration-150',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  'group relative block w-full rounded-tile border bg-background',
+                  // Colour and edges only. The tile physically cannot move or fade: a wave of
+                  // lifting thumbnails across a 102-tile instrument surface reads, in peripheral
+                  // vision, as a cue firing.
+                  'transition-[border-color,box-shadow] duration-[120ms] ease-instrument',
                   'disabled:cursor-not-allowed',
-                  'hover:-translate-y-0.5 hover:opacity-100',
+                  'hover:border-accent-hover',
+                  // The 1px page-black gutter between any state frame and the artwork. Load-bearing:
+                  // program red against a mid-grey slide is 1.02:1, so without this the NOW frame
+                  // would vanish into a real deck.
+                  'shadow-keyline',
                   isCurrent
-                    ? // Unmistakable from two feet away: thick accent ring, full opacity, a glow.
-                      'border-accent opacity-100 ring-4 ring-accent shadow-glow'
+                    ? // PROGRAM. Outside in: 3px red ring, 2px page-black gap, 1px red border, 1px
+                      // keyline, artwork — so red's faces only ever touch #0d0d0c, at 5.30:1.
+                      'border-tally ring-[3px] ring-tally ring-offset-2 ring-offset-background'
                     : isNext
-                      ? 'border-accent/50 opacity-100 ring-2 ring-accent/40'
-                      : 'border-border opacity-50',
+                      ? // PREVIEW. A single 2px green line: structurally different from NOW (no
+                        // offset gap, no rail) and a third of its mass, so the two read apart by
+                        // shape before they read apart by hue.
+                        'border-live ring-1 ring-live'
+                      : 'border-border',
                 )}
               >
-                <span className="relative block aspect-[16/9] w-full bg-surface-2">
+                {/*
+                  No dimming, anywhere. `opacity` was writing to the same channel as
+                  `disabled:opacity-60`, so a hundred of a hundred and two tiles read as dead
+                  controls — and it dimmed the operator's wayfinding number along with the artwork.
+                  Calm comes from the chrome instead: a hairline, the ink gutter, and the fact that a
+                  non-current tile carries no emphasis treatment at all.
+                */}
+                <span className="relative block aspect-[16/9] w-full overflow-hidden rounded-[3px] bg-background">
                   {url === null ? (
                     <span className="flex h-full w-full flex-col items-center justify-center gap-1 px-2 text-center">
                       <Icon aria-hidden="true" className="h-6 w-6 shrink-0 text-text-muted" />
-                      <span className="line-clamp-2 text-xs text-text-muted">{cue.label}</span>
+                      <span className="line-clamp-2 text-meta text-text-muted">{cue.label}</span>
                     </span>
                   ) : (
                     // `alt=""`: the operator's own numbering carries the meaning, and the slide's
@@ -274,14 +299,43 @@ export function SlideGrid({
                     />
                   )}
                 </span>
-                <span
-                  className={clsx(
-                    'absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] tabular-nums',
-                    isCurrent ? 'bg-accent text-text' : 'bg-background/80 text-text-muted',
-                  )}
-                >
+
+                {/*
+                  A flush-mounted corner tab, not a floating pill. Opaque `bg-surface` on purpose: a
+                  label the operator needs may never be composited over somebody else's pixels.
+                */}
+                <span className="absolute left-0 top-0 z-10 rounded-br-chip rounded-tl-tile bg-surface px-1 py-px font-num text-micro tabular-nums text-text-muted">
                   {index + 1}
                 </span>
+
+                {isCurrent || isNext ? (
+                  <span
+                    className={clsx(
+                      'absolute right-0 top-0 z-10 rounded-bl-chip rounded-tr-tile bg-surface px-1 py-px text-micro uppercase text-text ring-1 ring-inset',
+                      isCurrent ? 'ring-tally' : 'ring-live',
+                    )}
+                  >
+                    {isCurrent ? t('console.grid.now') : t('console.grid.next')}
+                  </span>
+                ) : null}
+
+                {/* The program-bus rail: a filled saturated field, which by this theme's one rule
+                    means a STATE of the system rather than an affordance. */}
+                {isCurrent ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-x-0 bottom-0 h-1 rounded-b-[2px] bg-tally"
+                  />
+                ) : null}
+
+                {/* Read direction by position, not brightness — and it finally makes `data-fired`
+                    mean something on screen. */}
+                {!isCurrent && !isNext && firedSet.has(cue.id) ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-x-0 bottom-0 h-[2px] rounded-b-[2px] bg-border-strong"
+                  />
+                ) : null}
               </button>
             </li>
           )

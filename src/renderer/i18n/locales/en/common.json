@@ -43,7 +43,9 @@
         "body": "Open a plan — or import a PowerPoint deck — and every slide appears here as a tile you can tap.",
         "action": "Open the plan editor"
       },
-      "tile": "Slide {{number}}: {{label}}"
+      "tile": "Slide {{number}}: {{label}}",
+      "now": "Now",
+      "next": "Next"
     },
     "bar": {
       "label": "Service controls",

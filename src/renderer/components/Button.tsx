@@ -28,21 +28,32 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   readonly children: ReactNode
 }
 
+/**
+ * Three variants, and none of them is a filled coloured field.
+ *
+ * `primary` used to be a solid indigo cap with a coloured drop-glow, which is the single most
+ * template-looking control in the ecosystem — and after the theme's repoint `bg-accent` would paint a
+ * LIGHT chalk surface, which ERGO-1 forbids outright. So primary is now an outlined cap with a
+ * machined top edge: it is the brightest border in the row, which is all "primary" has to mean.
+ *
+ * `danger` keeps a saturated border and a tint but its label goes bone — saturated colour is never a
+ * text colour in this theme, and bone measures 12.77:1 on that tint where red measured 4.10:1.
+ */
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
-    'bg-accent text-text hover:bg-accent-hover border border-accent-hover shadow-glow ' +
-    'disabled:bg-surface-2 disabled:border-border disabled:shadow-none',
+    'bg-surface-2 text-text border border-accent shadow-edge hover:bg-surface-3 ' +
+    'disabled:bg-surface-2 disabled:border-border disabled:text-text-dim disabled:shadow-none',
   secondary:
-    'bg-surface-2 text-text border border-border hover:border-accent/60 ' +
-    'disabled:text-text-muted',
+    'bg-surface-2 text-text border border-border shadow-edge hover:border-accent-hover hover:bg-surface-3 ' +
+    'disabled:text-text-dim disabled:shadow-none',
   danger:
-    'bg-surface-2 text-panic border border-panic/60 hover:bg-panic hover:text-text ' +
-    'disabled:text-text-muted disabled:border-border',
+    'bg-panic/12 text-text border border-panic hover:bg-panic/20 ' +
+    'disabled:bg-surface-2 disabled:text-text-dim disabled:border-border',
 }
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
-  md: 'min-h-touch min-w-touch px-4 text-sm',
-  lg: 'min-h-touch-lg min-w-touch-lg px-6 text-base',
+  md: 'min-h-touch min-w-touch px-4 text-meta',
+  lg: 'min-h-touch-lg min-w-touch-lg px-6 text-label',
 }
 
 export function Button({

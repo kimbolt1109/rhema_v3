@@ -254,16 +254,32 @@ export function useBottomBarActions(openSettings: () => void): BottomBarActions 
   )
 }
 
-const TALLY_DOT: Record<TallyTone, string> = {
-  live: 'bg-tally',
-  transitioning: 'bg-warn',
-  offline: 'bg-text-muted',
+/**
+ * The lamp, seated in the panel.
+ *
+ * `offline` is an UNLIT lamp — a dark well with a hairline rim — rather than a grey-filled dot. A
+ * filled grey circle reads as "a lamp that is lit, in grey", which is not a state this system has.
+ */
+const TALLY_LAMP: Record<TallyTone, string> = {
+  live: 'bg-tally shadow-lamp',
+  transitioning: 'bg-warn shadow-lamp',
+  offline: 'bg-surface-2 ring-1 ring-border',
 }
 
-const TALLY_TEXT: Record<TallyTone, string> = {
-  live: 'text-tally',
-  transitioning: 'text-warn',
-  offline: 'text-text-muted',
+/**
+ * The state word's FORM, not its colour.
+ *
+ * This replaces a text-colour map, and the change is the whole point of the theme: saturated colour
+ * is never a text colour here, so the word is always bone or muted-bone and the three states are
+ * told apart by form — bare beside a lit lamp and a red edge rail (on air), boxed in an amber
+ * hairline (standby), or plain muted beside an unlit lamp (off air). That is readable in pure
+ * monochrome, which is what "colour is never the only channel" actually requires.
+ */
+const TALLY_WORD: Record<TallyTone, string> = {
+  live: 'text-micro uppercase text-text',
+  transitioning:
+    'flex h-6 items-center rounded-chip border border-warn px-2 text-micro uppercase text-text',
+  offline: 'text-micro uppercase text-text-muted',
 }
 
 export interface BottomBarProps {
@@ -291,21 +307,26 @@ export function BottomBar({
   const m = model ?? fallbackModel
   const a = actions ?? fallbackActions
 
-  const percentLabel = m.percent === null ? '—' : `${String(m.percent)}%`
-
   return (
     <footer
       aria-label={t('console.bar.label')}
       data-testid="bottom-bar"
       data-tally={m.tally}
       className={clsx(
-        'relative isolate flex shrink-0 items-center gap-4 overflow-hidden border-t border-border bg-surface px-4',
+        // Five columns with 1px milled grooves between them, and a two-row baseline inside each.
+        // Column 1 is fixed at 320px for a reason: with a flex row, the 34px percentage drifted
+        // sideways every time the OBS state word changed length.
+        'relative isolate grid shrink-0 grid-cols-[20rem_1px_minmax(0,1fr)_1px_auto] items-stretch',
+        'overflow-hidden border-t border-border-strong bg-surface shadow-lift',
         BOTTOM_BAR_HEIGHT_CLASS,
       )}
     >
       {/*
-        The bar IS the progress indicator. The fill sits behind everything at -z-10 and is the only
-        thing on this surface that animates; 200ms is the brief's ceiling and this is at it.
+        The bar IS the gauge, in three layers behind the content.
+
+        The fill is OPAQUE graphite rather than a tinted accent wash, and that is a bug fix: a 25%
+        translucent fill composited over whatever sat behind it and dropped the ON AIR word to
+        2.75:1. Opaque means every contrast figure on this bar is exact.
       */}
       <div
         role="progressbar"
@@ -315,80 +336,142 @@ export function BottomBar({
         {...(m.percent === null ? {} : { 'aria-valuenow': m.percent })}
         data-testid="bottom-bar-progress"
         data-percent={m.percent === null ? '' : String(m.percent)}
-        className="absolute inset-y-0 left-0 -z-10 bg-accent/25 transition-[width] duration-200"
+        className="absolute inset-y-0 left-0 -z-20 bg-meter transition-[width] duration-200 ease-instrument"
         style={{ width: `${String(m.percent ?? 0)}%` }}
-      />
+      >
+        {/* The needle is the actual reading — a position, legible at two feet. Absent when there is
+            no value, so an empty scale reads "no reading" rather than "a reading of zero". */}
+        {m.percent === null ? null : (
+          <span aria-hidden="true" className="absolute inset-y-0 right-0 w-[2px] bg-accent" />
+        )}
+      </div>
 
-      {/* ---- Left: is it going out, and for how long -------------------------------------- */}
-      <div className="flex min-w-0 shrink-0 items-center gap-2">
-        <span
-          aria-hidden="true"
-          data-testid="bottom-bar-tally"
-          className={clsx('h-3.5 w-3.5 shrink-0 rounded-full', TALLY_DOT[m.tally])}
-        />
-        <span className={clsx('text-sm font-bold uppercase tracking-wide', TALLY_TEXT[m.tally])}>
-          {t(`console.bar.tally.${m.tally}`)}
-        </span>
-        <span
-          data-testid="bottom-bar-elapsed"
-          className="font-mono text-sm tabular-nums text-text-muted"
-        >
-          {m.elapsed ?? '—'}
-        </span>
-        {m.recordingMissing ? (
-          // Standing Rule 3 is being violated right now. Say so, in red, in words.
-          <span
-            role="alert"
-            data-testid="bottom-bar-no-recording"
-            className="rounded border border-panic bg-panic/15 px-1.5 py-0.5 text-[11px] font-bold uppercase text-panic"
-          >
-            {t('console.bar.noRecording')}
-          </span>
-        ) : m.recording ? (
-          <span
-            data-testid="bottom-bar-recording"
-            className="rounded border border-border px-1.5 py-0.5 text-[11px] font-bold uppercase text-text-muted"
-          >
-            {t('console.bar.recording')}
-          </span>
+      {/* The scale. Always painted, and behind the fill, so the gauge is visibly a gauge even at 0. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 -z-10">
+        <span className="absolute left-1/4 top-0 h-[6px] w-px bg-border-strong" />
+        <span className="absolute left-1/2 top-0 h-[10px] w-px bg-border-strong" />
+        <span className="absolute left-3/4 top-0 h-[6px] w-px bg-border-strong" />
+      </div>
+
+      {/* ---- Zone 1: is it going out, and for how long ------------------------------------ */}
+      <div className="relative grid grid-rows-[14px_34px] content-center gap-y-1 px-4">
+        {/* A filled saturated field at the panel's extreme edge = a state of the system. */}
+        {m.tally === 'live' ? (
+          <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-tally" />
         ) : null}
-        <span data-testid="bottom-bar-obs" className="truncate text-xs text-text-muted">
-          {/* The OBS state word is the Connection screen's own copy — one vocabulary, not two. */}
-          {t('console.bar.obs', { state: t(`status.state.${m.obsState}`) })}
-        </span>
+
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            data-testid="bottom-bar-tally"
+            className={clsx('h-3 w-3 shrink-0 rounded-full', TALLY_LAMP[m.tally])}
+          />
+          <span className={TALLY_WORD[m.tally]}>{t(`console.bar.tally.${m.tally}`)}</span>
+
+          {m.recordingMissing ? (
+            // Standing Rule 3 is being violated right now. Word + border + tint + dot + alert role,
+            // and the word itself stays bone so it is 12.55:1 rather than red-on-red.
+            <span
+              role="alert"
+              data-testid="bottom-bar-no-recording"
+              className="flex h-6 items-center gap-1.5 rounded-chip border border-panic bg-panic/12 px-2 text-micro uppercase text-text"
+            >
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-panic" />
+              {t('console.bar.noRecording')}
+            </span>
+          ) : m.recording ? (
+            <span
+              data-testid="bottom-bar-recording"
+              className="flex h-6 items-center gap-1.5 rounded-chip border border-border px-2 text-micro uppercase text-text-muted"
+            >
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-text-muted" />
+              {t('console.bar.recording')}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex items-baseline gap-3">
+          {/*
+            The clock is a DISPLAY, not a label: sunk into the panel, and opaque so the gauge fill
+            sliding underneath can never change its contrast.
+
+            The well appears only when there is a time to show. An empty recessed display reads as
+            broken hardware — a dark box with a dash in it — whereas a bare dash reads as "not
+            started yet", which is what it means.
+          */}
+          <span
+            data-testid="bottom-bar-elapsed"
+            className={clsx(
+              'font-num text-readout tabular-nums',
+              m.elapsed === null
+                ? 'text-text-muted'
+                : 'rounded-chip bg-background px-2 py-px text-text shadow-recess',
+            )}
+          >
+            {m.elapsed ?? '—'}
+          </span>
+          <span aria-hidden="true" className="h-[14px] w-px self-center bg-border-strong" />
+          <span data-testid="bottom-bar-obs" className="truncate text-meta text-text-muted">
+            {/* The OBS state word is the Connection screen's own copy — one vocabulary, not two. */}
+            {t('console.bar.obs', { state: t(`status.state.${m.obsState}`) })}
+          </span>
+        </div>
       </div>
 
-      {/* ---- Centre: the number, and what it is about ------------------------------------- */}
-      <div className="flex min-w-0 flex-1 items-baseline justify-center gap-3">
-        <span className="text-[11px] uppercase tracking-widest text-text-muted">
-          {t('console.bar.matchLabel')}
-        </span>
-        <span
-          data-testid="bottom-bar-percent"
-          className={clsx(
-            'text-4xl font-bold leading-none tabular-nums',
-            m.percent === null ? 'text-text-muted' : 'text-text',
-          )}
-        >
-          {percentLabel}
-        </span>
-        <span data-testid="bottom-bar-context" className="min-w-0 truncate text-sm text-text-muted">
-          {m.nowLabel === null
-            ? t('console.bar.notStarted')
-            : m.nextLabel === null
-              ? t('console.bar.lastCue', { now: m.nowLabel })
-              : t('console.bar.context', { now: m.nowLabel, next: m.nextLabel })}
-        </span>
+      <span aria-hidden="true" className="bg-border-strong" />
+
+      {/* ---- Zone 2: the number, and what it is about ------------------------------------- */}
+      <div className="grid min-w-0 grid-rows-[14px_34px] content-center gap-y-1 px-4">
+        {/* Wording never changes between states, so the label cannot flicker as the value arrives. */}
+        <span className="text-micro uppercase text-text-muted">{t('console.bar.matchLabel')}</span>
+
+        <div className="flex min-w-0 items-baseline gap-2">
+          {/*
+            Left-aligned in a fixed-width right-aligned box. Tabular figures plus `w-[3.6ch]` means
+            7%, 42% and 100% occupy identical pixels — the old `justify-center` threw away the
+            tabular-nums that was already correctly applied.
+          */}
+          <span
+            data-testid="bottom-bar-percent"
+            className="flex shrink-0 items-baseline font-num text-metric tabular-nums"
+          >
+            <span
+              className={clsx(
+                'w-[3.6ch] text-right',
+                m.percent === null ? 'text-text-muted' : 'text-text',
+              )}
+            >
+              {m.percent === null ? '—' : String(m.percent)}
+            </span>
+            {m.percent === null ? null : (
+              <span className="text-label text-text-muted">%</span>
+            )}
+          </span>
+          <span aria-hidden="true" className="h-[22px] w-px shrink-0 self-center bg-border-strong" />
+          <span
+            data-testid="bottom-bar-context"
+            className="min-w-0 truncate text-body text-text-muted"
+          >
+            {m.nowLabel === null
+              ? t('console.bar.notStarted')
+              : m.nextLabel === null
+                ? t('console.bar.lastCue', { now: m.nowLabel })
+                : t('console.bar.context', { now: m.nowLabel, next: m.nextLabel })}
+          </span>
+        </div>
       </div>
 
-      {/* ---- Right: the only controls that may not wait for a drawer ---------------------- */}
-      <div className="flex shrink-0 items-center gap-2">
+      <span aria-hidden="true" className="bg-border-strong" />
+
+      {/* ---- Zone 3: the only controls that may not wait for a drawer --------------------- */}
+      <div className="flex shrink-0 items-center gap-2 px-4">
         {m.cameras.map((camera, index) => (
           <button
             key={camera.slot}
             type="button"
             data-slot={camera.slot}
             data-live={camera.live ? 'true' : 'false'}
+            aria-pressed={camera.live}
             disabled={!camera.usable || m.busy}
             title={camera.label}
             aria-label={t('console.bar.camera', { number: index + 1, label: camera.label })}
@@ -396,20 +479,28 @@ export function BottomBar({
               a.selectCamera(camera.slot)
             }}
             className={clsx(
-              'flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center rounded-glass border px-1 transition-colors duration-150',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-              'disabled:cursor-not-allowed disabled:border-border disabled:text-text-muted disabled:opacity-60',
+              'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
+              'transition-colors duration-[120ms] ease-instrument',
+              'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:shadow-none',
               camera.live
-                ? 'border-tally bg-tally/20 text-text'
-                : 'border-border bg-surface-2 text-text hover:border-accent/60',
+                ? 'border-tally bg-tally/[0.18] text-text'
+                : 'border-border bg-surface-2 text-text hover:border-accent-hover hover:bg-surface-3',
             )}
           >
-            <span className="text-base font-bold leading-none tabular-nums">{index + 1}</span>
-            <span className="max-w-[3.25rem] truncate text-[10px] uppercase leading-tight text-text-muted">
-              {camera.label}
-            </span>
+            <span className="font-num text-label tabular-nums leading-none">{index + 1}</span>
+            {/*
+              `PGM` rather than the old 10px truncated scene name, which was unreadable in a booth at
+              any contrast — the scene name lives in `title` and `aria-label`, where it already was.
+              The word is what makes "on air" legible without seeing the red at all.
+            */}
+            {camera.live ? <span className="text-micro leading-none">PGM</span> : null}
+            {camera.live ? (
+              <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-[3px] bg-tally" />
+            ) : null}
           </button>
         ))}
+
+        <span aria-hidden="true" className="h-10 w-px shrink-0 bg-border-strong" />
 
         <button
           type="button"
@@ -421,17 +512,26 @@ export function BottomBar({
           }
           onClick={a.toggleLowerThird}
           className={clsx(
-            'flex min-h-touch-lg min-w-touch-lg items-center justify-center rounded-glass border transition-colors duration-150',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-            'disabled:cursor-not-allowed disabled:opacity-60',
+            'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
+            'transition-colors duration-[120ms] ease-instrument',
+            'disabled:cursor-not-allowed disabled:text-text-dim disabled:shadow-none',
+            // Chalk, not a state colour: an overlay being up is a CONTROL state, not an output state.
             m.lowerThirdVisible
-              ? 'border-accent bg-accent text-text'
-              : 'border-border bg-surface-2 text-text hover:border-accent/60',
+              ? 'border-accent bg-accent/10 text-text'
+              : 'border-border bg-surface-2 text-text-muted hover:border-accent-hover hover:bg-surface-3',
           )}
         >
-          <Type aria-hidden="true" className="h-5 w-5" />
+          <Type aria-hidden="true" className="h-[18px] w-[18px]" />
+          {/* Never glyph-only. */}
+          <span className="text-micro leading-none">L3</span>
           <span className="sr-only">{t('console.bar.lowerThird')}</span>
+          {m.lowerThirdVisible ? (
+            <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-[3px] bg-accent" />
+          ) : null}
         </button>
+
+        {/* FITTS-3: END is physically separated from the camera cluster it must never be mistaken for. */}
+        <span aria-hidden="true" className="h-10 w-px shrink-0 bg-border-strong" />
 
         {m.isLive ? (
           m.endNeedsHold ? (
@@ -442,7 +542,7 @@ export function BottomBar({
               label={t('console.bar.end')}
               onHoldComplete={a.end}
               disabled={m.busy}
-              className="min-w-[6rem]"
+              sizeClass="min-h-touch-lg w-28"
             />
           ) : (
             <button
@@ -451,7 +551,9 @@ export function BottomBar({
               data-testid="bottom-bar-end"
               disabled={m.busy}
               onClick={a.end}
-              className="min-h-touch-lg min-w-[6rem] rounded-glass border border-panic bg-panic/20 px-4 font-bold uppercase text-text transition-colors duration-150 hover:bg-panic/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
+              // Outline and tint only, NEVER a filled field — so it can never be confused with a
+              // live camera cap or the tally rail.
+              className="min-h-touch-lg w-28 rounded-panel border-2 border-panic bg-panic/12 text-label uppercase tracking-[0.08em] text-text transition-colors duration-[120ms] ease-instrument hover:bg-panic/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim"
             >
               {t('console.bar.end')}
             </button>
@@ -463,19 +565,25 @@ export function BottomBar({
             disabled={!m.canGoLive || m.busy}
             title={m.canGoLive ? t('console.bar.goLive') : t('console.bar.goLiveBlocked')}
             onClick={a.goLive}
-            className="min-h-touch-lg min-w-[6rem] rounded-glass border border-accent-hover bg-accent px-4 font-bold uppercase text-text transition-colors duration-150 hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted"
+            // The WORD is bone; green is the border, the tint and the rail. Colour absent entirely
+            // when it is blocked, because "not ready" should not look like a ready control.
+            className="relative min-h-touch-lg w-28 overflow-hidden rounded-panel border border-live bg-live/10 text-label uppercase tracking-[0.08em] text-text shadow-edge transition-colors duration-[120ms] ease-instrument hover:bg-surface-3 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:shadow-none"
           >
             {t('console.bar.goLive')}
+            {m.canGoLive && !m.busy ? (
+              <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-[3px] bg-live" />
+            ) : null}
           </button>
         )}
 
+        {/* The least important key on the panel, and it looks it. */}
         <button
           type="button"
           data-testid="bottom-bar-settings"
           aria-label={t('console.bar.settings')}
           title={t('console.bar.settingsHint')}
           onClick={a.openSettings}
-          className="flex min-h-touch-lg min-w-touch-lg items-center justify-center rounded-glass border border-border bg-surface-2 text-text transition-colors duration-150 hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="flex min-h-touch min-w-touch items-center justify-center rounded-control border border-border text-text-muted transition-colors duration-[120ms] ease-instrument hover:border-accent-hover hover:text-text"
         >
           <Settings aria-hidden="true" className="h-5 w-5" />
         </button>

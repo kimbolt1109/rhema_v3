@@ -61,6 +61,15 @@ export interface HoldButtonProps {
   readonly disabled?: boolean
   /** Rendered before the label and marked `aria-hidden` — the label carries the meaning. */
   readonly icon?: LucideIcon
+  /**
+   * The sizing classes, so a caller can seat this in a tighter panel.
+   *
+   * Separate from {@link HoldButtonProps.className} because both set `min-width`, and Tailwind emits
+   * two competing rules of equal specificity whose winner depends on stylesheet order rather than on
+   * the order they were written — the 80px bottom bar cannot host a 72px-minimum control by asking
+   * politely through `className`.
+   */
+  readonly sizeClass?: string
   readonly className?: string
   readonly id?: string
 }
@@ -97,6 +106,7 @@ export function HoldButton({
   durationMs = DEFAULT_HOLD_MS,
   disabled = false,
   icon: Icon,
+  sizeClass = 'min-h-touch-xl min-w-touch-xl',
   className,
   id,
 }: HoldButtonProps): React.JSX.Element {
@@ -217,11 +227,15 @@ export function HoldButton({
         onBlur={cancel}
         // No `onClick`: a click is precisely the gesture this component refuses to honour.
         className={clsx(
-          'relative flex min-h-touch-xl min-w-touch-xl items-center justify-center gap-2',
-          'overflow-hidden rounded-glass border-2 border-panic/70 bg-surface-2 px-6',
-          'text-base font-semibold uppercase tracking-wide text-panic',
+          'relative flex items-center justify-center gap-2',
+          sizeClass,
+          // Outline plus a tint, never a filled field — a destructive control may not look like a
+          // lit state lamp. The label stays bone rather than red: saturated colour is not a text
+          // colour in this theme, and bone measures 12.77:1 on the tint where red measured 4.1:1.
+          'overflow-hidden rounded-panel border-2 border-panic bg-panic/12 px-6',
+          'text-label uppercase tracking-[0.08em] text-text',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-panic focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          'disabled:cursor-not-allowed disabled:border-border disabled:text-text-muted disabled:opacity-60',
+          'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim',
           className,
         )}
       >

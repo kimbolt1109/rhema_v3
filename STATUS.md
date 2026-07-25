@@ -995,3 +995,85 @@ Verification, all run this session:
   element choice, the URL, the error path and the audio plumbing are proven but playback itself is
   not. That is the first thing to try at church: add a real clip, fire it, and confirm both picture
   and sound reach the stream.
+
+## Cycle 14 — Visual refinement: colourless chrome, state-only colour
+
+The operator's words: "it looks kind of vibe coded and I don't like vibe coded looks". They were
+right, and the diagnosis was specific rather than a matter of taste:
+
+- **Indigo `#6366f1`** — Tailwind's default indigo-500, the most template-looking colour in the
+  ecosystem — on the rings, the focus ring, every primary button, and a coloured drop-glow.
+- A **coloured glow** plus a 4px ring plus a border: three treatments doing one job.
+- **14px radii on everything**, a 220px slide tile sharing a corner with a 44px gear.
+- A **blue-tinted near-black** `#0a0a0f` base, which is exactly the generated-dark-theme cast.
+- **`opacity-50` on non-current tiles**, writing to the same channel as `disabled:opacity-60`, so a
+  hundred of a hundred and two tiles read as dead controls rather than as content.
+- A bottom bar of **floating text with no structure**, where the em-dash placeholder read as a stray
+  horizontal rule.
+
+Three independent design directions were explored against the reference class (ATEM Software
+Control, vMix, QLab, Chamsys, camera control units) and judged; the synthesis is below.
+
+### THE ONE COLOUR RULE, now written at the top of `index.css`
+
+A **filled saturated field** is a STATE of the system — a lamp, a rail, a frame, the bar's left edge.
+A **saturated border plus a tint of at most 18%** is an AFFORDANCE about a state — GO LIVE, END,
+NO REC, the live camera cap. Saturated colour is **never a text colour and never a text background**.
+Everything else is graphite.
+
+That rule is why this now reads as equipment, and it is enforceable in review: a coloured button, a
+coloured heading or a coloured icon is visibly wrong by construction.
+
+### What changed
+
+- **The accent is no longer a hue.** `--color-accent` is CHALK `#c9c7c0`, a dead neutral whose only
+  job is brightness — focus, the gauge needle, a pressed control's tint. Hue is freed entirely for
+  state, so the answer to "what colour is the accent" is "none, and that is the point".
+- **Program red / preview green for NOW / NEXT.** Not a style choice: it is what every switcher this
+  operator has ever touched puts in their hands. The NOW tile is the program bus — a 3px red ring, a
+  2px page-black gap, a 1px red border, a 4px filled bottom rail and a badge reading NOW. NEXT is a
+  single 2px green line with no rail. They differ in **structure and mass (3:1) before they differ in
+  hue**, so a colour-blind operator reads them apart. Amber is thereby freed to mean exactly one
+  thing: caution / in transition.
+- **A `keyline` shadow — a 1px page-black gutter — on every tile.** Load-bearing, not decoration:
+  program red against a mid-grey slide measures 1.02:1, so without that gutter the NOW frame would
+  vanish into a real deck. Red's faces now only ever touch the page background, at 5.30:1.
+- **All tile opacity deleted**, overruling all three proposals. Calm comes from the chrome instead —
+  a hairline at 1.70:1, the ink gutter, letterbox bars at page-black, and the fact that a non-current
+  tile carries no emphasis treatment at all. Read direction is carried by position: an already-fired
+  tile gets a 2px bottom rule, which finally makes `data-fired` mean something on screen.
+- **Five radii whose ratio falls as the element grows** (2px chip / 3px control / 4px panel / 6px
+  tile / 0 for structure). The legacy `glass*` keys are repointed rather than renamed, so ~160 call
+  sites became correct without a repo-wide edit. 14px on a 220px thumbnail was the loudest tell.
+- **Six shadows, none coloured**: `edge` (a machined 1px top highlight), `keyline`, `recess`, `lamp`,
+  `lift`, `panel`. `shadow-glow` is aliased to the hueless keyline so its four remaining call sites
+  degrade correctly; its old value was also a hard-coded hex in violation of the theme's own rule.
+- **A seven-step type scale** with tabular, lining, slashed-zero numerals everywhere a number is
+  read. The old surface jumped from 11px straight to `text-4xl` with nothing between.
+- **The bar is now an instrument panel**: five columns with 1px milled grooves, a fixed 320px status
+  zone (the percentage used to drift sideways whenever the OBS state word changed length), a
+  two-row baseline, an **opaque** gauge trough with a chalk needle and a 25/50/75 tick scale, and the
+  clock as a recessed display. The three tally states are told apart by FORM — bare beside a lit lamp
+  and a red edge rail, boxed in an amber hairline, or muted beside an unlit lamp — so the word never
+  loses contrast and colour is never the only channel.
+- **A latent bug fixed on the way**: the gauge fill was `bg-accent/25`, translucent, and swept under
+  the status zone — compositing the ON AIR word down to 2.75:1. An opaque trough makes every contrast
+  figure on the bar exact.
+- `hover:-translate-y-0.5` deleted from tiles (a wave of lifting thumbnails reads, in peripheral
+  vision, as a cue firing), `float` and `glow-pulse` keyframes deleted outright (both unreferenced),
+  and the spring easing with overshoot replaced by one `ease-instrument` curve.
+- `HoldButton` gained an optional `sizeClass` prop, fixing a real `min-width` collision: both it and
+  `className` set `min-width`, and the winner depended on stylesheet order, so an 80px bar could not
+  host a 72px-minimum control.
+
+Deliberately NOT done, and scoped as follow-up: the thirteen drawer screens keep their existing
+markup. They inherit every new token automatically and look consistent, but their ~40 uppercase
+`tracking-widest` headings and ad-hoc `text-[Npx]` sizes have not been moved onto the type scale, and
+their per-component focus rings have not been consolidated onto the single global outline. Nothing
+there is wrong; it is simply not yet on the scale.
+
+Verification: 2145 unit tests across 75 files (unchanged — the restyle touched no behaviour), `tsc`
+clean both projects, `npm run build` clean, i18n audit PASS, all 9 e2e green. Checked by eye at
+1366×768 against the real 102-slide deck, which is how the one genuine defect in the first pass was
+caught and fixed: the recessed clock well containing only an em-dash read as broken hardware, so the
+well now appears only when there is a time to show.

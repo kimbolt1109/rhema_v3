@@ -23,47 +23,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ * THE ONE COLOUR RULE
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ * A **filled saturated field** is a STATE of the system — a lamp, a rail, a frame, the bar's left
+ * edge. A **saturated border plus a tint of at most 18%** is an AFFORDANCE about a state — GO LIVE,
+ * END, NO REC, the live camera cap. Saturated colour is NEVER a text colour and NEVER a text
+ * background. Everything else on screen is graphite.
+ *
+ * That rule is the whole reason this looks like production equipment rather than a web app. It is
+ * also enforceable in review: a coloured button, a coloured heading, or a coloured icon is visibly
+ * wrong by construction. The chrome is deliberately colourless so that a coloured pixel always
+ * means something, which is exactly how an ATEM, a vMix or a lighting desk earns a glance.
+ *
+ * The accent is therefore NOT a hue. `--color-accent` is CHALK — a dead-neutral emphasis value
+ * whose only job is brightness. Hue is reserved entirely for state, so the answer to "what colour
+ * is the accent" is "none, and that is the point". Verger previously used indigo #6366f1 for rings,
+ * focus, primary buttons and a coloured drop-glow, which is the single most template-looking colour
+ * in the ecosystem and put a decorative hue next to a red tally lamp.
+ *
+ * Values are warm-neutral by one step (R = G, B one lower) so the chrome is never blue-tinted, and
+ * the text is warm off-white against it — that temperature split is the only "styling" here.
+ */
 :root,
 .dark {
-  /* Backgrounds */
-  --color-bg: 10 10 15; /* #0a0a0f */
-  --color-surface: 18 18 26; /* #12121a */
-  --color-surface-2: 26 26 38; /* #1a1a26 */
-
-  /* Accent — indigo */
-  --color-accent: 99 102 241; /* #6366f1 */
-  --color-accent-hover: 79 70 229; /* #4f46e5 */
-  --color-accent-2: 129 140 248; /* #818cf8 */
-
-  /* Semantic */
-  --color-panic: 239 68 68; /* #ef4444 */
-  --color-live: 34 197 94; /* #22c55e */
+  /* Surfaces. Panels separate by HAIRLINE, not by a value jump — the border is load-bearing. */
+  --color-bg: 13 13 12; /* #0d0d0c  page, tile letterboxing, the ink gap in a state frame */
+  --color-surface: 22 22 21; /* #161615  the bar, drawer header, chips and badges */
+  --color-surface-2: 31 31 29; /* #1f1f1d  raised controls at rest; the UNLIT lamp fill */
+  --color-surface-3: 42 42 39; /* #2a2a27  hover / pressed, so interaction never borrows a state hue */
 
   /*
-   * The bottom bar's tally light and its "in transition" amber.
-   *
-   * `tally` is deliberately its own token rather than a reuse of `panic`, even though the two are
-   * nearly the same red. In a booth, red means ON AIR — it is the tally convention every camera
-   * operator already has in their hands — while `panic` means "something is broken". Sharing one
-   * token would leave the app unable to distinguish those two meanings later, and naming it here
-   * costs nothing.
-   *
-   * `warn` exists because the theme genuinely had no amber. The health strip uses `accent-2` for
-   * `degraded`, which is right there (it avoids a permanently-amber light nobody looks at) and
-   * wrong for the bar: `accent-2` is a lighter indigo, and the slide grid rings the current slide
-   * in indigo. An amber "connecting" dot beside an indigo ring is legible at a glance; a
-   * light-indigo one next to it is not.
+   * The confidence gauge's trough. OPAQUE on purpose, and that is a bug fix, not a preference:
+   * the previous `bg-accent/25` wash composited over whatever sat behind it and dropped the ON AIR
+   * word to 2.75:1. An opaque trough makes every contrast figure on the bar exact.
    */
-  --color-tally: 220 38 38; /* #dc2626 — ON AIR */
-  --color-warn: 245 158 11; /* #f59e0b — connecting / in transition */
+  --color-meter: 38 38 36; /* #262624 */
 
-  /* Text — never pure white (ERGO-4) */
-  --color-text: 229 231 235; /* #e5e7eb */
-  --color-text-muted: 156 163 175; /* #9ca3af */
+  /* CHALK — emphasis without hue. Focus, the gauge needle, a pressed control's tint. */
+  --color-accent: 201 199 192; /* #c9c7c0 */
+  --color-accent-hover: 150 148 142; /* #96948e  dimmed chalk: the hover rung of the border ladder */
+  --color-accent-2: 176 130 46; /* #b0822e  DIM AMBER — "degraded but stable" (was light indigo) */
 
-  /* Chrome */
-  --color-ring: 99 102 241; /* #6366f1 */
-  --color-border: 36 36 51; /* #242433 */
+  /*
+   * State. Program red and preview green are not a style choice — they are what an ATEM, a vMix, a
+   * Chamsys and every camera control unit already put in this operator's hands, so the slide that is
+   * on the congregation screen is marked the way every switcher they have ever touched marks its
+   * program bus. Amber is then free to mean exactly one thing: caution / in transition.
+   */
+  --color-tally: 239 74 62; /* #ef4a3e  PROGRAM — on air. Lamps, rails, frames. Never text. */
+  --color-live: 61 190 118; /* #3dbe76  PREVIEW / READY / OK */
+  --color-warn: 232 163 61; /* #e8a33d  STANDBY / CAUTION / connecting */
+  --color-panic: 240 104 94; /* #f0685e  FAULT only. Outline plus a tint, never a filled field. */
+
+  /*
+   * Text — never pure white (ERGO-4), and every register clears ERGO-2's 7:1 floor on every surface
+   * it is allowed to sit on. `muted` is lifted well above the old #9ca3af because in this app
+   * "muted" text is still read at a glance, in the dark, mid-service.
+   */
+  --color-text: 232 231 226; /* #e8e7e2  15.70:1 on bg */
+  --color-text-muted: 175 173 166; /* #afada6  clears 7:1 on surface AND surface-2 */
+  --color-text-dim: 143 142 136; /* #8f8e88  third register, only inside opaque controls */
+
+  /* Chrome. */
+  --color-ring: 201 199 192; /* #c9c7c0  tracks chalk — a neutral ring is never a state lamp */
+  --color-border: 58 58 55; /* #3a3a37  the hairline: 1.70:1 on bg, so 1px actually divides */
+  --color-border-strong: 78 78 74; /* #4e4e4a  authored line work — zone rules, ticks, bar top edge */
 
   color-scheme: dark;
 }
@@ -90,8 +116,34 @@ body {
   color: rgb(var(--color-text));
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /*
+   * A whisker of negative tracking, and deliberately −0.006em rather than the −0.011em that suits
+   * Inter: Inter is NOT bundled (there is no `@font-face` and no font package), so on a stock Windows
+   * church PC this stack resolves to Segoe UI, which is already optically tighter and over-tightens
+   * at the larger value.
+   */
+  letter-spacing: -0.006em;
   overflow: hidden;
   user-select: none;
+}
+
+/*
+ * Every number in this app is a readout, and readouts may not reflow.
+ *
+ * The confidence percentage updates several times a second and the elapsed clock ticks once a second.
+ * With proportional figures, `7%` → `42%` → `100%` changes width and the whole zone shuffles, which
+ * reads as instability in the one place an operator is trying to read a value at a glance. Tabular
+ * plus lining plus a slashed zero also means 0 and O cannot be confused in a port number or an OBS
+ * scene id at arm's length in the dark.
+ */
+.font-num,
+[class*='tabular'] {
+  font-variant-numeric: tabular-nums lining-nums slashed-zero;
+  font-feature-settings:
+    'tnum' 1,
+    'lnum' 1,
+    'zero' 1;
 }
 
 /* Custom scrollbar for the panes that do scroll. Thin, dark, and out of the way. */
@@ -105,12 +157,13 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: rgb(var(--color-border));
+  background-color: rgb(var(--color-border-strong));
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(var(--color-accent) / 0.55);
+  /* Dimmed chalk, not a tinted accent: the scrollbar is chrome and may not borrow a state colour. */
+  background-color: rgb(var(--color-accent-hover));
 }
 
 /*
