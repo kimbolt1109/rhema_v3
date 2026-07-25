@@ -20,8 +20,10 @@
  *   created, bound or transitioned.
  * - **There is no Deepgram key**, and driving the local faster-whisper sidecar through a real
  *   sermon is an accuracy question, not an integration one.
- * - **LibreOffice is not installed**, so the deck importer honestly reports itself unavailable and
- *   there is no conversion to drive.
+ * - **Deck conversion depends on the machine.** A bare box has neither PowerPoint nor LibreOffice and
+ *   the importer honestly reports itself unavailable; this dev box has PowerPoint, installed to
+ *   render the church's real decks, and it reports available. The suite therefore asserts that the
+ *   notice and the Import button AGREE with each other, rather than asserting which machine it is on.
  *
  * So this suite proves the two things that genuinely are end-to-end here, and then deliberately
  * asserts the *not-configured* paths for everything else:
@@ -115,6 +117,34 @@ const LOWER_THIRD_LINE_1 = 'PLACEHOLDER SPEAKER'
 const LOWER_THIRD_LINE_2 = 'End-to-end rehearsal'
 
 // ------------------------------------------------------------------------------------------- //
+// Navigation
+// ------------------------------------------------------------------------------------------- //
+
+/*
+ * Everything that is not the live service now lives behind one gear button.
+ *
+ * The console used to be thirteen tabs across the top of the shell, and this suite clicked them
+ * directly. After the TASK 2 redesign the operating surface is the slide grid and the bottom bar,
+ * and those thirteen sections are inside a slide-over drawer — so every step below opens the drawer
+ * first. Routing that through two helpers rather than repeating it keeps the diff honest about what
+ * actually changed: the *navigation*, not the assertions.
+ */
+
+/** Open the setup drawer if it is not already open. Idempotent — the console is `inert` while open. */
+async function openDrawer(page: Page): Promise<void> {
+  const drawer = page.getByTestId('settings-drawer')
+  if (await drawer.isVisible()) return
+  await page.getByTestId('bottom-bar-settings').click()
+  await expect(drawer).toBeVisible()
+}
+
+/** Open the drawer and select one section by its visible name. */
+async function gotoSection(page: Page, name: string): Promise<void> {
+  await openDrawer(page)
+  await page.getByRole('tab', { name, exact: true }).click()
+}
+
+// ------------------------------------------------------------------------------------------- //
 // Suite
 // ------------------------------------------------------------------------------------------- //
 
@@ -158,9 +188,15 @@ test.describe('service day — the real app, end to end', () => {
     // Pin the operator UI to English. `--lang=en-US` already biases the detector; this makes it
     // deterministic even if the OS locale wins somewhere unexpected. `verger-locale` is the app's
     // own `LOCALE_STORAGE_KEY`.
+    //
+    // `verger.preflightSeen` is pinned for the same reason. Verger opens the setup drawer on
+    // Preflight the first time it runs on a machine, and this suite is about the *operating*
+    // surface — so the marker is set deliberately here rather than left to depend on whether some
+    // earlier run happened to write it. Test 1 asserts the drawer really is shut as a result.
     await page.evaluate(() => {
       try {
         window.localStorage.setItem('verger-locale', 'en')
+        window.localStorage.setItem('verger.preflightSeen', '1')
       } catch {
         // A storage-less origin is survivable — `--lang` still applies and the first assertion
         // below will say so plainly if neither worked.
@@ -202,35 +238,62 @@ test.describe('service day — the real app, end to end', () => {
 
   // ----------------------------------------------------------------------------------------- //
 
-  test('1 · launches, opens a window, and renders the operator shell', async () => {
+  test('1 · launches and renders the operating surface: a slide grid and one bar', async () => {
     await expect(page).toHaveTitle('Verger')
 
-    // The three pieces of chrome the shell promises: title bar, health strip, section tabs.
-    await expect(page.getByRole('banner')).toContainText('Verger')
-    await expect(page.getByTestId('status-strip')).toBeVisible()
+    // The whole surface, and nothing else. The redesign deleted the title bar, the health strip and
+    // the thirteen-tab nav, so their ABSENCE is asserted as carefully as the grid's presence:
+    // "cluttered" was the problem being fixed, and a panel creeping back onto this surface is
+    // exactly the kind of regression nobody notices until they are operating in the dark.
+    await expect(page.getByRole('region', { name: 'Slide grid' })).toBeVisible()
+    await expect(page.getByTestId('bottom-bar')).toBeVisible()
+    await expect(page.getByRole('banner')).toHaveCount(0)
+    await expect(page.getByTestId('status-strip')).toHaveCount(0)
+    await expect(page.getByRole('tab')).toHaveCount(0)
+    await expect(page.getByTestId('settings-drawer')).toHaveCount(0)
 
-    // 12 sections: connection, camera, overlay, plan, transcript, automation, goLive, status,
-    // goLiveSettings, cameraSetup, asrSettings, shortcuts.
-    //
-    // An exact count on purpose. It is deliberately brittle so that a section silently
-    // disappearing from the nav — or being added and never wired, which is exactly what happened
-    // to ShortcutSettings in Phase 10 — fails here rather than going unnoticed.
-    const tabs = page.getByRole('tab')
-    await expect(tabs).toHaveCount(13)
+    // No plan is open on this machine, and the grid says so in words rather than showing an empty
+    // rectangle. (If locale pinning failed, this is where it says so rather than three tests later.)
+    await expect(page.getByText('No service plan is open.')).toBeVisible()
 
-    // If locale pinning failed, this is where it says so rather than three tests later.
-    await expect(page.getByRole('tab', { name: 'Connection' })).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'Cameras' })).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'Overlay' })).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'Status' })).toBeVisible()
-
-    // The renderer really is talking to the main process: version strings only exist if the
-    // preload bridge loaded and `app.getVersions` answered.
-    await expect(page.getByRole('banner')).toContainText(/Electron \d+\./)
+    // The bar is honest with nothing configured. No ASR means no pending suggestion, which means
+    // there is no confidence to report — so an em dash and an empty fill, never a misleading 0%.
+    await expect(page.getByTestId('bottom-bar-percent')).toHaveText('—')
+    await expect(page.getByTestId('bottom-bar-progress')).toHaveAttribute('data-percent', '')
+    await expect(page.getByTestId('bottom-bar')).toHaveAttribute('data-tally', 'offline')
+    await expect(page.getByTestId('bottom-bar-obs')).toContainText('Not configured')
 
     // The main window is the *only* window at this point. Anything else would mean a stray
     // devtools or a second instance, and every later assertion would be ambiguous.
     expect(app.windows()).toHaveLength(1)
+  })
+
+  test('1b · the setup drawer holds all thirteen sections, and Esc closes it', async () => {
+    await page.getByTestId('bottom-bar-settings').click()
+    const drawer = page.getByTestId('settings-drawer')
+    await expect(drawer).toBeVisible()
+    await expect(drawer).toHaveAttribute('aria-modal', 'true')
+
+    // 13 sections: preflight, connection, camera, overlay, plan, transcript, automation, goLive,
+    // status, goLiveSettings, cameraSetup, asrSettings, shortcuts.
+    //
+    // An exact count on purpose. It is deliberately brittle so that a section silently
+    // disappearing from the nav — or being added and never wired, which is exactly what happened
+    // to ShortcutSettings in Phase 10 — fails here rather than going unnoticed.
+    await expect(page.getByRole('tab')).toHaveCount(13)
+    for (const name of ['Preflight', 'Connection', 'Cameras', 'Overlay', 'Status', 'Shortcuts']) {
+      await expect(page.getByRole('tab', { name, exact: true })).toBeVisible()
+    }
+
+    // The renderer really is talking to the main process: version strings only exist if the preload
+    // bridge loaded and `app.getVersions` answered. They live here now rather than in the deleted
+    // title bar, because they are the first thing anybody asks for in a bug report.
+    await expect(drawer).toContainText(/Electron \d+\./)
+
+    // Esc closes it, and closing unmounts it rather than merely hiding it — several of these
+    // screens own IPC subscriptions.
+    await page.keyboard.press('Escape')
+    await expect(drawer).toHaveCount(0)
   })
 
   test('2 · the overlay server is live and serves its page over HTTP', async () => {
@@ -256,14 +319,14 @@ test.describe('service day — the real app, end to end', () => {
     expect(new URL(response.url).origin).toBe(OVERLAY_ORIGIN)
 
     // The control window agrees the server is up, rather than the test being the only witness.
-    await page.getByRole('tab', { name: 'Overlay' }).click()
+    await gotoSection(page, 'Overlay')
     const serverPanel = page.getByRole('region', { name: 'Overlay server' })
     await expect(serverPanel).toContainText('Running')
     await expect(serverPanel).toContainText(OVERLAY_PAGE_URL)
   })
 
   test('3 · the Connection screen reports OBS as NOT CONFIGURED, with guidance', async () => {
-    await page.getByRole('tab', { name: 'Connection' }).click()
+    await gotoSection(page, 'Connection')
 
     // OBS Studio is not installed on this machine and no OBS_WEBSOCKET_URL exists, so
     // "not configured" is the correct end-to-end behaviour to assert. A connection here would be
@@ -320,7 +383,7 @@ test.describe('service day — the real app, end to end', () => {
     expect(Number.isFinite(revisionBefore)).toBe(true)
 
     // --- fire it from the control window -----------------------------------------------------
-    await page.getByRole('tab', { name: 'Overlay' }).click()
+    await gotoSection(page, 'Overlay')
     await page.locator('#overlay-lower-third-line1').fill(LOWER_THIRD_LINE_1)
     await page.locator('#overlay-lower-third-line2').fill(LOWER_THIRD_LINE_2)
     await page.getByRole('button', { name: 'Show lower third' }).click()
@@ -354,37 +417,56 @@ test.describe('service day — the real app, end to end', () => {
   })
 
   test('5 · the Camera panel is disabled and says why (no OBS on this machine)', async () => {
-    await page.getByRole('tab', { name: 'Cameras' }).click()
+    await gotoSection(page, 'Cameras')
 
-    await expect(page.getByRole('heading', { name: 'Cameras' })).toBeVisible()
+    // Scoped to the drawer, because there are now legitimately TWO sets of camera buttons: these,
+    // and the four on the bottom bar. Both carry `data-slot`, and both are correctly disabled with
+    // no OBS — so an unscoped locator matches two elements and Playwright refuses it. Asserting on
+    // the panel's own set keeps this test about the panel.
+    const drawer = page.getByTestId('settings-drawer')
+
+    await expect(drawer.getByRole('heading', { name: 'Cameras' })).toBeVisible()
 
     // The reason is stated in words, before the operator finds out by pressing something dead.
-    await expect(page.getByText('Not connected to OBS')).toBeVisible()
-    await expect(page.getByText('Camera switching needs a live obs-websocket connection')).toBeVisible()
+    await expect(drawer.getByText('Not connected to OBS')).toBeVisible()
+    await expect(
+      drawer.getByText('Camera switching needs a live obs-websocket connection'),
+    ).toBeVisible()
 
     // All four slots, all disabled. `data-slot` is the stable hook; the labels are operator-
     // configurable and the colours are not assertions.
     for (const slot of ['cam1', 'cam2', 'wide', 'pulpit']) {
-      const button = page.locator(`button[data-slot="${slot}"]`)
+      const button = drawer.locator(`button[data-slot="${slot}"]`)
       await expect(button).toBeVisible()
       await expect(button).toBeDisabled()
     }
 
     // Nothing is claimed to be live, and OBS's program scene is honestly "not reported yet"
     // rather than a stale guess.
-    await expect(page.getByRole('status')).toContainText('None of these four buttons is live.')
-    await expect(page.getByTestId('camera-program-scene')).toHaveText('Not reported yet')
+    await expect(drawer.getByRole('status')).toContainText('None of these four buttons is live.')
+    await expect(drawer.getByTestId('camera-program-scene')).toHaveText('Not reported yet')
+
+    // And the bar's own four are disabled for the same reason — the control the operator actually
+    // reaches for mid-service must not look pressable when it cannot work.
+    for (const slot of ['cam1', 'cam2', 'wide', 'pulpit']) {
+      await expect(page.getByTestId('bottom-bar').locator(`button[data-slot="${slot}"]`)).toBeDisabled()
+    }
   })
 
-  test('6 · a cue added in the Plan editor appears, and survives a renderer reload', async () => {
-    await page.getByRole('tab', { name: 'Plan' }).click()
-    await expect(page.getByRole('heading', { name: 'Service plan' })).toBeVisible()
+  test('6 · a cue added in the Plan editor reaches the grid, and survives a renderer reload', async () => {
+    await gotoSection(page, 'Plan')
 
-    const cueList = page.getByTestId('cue-list')
+    // Scoped to the drawer throughout. The grid's empty state is headed "No service plan is open.",
+    // and Playwright's accessible-name match is substring-and-case-insensitive by default — so an
+    // unscoped query for "Service plan" matches the grid's heading as well as the editor's.
+    const drawer = page.getByTestId('settings-drawer')
+    await expect(drawer.getByRole('heading', { name: 'Service plan', exact: true })).toBeVisible()
+
+    const cueList = drawer.getByTestId('cue-list')
     const before = await cueList.locator('> li').count()
 
-    await page.locator('#new-cue-type').selectOption('lowerthird')
-    await page.getByTestId('plan-add-cue').click()
+    await drawer.locator('#new-cue-type').selectOption('lowerthird')
+    await drawer.getByTestId('plan-add-cue').click()
 
     await expect(cueList.locator('> li')).toHaveCount(before + 1)
 
@@ -392,7 +474,21 @@ test.describe('service day — the real app, end to end', () => {
     const newRow = cueList.locator('> li').nth(before)
     const cueId = await newRow.getAttribute('data-cue-id')
     expect(cueId).not.toBeNull()
-    await expect(page.getByTestId(`cue-row-${cueId ?? ''}`)).toContainText('Lower third')
+    await expect(drawer.getByTestId(`cue-row-${cueId ?? ''}`)).toContainText('Lower third')
+
+    // --- and now the part the redesign added ---------------------------------------------------
+    // Close the drawer and the cue must be ON THE OPERATING SURFACE as a tile. This is the whole
+    // premise of the new UI: the grid is not a view of the plan kept in sync by hand, it IS the
+    // plan. Before this, the plan lived in a tab and nothing proved the live surface ever saw it —
+    // Phase 6's `PlanRunner` was fully unit-tested and never mounted anywhere at all.
+    await page.keyboard.press('Escape')
+    await expect(drawer).toHaveCount(0)
+    await expect(page.getByText('No service plan is open.')).toHaveCount(0)
+    await expect(page.locator(`li[data-cue-id="${cueId ?? ''}"]`)).toBeVisible()
+    // A lower-third cue has no picture to show, so its tile shows the label instead of an image.
+    await expect(
+      page.locator(`li[data-cue-id="${cueId ?? ''}"] [data-testid="slide-tile-image"]`),
+    ).toHaveCount(0)
 
     // Persistence, properly. Reloading the renderer destroys every zustand store, so a cue that
     // is still there afterwards can only have come back from the main process over IPC — which
@@ -400,21 +496,37 @@ test.describe('service day — the real app, end to end', () => {
     // stores are module-scoped and outlive an unmounted panel.
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
-    await page.getByRole('tab', { name: 'Plan' }).click()
 
-    await expect(page.getByTestId('cue-list').locator('> li')).toHaveCount(before + 1)
-    await expect(page.getByTestId(`cue-row-${cueId ?? ''}`)).toBeVisible()
+    // Asserted on the grid FIRST, before reopening the drawer: the operating surface has to come
+    // back populated on its own, without anybody visiting a settings screen to wake it up.
+    await expect(page.locator(`li[data-cue-id="${cueId ?? ''}"]`)).toBeVisible()
 
-    // The deck importer is honest about LibreOffice being absent rather than offering a button
-    // that fails. This is the correct behaviour on this machine, so it is asserted, not skipped.
-    await expect(page.getByTestId('importer-unavailable')).toBeVisible()
-    await expect(page.getByTestId('plan-import')).toBeDisabled()
+    await gotoSection(page, 'Plan')
+    await expect(drawer.getByTestId('cue-list').locator('> li')).toHaveCount(before + 1)
+    await expect(drawer.getByTestId(`cue-row-${cueId ?? ''}`)).toBeVisible()
+
+    // Whether a deck can be converted is a fact about the MACHINE, not about the app — this dev box
+    // has PowerPoint installed and a bare CI box has neither it nor LibreOffice. So assert the two
+    // states are COHERENT rather than asserting which one we happen to be in. Both incoherent
+    // combinations are the real bug: an "unavailable" notice beside an enabled Import button offers
+    // something that cannot work, and a missing notice beside a disabled button gives the operator a
+    // dead control with no explanation.
+    //
+    // (This assertion previously hard-coded "unavailable". It stopped being true the day PowerPoint
+    // was installed to render the church's real decks, which is exactly the kind of environment
+    // assumption that should never have been a bare assertion.)
+    const importerUnavailable = await drawer.getByTestId('importer-unavailable').count()
+    if (importerUnavailable > 0) {
+      await expect(drawer.getByTestId('plan-import')).toBeDisabled()
+    } else {
+      await expect(drawer.getByTestId('plan-import')).toBeEnabled()
+    }
   })
 
   test('7 · GO LIVE is blocked with a stated reason, not an obscure failure', async () => {
     // `exact` matters: there is also a "Go Live settings" tab, and the accessible-name match is
-    // substring-and-case-insensitive by default.
-    await page.getByRole('tab', { name: 'GO LIVE', exact: true }).click()
+    // substring-and-case-insensitive by default. `gotoSection` passes `exact: true` for this reason.
+    await gotoSection(page, 'GO LIVE')
 
     const goLive = page.getByTestId('go-live-button')
     await expect(goLive).toBeVisible()
@@ -440,12 +552,13 @@ test.describe('service day — the real app, end to end', () => {
   })
 
   test('8 · the Status dashboard renders every health light with a text label', async () => {
-    await page.getByRole('tab', { name: 'Status' }).click()
+    await gotoSection(page, 'Status')
 
     await expect(page.getByRole('heading', { name: 'Subsystem status' })).toBeVisible()
 
-    // Scoped to the dashboard's own section: the always-on strip at the top of the shell renders
-    // the same seven lights, and an unscoped locator would be ambiguous.
+    // Still scoped to the dashboard's own section. The always-on strip that used to duplicate these
+    // seven lights at the top of the shell is gone — the bottom bar answers "is it going out?" now —
+    // so this is no longer ambiguous, but scoping keeps the assertion about the dashboard.
     const lights = page.locator('section[aria-label="Subsystem lights"]')
     await expect(lights).toBeVisible()
 

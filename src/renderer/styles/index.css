@@ -39,6 +39,24 @@
   --color-panic: 239 68 68; /* #ef4444 */
   --color-live: 34 197 94; /* #22c55e */
 
+  /*
+   * The bottom bar's tally light and its "in transition" amber.
+   *
+   * `tally` is deliberately its own token rather than a reuse of `panic`, even though the two are
+   * nearly the same red. In a booth, red means ON AIR — it is the tally convention every camera
+   * operator already has in their hands — while `panic` means "something is broken". Sharing one
+   * token would leave the app unable to distinguish those two meanings later, and naming it here
+   * costs nothing.
+   *
+   * `warn` exists because the theme genuinely had no amber. The health strip uses `accent-2` for
+   * `degraded`, which is right there (it avoids a permanently-amber light nobody looks at) and
+   * wrong for the bar: `accent-2` is a lighter indigo, and the slide grid rings the current slide
+   * in indigo. An amber "connecting" dot beside an indigo ring is legible at a glance; a
+   * light-indigo one next to it is not.
+   */
+  --color-tally: 220 38 38; /* #dc2626 — ON AIR */
+  --color-warn: 245 158 11; /* #f59e0b — connecting / in transition */
+
   /* Text — never pure white (ERGO-4) */
   --color-text: 229 231 235; /* #e5e7eb */
   --color-text-muted: 156 163 175; /* #9ca3af */

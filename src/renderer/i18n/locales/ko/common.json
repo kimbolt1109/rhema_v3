@@ -35,6 +35,46 @@
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "버전 정보를 가져올 수 없습니다"
   },
+  "console": {
+    "grid": {
+      "label": "슬라이드 그리드",
+      "empty": {
+        "title": "열려 있는 예배 진행표가 없습니다.",
+        "body": "진행표를 열거나 파워포인트 파일을 가져오면 모든 슬라이드가 여기에 타일로 표시됩니다.",
+        "action": "진행표 편집기 열기"
+      },
+      "tile": "슬라이드 {{number}}: {{label}}"
+    },
+    "bar": {
+      "label": "예배 조작",
+      "matchLabel": "일치도",
+      "tally": {
+        "live": "송출 중",
+        "transitioning": "대기",
+        "offline": "중단"
+      },
+      "recording": "녹화",
+      "noRecording": "녹화 안 됨",
+      "obs": "OBS: {{state}}",
+      "notStarted": "시작 전 — 스페이스를 누르면 첫 큐가 실행됩니다.",
+      "context": "{{now}} → {{next}}",
+      "lastCue": "{{now}} — 진행표의 마지막입니다.",
+      "camera": "카메라 {{number}}: {{label}}",
+      "lowerThird": "하단 자막",
+      "lowerThirdNotAuthored": "하단 자막 문구가 아직 없습니다 — 준비 → 오버레이에서 입력하세요.",
+      "goLive": "송출 시작",
+      "goLiveBlocked": "송출을 시작하려면 OBS 연결이 필요합니다.",
+      "end": "종료",
+      "settings": "준비 및 설정",
+      "settingsHint": "준비 및 설정 (Ctrl+,)"
+    },
+    "drawer": {
+      "label": "준비 및 설정",
+      "title": "준비 및 설정",
+      "close": "설정 닫기",
+      "closeHint": "Esc 키로 닫기"
+    }
+  },
   "status": {
     "regionLabel": "OBS 연결 상태",
     "announcement": "OBS: {{label}}. {{detail}}",

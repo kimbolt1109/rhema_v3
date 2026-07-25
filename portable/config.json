@@ -1,5 +1,5 @@
 {
-  "_readme": "Verger settings — edit and save, then restart Verger. obs.host/obs.port/obs.password must match OBS > Tools > WebSocket Server Settings (Show Connect Info). See RUNBOOK.md next to this file. This file may sit on a USB stick; keep it beside START.bat.",
+  "_readme": "Verger settings — edit and save, then restart Verger. obs.host/obs.port/obs.password must match OBS > Tools > WebSocket Server Settings (Show Connect Info). assets.plan is the service plan opened at launch, relative to this file — set it to plans/afternoon/plan.json for the afternoon service, or \"\" to start with no plan. See RUNBOOK.md next to this file. This file may sit on a USB stick; keep it beside START.bat.",
   "obs": {
     "host": "127.0.0.1",
     "port": 4455,
@@ -12,6 +12,6 @@
     "engine": "whisper"
   },
   "assets": {
-    "plan": ""
+    "plan": "plans/11am/plan.json"
   }
 }

@@ -11,39 +11,57 @@
 3. Verger opens. It does **not** need Node, admin rights, or the internet to launch.
 4. If OBS isn't already running, start it first — Verger connects *to* OBS, it doesn't launch it.
 
-Config lives in **config.json**, next to START.bat (OBS host/port/password, overlay port, ASR engine, which plan to load). Edit it, then **restart Verger** — it's only read at launch.
+Config lives in **config.json**, next to START.bat (OBS host/port/password, overlay port, ASR engine, and which plan to load). Edit it, then **restart Verger** — it's only read at launch.
 
-First launch on a new PC opens the **Preflight** tab automatically — a checklist of everything below. Fix anything red, run the two test buttons, then go.
+It ships set to open **`plans/11am/plan.json`**, so the 11 o'clock deck is on screen the moment Verger starts. For the afternoon service change `assets.plan` to `plans/afternoon/plan.json` and restart. Set it to `""` to start with no plan open. If the path is wrong Verger still starts — the grid just says no plan is open, and the reason is in the log.
+
+First launch on a new PC opens **Setup** automatically on the **Preflight** page — a checklist of everything below. Fix anything red, run the two test buttons, then press **Esc** to get to the console.
+
+### What you're looking at
+
+There are only two things on screen during a service:
+
+- **The slide grid** — your whole deck, laid out like PowerPoint's slide sorter. The slide that's live has a **thick bright ring and a glow**; the one coming next has a thinner, dimmer ring; everything else is dimmed. **Tap any slide to jump straight to it.** The grid follows along on its own, and stops following for a second and a half whenever you scroll by hand, so you can look ahead without it yanking you back.
+- **The bar along the bottom** — the bar itself is the progress meter. See section 2.
+
+Everything else — settings, the plan editor, OBS connection, speech setup, the status lights — is behind the gear button at the bottom right, or **Ctrl+,**. **Esc** closes it. While it's open the service keys are switched off on purpose, so you can type in it without advancing the service.
 
 ## 2. What "good" looks like
 
-Check these before the service starts:
+**Read the bottom bar first.** Left to right it tells you: a **dot** (red = you are ON AIR, amber = starting/reconnecting, grey = off air), the **elapsed time**, **REC** while OBS is recording, and the **OBS connection state**. In the middle is the big **match percentage** — how confident Verger is that the next cue is the right one — and under it, what's on now and what's next. The **coloured fill sweeping across the whole bar is that percentage.**
+
+A dash (**—**) instead of a percentage is normal and correct: it means nothing is pending, usually because speech recognition isn't set up (see ASR-SETUP.md). It is **not** an error, and every button still works by hand.
+
+**If you ever see a red `NO REC` on the bar, stop and fix it** — that means OBS is streaming but *not* recording, so the service is going out unrecorded. Start recording in OBS.
+
+Then check these before the service starts. All of them are behind **Ctrl+,** (Setup):
 
 | Check | Where | Good sign |
 |---|---|---|
-| OBS connected | Connection screen | Big status light says **Connected**; OBS version/scene shown |
-| Plan loaded | Plan screen | Your service plan's cues are listed, not "No cues in this service plan yet" |
-| Overlay showing | Overlay screen, and in OBS | Overlay panel says a browser source is attached (not "No overlay attached"); in OBS the "Overlays" browser source is visible on top of the camera in every scene |
-| Trust mode | Trust dial | Set to **Assist** (the default) unless you deliberately want Auto |
+| OBS connected | Setup → Connection | Big status light says **Connected**; OBS version/scene shown |
+| Plan loaded | The slide grid itself | Your slides fill the screen as tiles — not "No service plan is open." |
+| Overlay showing | Setup → Overlay, and in OBS | Overlay panel says a browser source is attached (not "No overlay attached"); in OBS the "Overlays" browser source is visible on top of the camera in every scene |
+| Cameras mapped | Bottom bar, right side | Buttons **1**–**4** are enabled, not greyed out. Grey means no OBS scene is mapped — fix in Setup → Camera setup |
+| Trust mode | Setup → Automation | Set to **Assist** (the default) unless you deliberately want Auto |
 
-If all are green, you're ready.
+If all are green, press **Esc** and you're ready.
 
 ## 3. The 5 most likely failures
 
 **OBS not connected / wrong password**
-Go to the Connection screen. If it says "Password rejected," Verger has deliberately stopped retrying (repeating a wrong password never works). Open OBS → Tools → WebSocket Server Settings, re-copy the password into config.json's `obs.password`, restart Verger.
+**Ctrl+,** → Connection. If it says "Password rejected," Verger has deliberately stopped retrying (repeating a wrong password never works). Open OBS → Tools → WebSocket Server Settings, re-copy the password into config.json's `obs.password`, restart Verger.
 
 **Overlay browser source is blank in OBS**
-The overlay panel will say "No overlay is attached." In OBS, right-click the "Overlays" browser source → **Refresh**. Make sure "Shutdown source when not visible" is turned OFF for it (a hidden/shutdown source is the usual cause). Confirm the URL in the Overlay panel matches what's pasted into OBS.
+**Ctrl+,** → Overlay will say "No overlay is attached." In OBS, right-click the "Overlays" browser source → **Refresh**. Make sure "Shutdown source when not visible" is turned OFF for it (a hidden/shutdown source is the usual cause). Confirm the URL in the Overlay panel matches what's pasted into OBS.
 
-**Slides / plan not showing**
-On the Plan screen, click **Open…** and pick the right `plan.json` (e.g. `plans\11am\plan.json` or `plans\afternoon\plan.json`). If cues still don't appear, the plan file may be empty or the wrong one — the file name/title shows at the top of the Plan screen.
+**Slides / plan not showing** — the grid says "No service plan is open."
+**Ctrl+,** → Plan, click **Open…**, and pick the right `plan.json` (e.g. `plans\11am\plan.json` or `plans\afternoon\plan.json`). Press **Esc** and the slides should fill the screen. If the grid instead shows grey tiles with a picture icon, the `plan.json` was found but its slide images were not — check that the plan's `assets\slides\` folder came across with it.
 
 **App won't launch**
 Run START.bat again and read the paused error window — don't dismiss it blindly. If it keeps failing, drop straight to manual OBS operation (section 4) and keep the service going; fix Verger at the break.
 
 **Mic / confidence percentage not working**
-That percentage needs local Whisper speech recognition, a one-time ~290 MB setup that doesn't ship in the box (run **SETUP-ASR.bat** once — see ASR-SETUP.md). If Speech settings shows "not set up" or "failed," that's expected until it's been set up once — it is **not** blocking anything. Every cue, camera, and overlay button still works by hand exactly the same.
+That percentage needs local Whisper speech recognition, a one-time ~290 MB setup that doesn't ship in the box (run **SETUP-ASR.bat** once — see ASR-SETUP.md). If **Ctrl+,** → Speech settings shows "not set up" or "failed," that's expected until it's been set up once — it is **not** blocking anything, and the bar showing **—** instead of a percentage is the correct display for it. Every cue, camera, and overlay button still works by hand exactly the same.
 
 ## 4. If Verger misbehaves mid-service — go fully manual in OBS
 
@@ -57,23 +75,49 @@ To take over by hand:
 4. To advance slides without Verger: if you have the source PowerPoint deck open, run it directly and switch OBS to a "Slides" scene/source instead of relying on Verger's overlay slide layer.
 5. When Verger comes back (relaunch via START.bat), it **re-attaches to whatever OBS is already doing** — it will never start a second stream or open a second recording file. You may see "Re-attached to a stream already in progress." Do not press GO LIVE again if you're already live; use Retry only if prompted.
 
-## 5. Keyboard shortcuts (defaults — remappable in Shortcuts settings)
+## 5. Keyboard shortcuts (defaults — remappable in Setup → Shortcuts)
 
 | Key | Gesture | Action |
 |---|---|---|
-| **Space** | tap | Advance to next cue/slide |
-| **Space** | hold 3s | **PANIC** — stops all automation only; never touches stream, recording, or the screen |
-| **Esc** | hold 2s | Disable AI / hand control back to operator (non-destructive) |
-| **Shift + Esc** | tap | Dismiss lower third only |
-| **B** | hold 1.5s | Cut program to black (destructive — hold required on purpose) |
-| **L** | tap | Show logo / holding slate |
-| **F** | tap | Freeze current frame |
+| **Space** or **→** | tap | Advance to next cue/slide |
+| **Backspace** or **←** | tap | Step back one cue (moves the pointer; does **not** re-show anything) |
+| **1 / 2 / 3 / 4** | tap | Camera: CAM 1 / CAM 2 / WIDE / PULPIT |
 | **Y** | tap | Confirm the pending AI suggestion |
 | **N** | tap | Dismiss the pending AI suggestion |
-| **Backspace** | tap | Step back one cue |
-| **1 / 2 / 3 / 4** | tap | Camera: CAM 1 / CAM 2 / WIDE / PULPIT |
+| **Shift + Esc** | tap | Dismiss lower third only — touches no other layer |
+| **Esc** | hold 2s | Hand control back from the AI: switches to Manual. Non-destructive — whatever is on screen stays on screen |
+| **Space** | hold 3s | **PANIC** — stops all automation only; never touches the stream, the recording, or the screen |
+| **Ctrl + ,** | tap | Open / close Setup |
+| **Esc** | tap | Close Setup (only while it's open — see below) |
 
-All destructive actions (black, clear-all-overlays) are hold-only by design — a slip of the hand can never blank the congregation's screen. A quick Esc tap deliberately does nothing.
+**→** and **←** are always-on extras and are the only keys not listed in Setup → Shortcuts. They're there so a foot pedal works with nothing configured (see below). Everything else in the table above can be rebound there.
+
+A quick **Esc** tap with Setup closed deliberately does nothing at all. That is on purpose: the control you grab when you want to take over from the AI must never be able to blank the congregation's screen, so it is a *hold*, and there is no tap binding for it to be confused with.
+
+While Setup is open, **all of the service keys above are switched off** — so you can type a speaker's name into the lower-third box without `b` and the spacebar driving the service.
+
+### Listed in Setup → Shortcuts but **not implemented yet**
+
+Don't rely on these; they do nothing when pressed:
+
+| Key | Gesture | Intended action |
+|---|---|---|
+| **B** | hold 1.5s | Cut program to black |
+| **L** | tap | Show logo / holding slate |
+| **F** | tap | Freeze current frame |
+
+There is no blackout, slate or freeze in this build — OBS has no generic "black the program" command, and doing it properly needs you to nominate a scene for it, which isn't built. **To black out, switch scenes in OBS itself** (section 4). The keys keep their hold gestures reserved so that when blackout does arrive it can't show up as a tap.
+
+### Foot pedal
+
+A USB foot pedal is just a keyboard — it sends a keystroke. Map its pedals to:
+
+- **Next slide → `→` (Right Arrow)**, or `Space`
+- **Back → `←` (Left Arrow)**, or `Backspace`
+
+Use the arrows if your pedal software offers them: `Space` doubles as PANIC when held for 3 seconds, and a pedal you rest your foot on could reach that. The arrows have no hold gesture at all, so they are the safer pair. A three-pedal unit is well served by `←` / `→` / `Y` (confirm the AI's suggestion).
+
+If your pedal sends something else entirely, remap Verger instead of the pedal: **Ctrl+,** → Shortcuts, and rebind Advance and Back to whatever it emits. If you bind Advance to `→` yourself there, that's fine — your binding simply takes over from the built-in one.
 
 ---
 

@@ -35,6 +35,10 @@ export default {
         'accent-2': 'rgb(var(--color-accent-2) / <alpha-value>)',
         panic: 'rgb(var(--color-panic) / <alpha-value>)',
         live: 'rgb(var(--color-live) / <alpha-value>)',
+        // The bottom bar's tally light. `tally` = ON AIR, `warn` = in transition. See the note in
+        // `src/renderer/styles/index.css` for why neither reuses `panic` or `accent-2`.
+        tally: 'rgb(var(--color-tally) / <alpha-value>)',
+        warn: 'rgb(var(--color-warn) / <alpha-value>)',
         text: {
           DEFAULT: 'rgb(var(--color-text) / <alpha-value>)',
           muted: 'rgb(var(--color-text-muted) / <alpha-value>)'

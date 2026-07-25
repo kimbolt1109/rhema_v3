@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { loadPortableConfig } from './portable'
+import { loadPortableConfig, resolveConfiguredPlanPath } from './portable'
 
 /**
  * The portable loader is what stands between an operator's `config.json` (or the lack of one) and a
@@ -89,5 +89,55 @@ describe('loadPortableConfig', () => {
     expect(result.source).toBe('file')
     expect(result.managed).toBe(true)
     expect(result.envOverrides['OBS_WEBSOCKET_URL']).toBe('ws://127.0.0.1:4455')
+  })
+})
+
+/**
+ * `assets.plan` decides which service plan is on screen the second Verger launches — after the UI
+ * redesign the slide grid IS the console, so getting this path wrong means a church PC that opens to
+ * "No service plan is open." across the whole window.
+ *
+ * The load-bearing case is the relative one. A USB stick is `E:` on one machine and `F:` on the next,
+ * so a plan path may only ever be anchored to the folder `config.json` itself sits in — never to the
+ * working directory, which for a double-clicked exe is not reliably anything.
+ */
+describe('resolveConfiguredPlanPath', () => {
+  const configDir = join('E:', 'Verger')
+
+  it('anchors a relative path to the folder config.json lives in, not the cwd', () => {
+    expect(resolveConfiguredPlanPath('plans/11am/plan.json', configDir)).toBe(
+      join(configDir, 'plans', '11am', 'plan.json'),
+    )
+  })
+
+  it('accepts Windows separators in the operator-typed value', () => {
+    expect(resolveConfiguredPlanPath('plans\\afternoon\\plan.json', configDir)).toBe(
+      join(configDir, 'plans', 'afternoon', 'plan.json'),
+    )
+  })
+
+  it('honours an absolute path unchanged, for plans kept on a fixed drive', () => {
+    const absolute = join('D:', 'services', '2026-07-26', 'plan.json')
+    expect(resolveConfiguredPlanPath(absolute, configDir)).toBe(absolute)
+  })
+
+  it('treats an empty or whitespace-only value as "no plan configured"', () => {
+    expect(resolveConfiguredPlanPath('', configDir)).toBeNull()
+    expect(resolveConfiguredPlanPath('   ', configDir)).toBeNull()
+  })
+
+  it('trims a value a hand-editing operator left a space on', () => {
+    expect(resolveConfiguredPlanPath('  plans/11am/plan.json  ', configDir)).toBe(
+      join(configDir, 'plans', '11am', 'plan.json'),
+    )
+  })
+
+  it('is the same answer whatever drive the stick got, given the same relative path', () => {
+    const onE = resolveConfiguredPlanPath('plans/11am/plan.json', join('E:', 'Verger'))
+    const onF = resolveConfiguredPlanPath('plans/11am/plan.json', join('F:', 'Verger'))
+    expect(onE).not.toBe(onF)
+    // The tail is identical; only the anchor moved. That is the whole portability property.
+    expect(onE?.endsWith(join('Verger', 'plans', '11am', 'plan.json'))).toBe(true)
+    expect(onF?.endsWith(join('Verger', 'plans', '11am', 'plan.json'))).toBe(true)
   })
 })

@@ -35,6 +35,46 @@
     "versions": "Verger {{app}} · Electron {{electron}} · Chromium {{chrome}}",
     "versionsUnknown": "Version information unavailable"
   },
+  "console": {
+    "grid": {
+      "label": "Slide grid",
+      "empty": {
+        "title": "No service plan is open.",
+        "body": "Open a plan — or import a PowerPoint deck — and every slide appears here as a tile you can tap.",
+        "action": "Open the plan editor"
+      },
+      "tile": "Slide {{number}}: {{label}}"
+    },
+    "bar": {
+      "label": "Service controls",
+      "matchLabel": "Match",
+      "tally": {
+        "live": "Live",
+        "transitioning": "Standby",
+        "offline": "Off air"
+      },
+      "recording": "Rec",
+      "noRecording": "No rec",
+      "obs": "OBS: {{state}}",
+      "notStarted": "Not started — press SPACE for the first cue.",
+      "context": "{{now}} → {{next}}",
+      "lastCue": "{{now}} — end of the plan.",
+      "camera": "Camera {{number}}: {{label}}",
+      "lowerThird": "Lower third",
+      "lowerThirdNotAuthored": "No lower-third text yet — add it in Setup → Overlay.",
+      "goLive": "GO LIVE",
+      "goLiveBlocked": "GO LIVE needs a live OBS connection.",
+      "end": "END",
+      "settings": "Setup & settings",
+      "settingsHint": "Setup & settings (Ctrl+,)"
+    },
+    "drawer": {
+      "label": "Setup and settings",
+      "title": "Setup & settings",
+      "close": "Close setup",
+      "closeHint": "Esc to close"
+    }
+  },
   "status": {
     "regionLabel": "OBS connection",
     "announcement": "OBS: {{label}}. {{detail}}",

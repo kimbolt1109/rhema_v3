@@ -1,114 +1,106 @@
 /**
- * The app shell.
+ * The app shell — two things on screen, and a drawer for everything else.
  *
- * Three pieces of chrome and four views:
+ * ```
+ * ┌──────────────────────────────────────────────┐
+ * │                                              │
+ * │   SlideGrid — the whole surface              │  ← no header, no tabs, no sidebar
+ * │                              ┌────────────┐  │
+ * │                              │ suggestion │  │  ← only while one is pending
+ * │                              └────────────┘  │
+ * ├──────────────────────────────────────────────┤
+ * │ BottomBar — the bar IS the progress fill     │  ← 80px
+ * └──────────────────────────────────────────────┘
+ * ```
  *
- *  - a title bar carrying the product name and the runtime versions (the first thing anyone asks
- *    for in a bug report);
- *  - a **subsystem status strip**;
- *  - a **section tablist**, and
- *  - the Connection screen, the Camera panel, the Overlay panel, or Camera setup.
+ * The previous shell was a title bar, a health strip, an always-present suggestion strip, thirteen
+ * tabs and a panel. All thirteen sections still exist, unchanged, inside `SettingsDrawer`; during a
+ * service the operator sees their deck and one bar.
  *
- * Cameras and overlays are separate tabs rather than one combined "production" screen, and that is
- * a deliberate echo of BLUEPRINT.md §6: they are independent layers, and a single screen that
- * drove both would be the first place that independence quietly eroded.
+ * ## Every subsystem is hydrated here, and that is a fix
  *
- * As of Phase 9 the strip is **not** assembled here from seven stores' private notions of
- * healthiness. It is {@link StatusStrip}, driven by the one `@shared/health` snapshot the main
- * process publishes, and it carries the answer to the only question an operator has mid-service —
- * *is the service still going out?* — next to the lights. The previous hand-rolled version had a
- * separate tone table per subsystem, which is exactly how "OBS is red" and "the congregation is
- * fine" ended up looking the same on screen.
+ * The old shell kept six stores live for the session and left `plan`, `camera` and `obs` to whichever
+ * panel happened to be open. That was survivable when the plan lived in a tab. It is not survivable
+ * now: the grid *is* the plan and the bar *is* the OBS/camera readout, so all nine subsystems
+ * hydrate and subscribe at the root. A store that only updates while its own panel is mounted is the
+ * same defect `STATUS.md` cycles 2, 4, 5 and 8 record four times over.
  *
- * Everything is inside the {@link ErrorBoundary}, including the strip, so a crash anywhere in the
- * tree still produces a readable screen rather than a black window.
+ * ## The keyboard, finally connected
+ *
+ * `useServiceActions` registers the handlers; this shell decides which keys reach them:
+ *
+ * - The operator's keymap is filtered through `isImplementedAction`, so a key bound to an action
+ *   nothing implements keeps its browser default instead of being swallowed into silence.
+ * - The service keymap is **suspended while the drawer is open** (`enabled: !drawerOpen`). Without
+ *   that, SPACE pressed on a button inside the plan editor would advance the live service instead of
+ *   activating the control under the operator's finger — `useKeyboardActions` calls
+ *   `preventDefault()` on every key it owns, so the button would never see the press.
+ * - `Ctrl+,` and `Esc` are *chrome*, not service actions, so they live in {@link useConsoleKeys} and
+ *   stay live even while the service keymap is suspended. `Esc` closes the drawer and nothing else;
+ *   with the drawer shut it keeps its existing meaning, which is a two-second HOLD to hand control
+ *   back from the AI. A bare `Esc` tap still does nothing, deliberately.
+ *
+ * ## Why the suggestion card floats
+ *
+ * A suggestion has a deadline measured in seconds, so it cannot live behind a drawer. It also must
+ * not be a permanent strip — the brief is explicit that nothing but the grid and the bar is on
+ * screen during normal operation. So it is absolutely positioned above the bar and mounted **only
+ * while something is pending**, which is exactly when it has something to say. It is passed no
+ * dispatcher: `useServiceActions` owns the `confirm`/`dismiss` registration now, and two registered
+ * handlers would confirm the same suggestion twice.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { ActionId } from '@shared/actions'
 import type { KeyBinding } from '@shared/actions'
-import type { AppVersions } from '@shared/ipc'
+import { withPedalAliases } from '@shared/actions'
 
+import { BottomBar } from './components/BottomBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { TrustDial } from './components/TrustDial'
+import type { DrawerSectionId } from './components/SettingsDrawer'
+import { SettingsDrawer } from './components/SettingsDrawer'
+import { SlideGrid } from './components/SlideGrid'
 import { createActionDispatcher } from './input/ActionDispatcher'
 import { loadBindings } from './input/bindings'
 import { useKeyboardActions } from './input/useKeyboardActions'
-import { AsrSettings } from './screens/AsrSettings'
-import { HotPhraseEditor } from './screens/HotPhraseEditor'
+import { isImplementedAction, useServiceActions } from './input/useServiceActions'
 import { SuggestionPanel } from './screens/SuggestionPanel'
-import { CameraPanel } from './screens/CameraPanel'
-import { CameraSettings } from './screens/CameraSettings'
-import { ConnectionScreen } from './screens/ConnectionScreen'
-import { GoLivePanel } from './screens/GoLivePanel'
-import { GoLiveSettings } from './screens/GoLiveSettings'
-import { OverlayPanel } from './screens/OverlayPanel'
-import { PlanEditor } from './screens/PlanEditor'
-import { PreflightScreen } from './screens/PreflightScreen'
-import { ShortcutSettings } from './screens/ShortcutSettings'
-import { StatusDashboard, StatusStrip } from './screens/StatusDashboard'
-import { TranscriptPanel } from './screens/TranscriptPanel'
 import { useAsrStore } from './store/asrStore'
+import { useCameraStore } from './store/cameraStore'
 import { useCueStore } from './store/cueStore'
 import { useGoLiveStore } from './store/goLiveStore'
 import { useHealthStore } from './store/healthStore'
+import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
+import { usePlanStore } from './store/planStore'
 import { useYouTubeStore } from './store/youtubeStore'
 
-/** The console sections a tab can select. */
-const SECTIONS = [
-  // Preflight leads the list: on a machine that has never run Verger it is auto-selected on first
-  // launch (see `initialSection`), so a new operator lands on the readiness checklist.
-  { id: 'preflight', labelKey: 'app.section.preflight' },
-  { id: 'connection', labelKey: 'app.section.connection' },
-  // Cameras sit ahead of Overlay because they are the busiest live surface, and Camera setup sits
-  // last because it is a soundcheck task, not a service one.
-  { id: 'camera', labelKey: 'app.section.camera' },
-  { id: 'overlay', labelKey: 'app.section.overlay' },
-  // Phase 6. The plan sits with the live surfaces rather than with the settings tabs, because it
-  // is one: the operator drives slides from it during the service, not only before it.
-  { id: 'plan', labelKey: 'app.section.plan' },
-  // Phase 7. The transcript is a live surface too — the operator reads it during the sermon to see
-  // what the cue engine (Phase 8) is going to key off — so it sits with the others, and its
-  // settings sit with the settings tabs.
-  { id: 'transcript', labelKey: 'app.section.transcript' },
-  // Phase 8. The trust dial and the hot-phrase list live together because they are the same
-  // decision at two scales: how much Verger may do without asking, and which words let it.
-  { id: 'automation', labelKey: 'app.section.automation' },
-  // Phase 5 splits what Phase 4 called "Go Live" in two: the GO LIVE / END *controls* sit here,
-  // with the two other live surfaces, and the weekly template and OAuth *settings* move one tab
-  // to the right. A screen that both configures a broadcast and starts one invites the operator to
-  // press the big button while they are still editing a title.
-  { id: 'goLive', labelKey: 'app.section.goLive' },
-  // Phase 9. The full status dashboard sits with the live surfaces, not with the settings tabs:
-  // it is opened *during* a service, by somebody who has just seen a light change and wants to
-  // know whether the congregation is still watching.
-  { id: 'status', labelKey: 'app.section.status' },
-  { id: 'goLiveSettings', labelKey: 'app.section.goLiveSettings' },
-  { id: 'cameraSetup', labelKey: 'app.section.cameraSetup' },
-  { id: 'asrSettings', labelKey: 'app.section.asrSettings' },
-  { id: 'shortcuts', labelKey: 'app.section.shortcuts' },
-] as const
-
-type SectionId = (typeof SECTIONS)[number]['id']
+/**
+ * Marker for "Verger has run on this machine before".
+ *
+ * Unchanged from the tabbed shell on purpose: a church PC that already ran the portable build must
+ * not be shown the preflight checklist a second time just because the UI moved.
+ */
+const PREFLIGHT_SEEN_KEY = 'verger.preflightSeen'
 
 /**
- * Which tab to show first. On a machine that has never run Verger, open Preflight so a new operator
- * lands on the readiness checklist; afterwards, default to the Connection screen. The marker lives in
- * localStorage — renderer-only, no IPC — and its absence is exactly what "a new machine" means here.
+ * Whether this is the first launch on this machine — in which case the drawer opens on Preflight.
+ *
+ * Reads *and writes* the marker, so it is only ever true once. Storage-disabled falls through to
+ * `false`: a booth operator who cannot persist a flag should get the console, not a checklist every
+ * single Sunday.
  */
-function initialSection(): SectionId {
+export function isFirstRunOnThisMachine(): boolean {
   try {
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('verger.preflightSeen') === null) {
-      localStorage.setItem('verger.preflightSeen', '1')
-      return 'preflight'
+    if (typeof localStorage !== 'undefined' && localStorage.getItem(PREFLIGHT_SEEN_KEY) === null) {
+      localStorage.setItem(PREFLIGHT_SEEN_KEY, '1')
+      return true
     }
   } catch {
-    // Private-mode / storage-disabled: fall through to the normal default.
+    // Private-mode / storage-disabled: fall through.
   }
-  return 'connection'
+  return false
 }
 
 /** Reflect the active UI language onto `<html lang>` so the OS/AT picks the right voice. */
@@ -126,343 +118,184 @@ function useDocumentLanguage(): void {
   }, [i18n])
 }
 
-/** Versions for the title bar. Degrades to `null` when the bridge is absent. */
-function useAppVersions(): AppVersions | null {
-  const [versions, setVersions] = useState<AppVersions | null>(null)
+/**
+ * Keep every subsystem live for the whole session.
+ *
+ * One hook rather than nine near-identical ones: each store exposes the same `hydrate` + `subscribe`
+ * pair, and nine copies of this effect is how one of them ends up quietly missing. The hook order is
+ * fixed and unconditional, which is what React requires and what stops a subsystem from being live
+ * only on some renders.
+ */
+function useSubsystems(): void {
+  const hydrators = [
+    useObsStore((store) => store.hydrate),
+    useOverlayStore((store) => store.hydrate),
+    useCameraStore((store) => store.hydrate),
+    usePlanStore((store) => store.hydrate),
+    useYouTubeStore((store) => store.hydrate),
+    useGoLiveStore((store) => store.hydrate),
+    useAsrStore((store) => store.hydrate),
+    useCueStore((store) => store.hydrate),
+    useHealthStore((store) => store.hydrate),
+  ]
+  const subscribers = [
+    useObsStore((store) => store.subscribe),
+    useOverlayStore((store) => store.subscribe),
+    useCameraStore((store) => store.subscribe),
+    usePlanStore((store) => store.subscribe),
+    useYouTubeStore((store) => store.subscribe),
+    useGoLiveStore((store) => store.subscribe),
+    useAsrStore((store) => store.subscribe),
+    useCueStore((store) => store.subscribe),
+    useHealthStore((store) => store.subscribe),
+  ]
 
+  useEffect(
+    () => {
+      // Subscribe before hydrating: a snapshot that landed between the two would otherwise be
+      // missed, and the store would sit on stale state until something else happened to push.
+      const offs = subscribers.map((subscribe) => subscribe())
+      for (const hydrate of hydrators) void hydrate()
+      return () => {
+        for (const off of offs) off()
+      }
+    },
+    // The store actions are module-scoped and stable for the life of the process; re-running this
+    // effect would tear down and rebuild every IPC listener for nothing.
+    [],
+  )
+}
+
+/**
+ * The two chrome keys, which are not service actions and are never suspended.
+ *
+ * Kept out of `ActionDispatcher` on purpose: the dispatcher's vocabulary is things that happen to
+ * the *service*, and it is remappable and pedal-bindable. "Open my settings" is neither, and adding
+ * it would put a UI concern inside the contract `isSafeBinding` guards.
+ */
+export function useConsoleKeys({
+  open,
+  onOpen,
+  onClose,
+}: {
+  readonly open: boolean
+  readonly onOpen: () => void
+  readonly onClose: () => void
+}): void {
   useEffect(() => {
-    let cancelled = false
-    const bridge = typeof window === 'undefined' ? undefined : window.verger
-    if (bridge === undefined) return undefined
+    if (typeof window === 'undefined') return undefined
 
-    void bridge.app
-      .getVersions()
-      .then((result) => {
-        if (!cancelled && result.ok) setVersions(result.value)
-      })
-      .catch(() => undefined)
-
-    return () => {
-      cancelled = true
+    const handle = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && !event.altKey && event.key === ',') {
+        event.preventDefault()
+        if (open) onClose()
+        else onOpen()
+        return
+      }
+      // Only while it is open. With the drawer shut, Esc belongs to the service keymap, where a
+      // 2-second HOLD hands control back from the AI and a tap deliberately does nothing.
+      if (event.key === 'Escape' && open) {
+        event.preventDefault()
+        onClose()
+      }
     }
-  }, [])
 
-  return versions
-}
-
-/**
- * Section navigation.
- *
- * A real ARIA tablist, roving `tabIndex` and all: the operator must be able to move between the
- * Connection screen and the Overlay panel from the keyboard without hunting for a focus stop, and
- * a screen reader has to announce which of the two is showing.
- */
-function SectionTabs({
-  active,
-  onSelect,
-}: {
-  active: SectionId
-  onSelect: (section: SectionId) => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const refs = useRef(new Map<SectionId, HTMLButtonElement>())
-
-  const move = (delta: number): void => {
-    const index = SECTIONS.findIndex((section) => section.id === active)
-    const next = SECTIONS[(index + delta + SECTIONS.length) % SECTIONS.length]
-    if (next === undefined) return
-    onSelect(next.id)
-    refs.current.get(next.id)?.focus()
-  }
-
-  return (
-    <div
-      role="tablist"
-      aria-label={t('app.sectionsLabel')}
-      className="flex items-center gap-2 border-b border-border bg-surface px-4 py-2"
-    >
-      {SECTIONS.map((section) => {
-        const selected = section.id === active
-        return (
-          <button
-            key={section.id}
-            ref={(node) => {
-              if (node === null) refs.current.delete(section.id)
-              else refs.current.set(section.id, node)
-            }}
-            type="button"
-            role="tab"
-            id={`section-tab-${section.id}`}
-            aria-selected={selected}
-            aria-controls={`section-panel-${section.id}`}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => {
-              onSelect(section.id)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-                event.preventDefault()
-                move(1)
-              } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-                event.preventDefault()
-                move(-1)
-              }
-            }}
-            className={`min-h-touch rounded-glass border px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-              selected
-                ? 'border-accent bg-surface-2 text-text'
-                : 'border-border text-text-muted hover:text-text'
-            }`}
-          >
-            {t(section.labelKey)}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-/**
- * Keep the overlay store live for the whole session, not just while its panel is mounted.
- *
- * The subsystem light has to keep reporting whether OBS's browser source is still attached even
- * when the operator is looking at the Connection screen — a light that only updates while you are
- * staring at it is not a light.
- */
-function useOverlaySubsystem(): void {
-  const hydrate = useOverlayStore((state) => state.hydrate)
-  const subscribe = useOverlayStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/**
- * Keep the YouTube store live for the whole session, for the same reason as the overlay one: the
- * strip has to keep saying "not configured" (or "ready") whatever screen the operator is on.
- */
-function useYouTubeSubsystem(): void {
-  const hydrate = useYouTubeStore((state) => state.hydrate)
-  const subscribe = useYouTubeStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/**
- * Keep the GO LIVE store live for the whole session.
- *
- * This one matters more than the other two: the LIVE and RECORDING lights have to keep reporting
- * while the operator is on the Cameras tab, which is where they will spend the service. It also
- * means the crash re-attach is detected at launch rather than the first time somebody happens to
- * open the Go Live tab.
- */
-function useGoLiveSubsystem(): void {
-  const hydrate = useGoLiveStore((state) => state.hydrate)
-  const subscribe = useGoLiveStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/**
- * Keep the speech store live for the whole session.
- *
- * The SPEECH light has to keep saying "not set up" — or "running on the fallback" — while the
- * operator is on the Cameras tab. A subsystem light that only updates while its own panel is
- * mounted is not a light.
- */
-function useAsrSubsystem(): void {
-  const hydrate = useAsrStore((state) => state.hydrate)
-  const subscribe = useAsrStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/**
- * Keep the cue engine live for the whole session.
- *
- * The most important of these hooks. The suggestion panel is mounted at the top of the shell and
- * has to receive a suggestion whatever tab the operator is on — a card that only appears while you
- * are looking at the automation tab is not an assistant. It also means PANIC state is visible from
- * every screen.
- */
-function useCueSubsystem(): void {
-  const hydrate = useCueStore((state) => state.hydrate)
-  const subscribe = useCueStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/**
- * Keep subsystem health live for the whole session.
- *
- * The one hook that must never be conditional. The strip is the only part of Verger an operator is
- * guaranteed to be looking at when something breaks, and the four bugs logged in `STATUS.md` cycles
- * 2, 4, 5 and 8 were all the same shape: a fully unit-tested component wired to nothing. A health
- * store that hydrated only when its own tab was open would be the fifth.
- */
-function useHealthSubsystem(): void {
-  const hydrate = useHealthStore((state) => state.hydrate)
-  const subscribe = useHealthStore((state) => state.subscribe)
-
-  useEffect(() => {
-    const unsubscribe = subscribe()
-    void hydrate()
-    return unsubscribe
-  }, [hydrate, subscribe])
-}
-
-/** The trust dial and the hot phrases, together. */
-function AutomationSection(): React.JSX.Element {
-  return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
-      <TrustDial />
-      <HotPhraseEditor />
-    </div>
-  )
-}
-
-/** One screen per section. Exhaustive over {@link SectionId}, so a new tab cannot render blank. */
-function SectionView({
-  section,
-  onBindingsChange
-}: {
-  section: SectionId
-  onBindingsChange: (next: readonly KeyBinding[]) => void
-}): React.JSX.Element {
-  switch (section) {
-    case 'preflight':
-      return <PreflightScreen />
-    case 'connection':
-      return <ConnectionScreen />
-    case 'camera':
-      return <CameraPanel />
-    case 'overlay':
-      return <OverlayPanel />
-    case 'plan':
-      return <PlanEditor />
-    case 'transcript':
-      return <TranscriptPanel />
-    case 'automation':
-      return <AutomationSection />
-    case 'goLive':
-      return <GoLivePanel />
-    case 'status':
-      return <StatusDashboard />
-    case 'goLiveSettings':
-      return <GoLiveSettings />
-    case 'cameraSetup':
-      return <CameraSettings />
-    case 'asrSettings':
-      return <AsrSettings />
-    case 'shortcuts':
-      return <ShortcutSettings onChange={onBindingsChange} />
-  }
-}
-
-function TitleBar(): React.JSX.Element {
-  const { t } = useTranslation()
-  const versions = useAppVersions()
-
-  return (
-    <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-4 py-3">
-      <div className="flex items-baseline gap-3">
-        <span className="text-base font-semibold tracking-tight text-text">{t('app.name')}</span>
-        <span className="text-xs text-text-muted">{t('app.tagline')}</span>
-      </div>
-      <p className="select-text font-mono text-[11px] text-text-muted">
-        {versions === null
-          ? t('app.versionsUnknown')
-          : t('app.versions', {
-              app: versions.app,
-              electron: versions.electron,
-              chrome: versions.chrome,
-            })}
-      </p>
-    </header>
-  )
+    window.addEventListener('keydown', handle)
+    return () => {
+      window.removeEventListener('keydown', handle)
+    }
+  }, [open, onOpen, onClose])
 }
 
 export function App(): React.JSX.Element {
   const { t } = useTranslation()
   useDocumentLanguage()
-  useOverlaySubsystem()
-  useYouTubeSubsystem()
-  useGoLiveSubsystem()
-  useAsrSubsystem()
-  useCueSubsystem()
-  useHealthSubsystem()
+  useSubsystems()
 
-  const [section, setSection] = useState<SectionId>(initialSection)
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(isFirstRunOnThisMachine)
+  const [drawerSection, setDrawerSection] = useState<DrawerSectionId>('preflight')
 
-  // One dispatcher for the session. Created here rather than inside the panel so a pedal or a
-  // Stream Deck added in Phase 10 has a single object to bind against.
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true)
+  }, [])
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false)
+  }, [])
+  const openPlanSection = useCallback(() => {
+    setDrawerSection('plan')
+    setDrawerOpen(true)
+  }, [])
+
+  useConsoleKeys({ open: drawerOpen, onOpen: openDrawer, onClose: closeDrawer })
+
+  // One dispatcher for the session, so a pedal or a Stream Deck has a single object to bind against.
   const dispatcher = useMemo(() => createActionDispatcher(), [])
+  useServiceActions({ dispatcher })
 
-  // The operator's remapped keymap, loaded once and held here so it feeds BOTH the live keyboard
-  // handler and the settings screen. Loading it into a screen that nothing renders is how the
-  // remap UI would have shipped inert.
   const [bindings, setBindings] = useState<readonly KeyBinding[]>(() => loadBindings().bindings)
-
-  // Only the actions that actually have a handler are handed to the keyboard hook. Binding a key
-  // nothing listens for would swallow the press and teach the operator that the key is broken.
+  // Filter first, then alias. Filtering drops keys bound to actions nothing implements, so those
+  // keys keep their browser default instead of being swallowed; aliasing then adds the arrows, but
+  // only where the operator has not claimed those keys themselves.
   const activeBindings = useMemo(
-    () =>
-      bindings.filter(
-        (binding) => binding.action === ActionId.confirm || binding.action === ActionId.dismiss
-      ),
-    [bindings]
+    () => withPedalAliases(bindings.filter((binding) => isImplementedAction(binding.action))),
+    [bindings],
   )
-  useKeyboardActions({ dispatcher, bindings: activeBindings })
+  useKeyboardActions({ dispatcher, bindings: activeBindings, enabled: !drawerOpen })
+
+  const plan = usePlanStore((store) => store.plan)
+  const position = usePlanStore((store) => store.position)
+  const planBusy = usePlanStore((store) => store.busy)
+  const fireCue = usePlanStore((store) => store.fireCue)
+  const pending = useCueStore((store) => store.state.pending)
+
+  const selectCue = useCallback(
+    (cueId: string) => {
+      void fireCue(cueId)
+    },
+    [fireCue],
+  )
 
   return (
     <ErrorBoundary>
-      <div className="flex h-full w-full flex-col bg-background text-text">
-        <TitleBar />
-        {/* One strip, one source of truth (`@shared/health`), and the "is it still going out?"
-            answer next to the lights. */}
-        <StatusStrip />
-        {/* Above the tabs, on every screen. A suggestion has a deadline measured in seconds and
-            must never be one tab-click away. */}
-        <SuggestionPanel dispatcher={dispatcher} />
-        <SectionTabs active={section} onSelect={setSection} />
-        <main aria-label={t('app.mainLabel')} className="min-h-0 flex-1">
-          {SECTIONS.map((entry) => (
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-text">
+        {/*
+          `inert` while the drawer is open makes the console genuinely unreachable — unfocusable and
+          unclickable — rather than merely covered by a backdrop. That is what earns the drawer's
+          `aria-modal="true"`, and it is a browser primitive instead of a hand-rolled focus trap.
+        */}
+        <div inert={drawerOpen} className="relative flex min-h-0 flex-1 flex-col">
+          <main aria-label={t('app.mainLabel')} className="min-h-0 flex-1">
+            <SlideGrid
+              cues={plan.cues}
+              currentIndex={position.index}
+              firedCueIds={position.firedCueIds}
+              onSelect={selectCue}
+              busy={planBusy}
+              onOpenPlan={openPlanSection}
+            />
+          </main>
+
+          {pending === null ? null : (
             <div
-              key={entry.id}
-              role="tabpanel"
-              id={`section-panel-${entry.id}`}
-              aria-labelledby={`section-tab-${entry.id}`}
-              hidden={entry.id !== section}
-              className="h-full"
+              data-testid="floating-suggestion"
+              className="pointer-events-none absolute bottom-4 right-4 z-30 w-[30rem] max-w-[calc(100%-2rem)]"
             >
-              {/* Unmounted rather than merely hidden: the Overlay panel owns IPC subscriptions,
-                  and a hidden-but-live panel would double every listener for no benefit. The
-                  subsystem light keeps its own subscription via `useOverlaySubsystem`. */}
-              {entry.id === section ? (
-                <SectionView section={entry.id} onBindingsChange={setBindings} />
-              ) : null}
+              <div className="pointer-events-auto overflow-hidden rounded-glass border border-accent bg-surface shadow-float-dark">
+                <SuggestionPanel />
+              </div>
             </div>
-          ))}
-        </main>
+          )}
+
+          <BottomBar onOpenSettings={openDrawer} />
+        </div>
+
+        <SettingsDrawer
+          open={drawerOpen}
+          section={drawerSection}
+          onSectionChange={setDrawerSection}
+          onClose={closeDrawer}
+          onBindingsChange={setBindings}
+        />
       </div>
     </ErrorBoundary>
   )

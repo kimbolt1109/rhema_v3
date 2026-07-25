@@ -28,7 +28,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 
 import {
   DEFAULT_PORTABLE_CONFIG,
@@ -40,6 +40,26 @@ import type { PortableConfig, ResolvedPortableConfig } from '@shared/appConfig'
 
 /** The fixed filename read next to the launcher. */
 export const PORTABLE_CONFIG_FILENAME = 'config.json'
+
+/**
+ * Where `assets.plan` actually points, or `null` when no plan is configured.
+ *
+ * A **relative** path resolves against the folder `config.json` itself lives in — not the working
+ * directory, and not the repo. That is the whole trick of a portable build: the USB stick is `E:` on
+ * one PC and `F:` on the next, so the only stable anchor is "beside the launcher", and
+ * `plans/11am/plan.json` has to mean the same thing on every machine. An absolute path is honoured
+ * unchanged, for the operator who keeps their plans on a fixed drive.
+ *
+ * Pure, and separate from the opening, so it unit-tests without a filesystem: path resolution across
+ * drive letters is precisely where a portable build breaks, and that is not something to discover in
+ * a booth on a Sunday.
+ */
+export function resolveConfiguredPlanPath(configuredPlan: string, configDir: string): string | null {
+  const trimmed = configuredPlan.trim()
+  if (trimmed.length === 0) return null
+  return isAbsolute(trimmed) ? trimmed : join(configDir, trimmed)
+}
+
 
 /** How the effective config was obtained — surfaced in the startup log and the Preflight screen. */
 export type PortableConfigSource =

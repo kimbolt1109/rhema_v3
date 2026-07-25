@@ -19,9 +19,22 @@
                               — loopback WebSockets only (the Vite dev server's HMR socket,
                                 and later phases' local overlay server). Standing Rule 7:
                                 loopback-first, never a public host.
-    - img-src     'self' data:
-                              — bundled assets and inline data URIs (icons, generated
-                                thumbnails). No remote image beacons.
+    - img-src     'self' data: http://127.0.0.1:*
+                              — bundled assets, inline data URIs (icons), and slide images
+                                served by our own overlay server on loopback.
+
+                                That last source is load-bearing, not a loosening. The slide
+                                grid renders the *same* images the congregation sees, and
+                                those are served over HTTP by `OverlayServer` (`/assets`,
+                                `OVERLAY_ASSET_PATH`) because Chromium refuses `file:`
+                                subresources — see `src/shared/net.ts`. This document is
+                                loaded with `loadFile` in production, so its origin is
+                                `file://` and `'self'` does not cover `127.0.0.1`; without
+                                this entry every thumbnail is blocked by CSP and the whole
+                                main surface renders empty boxes.
+
+                                It is LOOPBACK-ONLY, exactly like `connect-src` above
+                                (Standing Rule 7). No remote image beacons, no LAN host.
 -->
 <html lang="en" class="dark">
   <head>
@@ -29,7 +42,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' data: http://127.0.0.1:*"
     />
     <title>Verger</title>
   </head>

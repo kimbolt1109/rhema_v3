@@ -46,9 +46,10 @@ import {
   Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { overlayOrigin } from '@shared/net'
+import { overlayAssetUrl } from '@shared/net'
 import type { Cue, CueType } from '@shared/plan'
 import { cuePayloadSchemas } from '@shared/plan'
 
@@ -61,23 +62,27 @@ import { cuePayloadSchemas } from '@shared/plan'
 export type AssetUrlResolver = (asset: string) => string | null
 
 /**
- * The route the overlay server is expected to expose the plan's asset folder under.
- *
- * ASSUMPTION: the main-process half of Phase 6 serves `ServicePlan.assetDir` from the overlay
- * server (the same server that already serves the overlay pages, per `src/shared/net.ts` — one
- * port, not two). Nothing in the renderer can verify that, so the resolver is injectable end to
- * end: `PlanRunner` and `CuePreview` both take an `assetUrl` prop, and the day the real route is
- * known, one function changes and no component does.
- */
-export const PLAN_ASSET_PATH = '/plan-assets'
-
-/**
  * Build a loadable URL for a plan-relative asset.
+ *
+ * The route comes from {@link overlayAssetUrl} — `@shared/net` is the single source of truth for
+ * every port and path, and this function used to guess instead.
+ *
+ * ## The bug this fixes, because it is the expensive kind
+ *
+ * This file previously declared its own `PLAN_ASSET_PATH = '/plan-assets'` behind an `ASSUMPTION:`
+ * comment about what the main process "is expected to" serve. The main process serves
+ * `OVERLAY_ASSET_PATH` (`/assets`, `OverlayServer.ts`), and has since Phase 6 — so every slide
+ * thumbnail this component has ever rendered was a 404, in the app and in the pre-load strip
+ * BLUEPRINT.md §4 promises. Nothing failed loudly: a broken `<img>` with `alt=""` is an empty box,
+ * and the unit tests injected their own resolver, so the one path nobody exercised was the default.
+ * That is the same shape as the four bugs `STATUS.md` cycles 2, 4, 5 and 8 record — a tested
+ * component wired to nothing — and the fix is to stop having a second opinion about the route.
  *
  * Refuses anything that is not plainly relative. `SlidePayload.asset` is documented as "path
  * relative to the plan's asset folder", so a `..` segment, a leading `/` or a `C:` drive letter is
  * either a mistake or a traversal attempt from an imported deck — and in both cases the honest
  * answer on screen is "this asset cannot be shown", not a request that escapes the asset folder.
+ * `express.static` refuses to leave its root as well; this is the belt to its braces.
  */
 export function defaultAssetUrl(asset: string): string | null {
   const trimmed = asset.trim()
@@ -95,7 +100,9 @@ export function defaultAssetUrl(asset: string): string | null {
     return null
   }
 
-  return `${overlayOrigin()}${PLAN_ASSET_PATH}/${segments.map(encodeURIComponent).join('/')}`
+  // `overlayAssetUrl` does its own per-segment percent-encoding, which is what makes a Hangul or
+  // space-bearing filename out of a Korean church's deck actually resolve.
+  return overlayAssetUrl(segments.join('/'))
 }
 
 /** The glyph for each cue type. Reinforces the type word; never the only signal. */
@@ -167,6 +174,20 @@ export function CuePreview({
 }: CuePreviewProps): React.JSX.Element {
   const { t } = useTranslation()
 
+  /**
+   * The URL whose image failed to load, if any.
+   *
+   * A refused path (`assetUrl` returning `null`) was already handled; a URL that resolves fine and
+   * then 404s was not, and that is the more likely failure in a booth: the overlay server not up
+   * yet, a plan whose `assets/` folder did not come across onto the USB stick, or a deck re-exported
+   * with different filenames. Without this the operator gets an empty box, because `alt=""` renders
+   * as nothing — the exact silence that hid the `/plan-assets` bug for four phases.
+   *
+   * Keyed by URL rather than a bare boolean so that moving to a different cue, or the overlay server
+   * coming up and the path starting to work, is not permanently poisoned by one earlier failure.
+   */
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+
   const malformed = t('plan.preview.malformed', {
     defaultValue: 'This cue’s settings do not match its type. Fix it in the plan editor.',
   })
@@ -189,7 +210,11 @@ export function CuePreview({
       case 'slide': {
         const parsed = cuePayloadSchemas.slide.safeParse(cue.payload)
         if (!parsed.success) return <Malformed message={malformed} />
-        const url = assetUrl(parsed.data.asset)
+        const resolved = assetUrl(parsed.data.asset)
+        // A URL that already failed is treated exactly like a refused one: same placeholder, same
+        // words. The operator does not need to know which of the two happened — they need to know
+        // this slide will not appear.
+        const url = resolved !== null && resolved === failedUrl ? null : resolved
         return (
           <div className="flex flex-col gap-2">
             {url === null ? (
@@ -214,6 +239,9 @@ export function CuePreview({
                 // operator presses SPACE, so deferring it would defeat the entire point.
                 loading="eager"
                 decoding="async"
+                onError={() => {
+                  setFailedUrl(url)
+                }}
                 data-cue-preview="slide-image"
                 data-asset={parsed.data.asset}
                 className={clsx(

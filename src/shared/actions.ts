@@ -142,6 +142,51 @@ export const DEFAULT_KEY_BINDINGS: readonly KeyBinding[] = [
   { action: ActionId.cameraSelect, key: '4', gesture: 'tap', param: 'pulpit' },
 ]
 
+/**
+ * Arrow-key aliases for next/back — always live, deliberately NOT part of the remappable map.
+ *
+ * An operator driving a slide grid reaches for the arrow keys without being told to, because that is
+ * what every deck program binds; and a USB foot pedal is a keyboard that usually emits exactly these
+ * two codes out of the box, so the pedal wants them to work with no configuration at all.
+ *
+ * ## Why these are not simply two more `DEFAULT_KEY_BINDINGS` entries
+ *
+ * `mergeWithDefaults` treats a stored binding for an action as REPLACING the defaults for that
+ * action — which is right, because the operator's explicit choice must win. But it means a new
+ * default binding never reaches anybody who has already saved a keymap: adding `ArrowRight` to the
+ * defaults would give arrows to a fresh install and silently withhold them from the operator who had
+ * customised anything, which is precisely backwards for a convenience alias. Keeping them out of the
+ * stored map makes them unconditional.
+ *
+ * They are still ordinary bindings going through the ordinary keymap and the ordinary dispatcher —
+ * this is not a second input path. What it is not is *remappable*: to change next/back, rebind
+ * `advance` / `back` themselves, which {@link withPedalAliases} lets win.
+ *
+ * Owning these keys means the slide grid does NOT get them for moving focus between tiles. That is
+ * the intended trade: the most-used key in a live service may not change meaning depending on which
+ * tile happens to hold focus.
+ */
+export const PEDAL_ALIAS_BINDINGS: readonly KeyBinding[] = [
+  { action: ActionId.advance, key: 'ArrowRight', gesture: 'tap' },
+  { action: ActionId.back, key: 'ArrowLeft', gesture: 'tap' },
+]
+
+/**
+ * Add the aliases the operator's own keymap has not already claimed.
+ *
+ * The filter is the safety property: if the operator has bound `ArrowRight` to anything at all, that
+ * binding stands alone and the alias is dropped, so an alias can never shadow — or silently
+ * double-fire alongside — a deliberate choice. Compared case-insensitively for the same reason
+ * `useKeyboardActions` case-folds keys: `b` with CapsLock on is still `b`.
+ */
+export function withPedalAliases(bindings: readonly KeyBinding[]): readonly KeyBinding[] {
+  const claimed = new Set(bindings.map((binding) => binding.key.toLowerCase()))
+  return [
+    ...bindings,
+    ...PEDAL_ALIAS_BINDINGS.filter((alias) => !claimed.has(alias.key.toLowerCase())),
+  ]
+}
+
 /** A dispatched action, with the input that produced it. */
 export interface DispatchedAction {
   readonly action: ActionId

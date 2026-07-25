@@ -821,3 +821,104 @@ Verification update (correcting the Cycle 10 "never verified" list):
   proof.
 
 1964 unit tests green; tsc node + web clean; i18n audit PASS.
+
+## Cycle 12 — UI redesign: slide grid + bottom bar + settings drawer
+
+TASK 2 of the operator's handoff, on branch `portable-and-ui`. The console was thirteen tabs, a
+title bar, a health strip and an always-present suggestion strip. It is now two things — a slide
+grid and one bar — with everything else behind a gear icon. **A re-composition, not a rewrite:**
+all thirteen screens render inside the drawer unchanged, with the same props and the same tests.
+
+Delivered:
+
+- **Slide grid** (`components/SlideGrid.tsx`) — the whole surface, modelled on PowerPoint's slide
+  sorter. `repeat(auto-fill, minmax(220px, 1fr))`, 16:9 tiles, slide number in the corner. NOW gets a
+  thick accent ring + glow, NEXT a thinner dimmer one, everything else dims. Tap to jump. The grid
+  follows the current slide and **stops following for 1.5s whenever the operator scrolls by hand**,
+  so looking ahead mid-service does not fight the app. Tiles are numbered by *plan index* and every
+  cue gets one, including non-slide cues — a slides-only grid would make "jump to tile 40" fire a
+  different cue than the one under the operator's finger.
+- **Bottom bar** (`components/BottomBar.tsx`) — 80px, and **the bar itself is the progress
+  indicator**: a fill across its full width whose width is the cue engine's match confidence for the
+  next cue. Left: tally dot (red = ON AIR, amber = standby, grey = off air), elapsed, REC, OBS state.
+  Centre: the big tabular-nums percentage plus now → next. Right: four camera buttons, the
+  lower-third toggle, GO LIVE / END (END via `HoldButton` when `endRequiresHold`), and the gear.
+  With nothing pending it shows an em dash, never `0%` — "nothing to report" and "reported no
+  confidence" are different facts. Streaming without recording gets a red `NO REC` alert
+  (Standing Rule 3).
+- **Settings drawer** (`components/SettingsDrawer.tsx`) — slide-over, `Ctrl+,` to open, `Esc` to
+  close, backdrop-click to close, `role="dialog" aria-modal="true"`, focus moved in and handed back.
+  Reuses the old `app.section.*` label keys, so no new copy and no window where `ko` lagged `en`.
+  Closed it renders `null`, so none of the thirteen screens' IPC subscriptions are live. The runtime
+  versions moved into its header — they are the first thing any bug report needs and the title bar
+  they used to live in is gone.
+- **Two new colour tokens** — `tally` (on-air red) and `warn` (amber). The theme had neither; the
+  health strip uses `accent-2` for `degraded`, which is right there and wrong beside a grid that
+  rings the current slide in indigo.
+- **`config.json`'s `assets.plan` is now read at launch.** It had been in the schema, unread, since
+  the portable build landed, while `RUNBOOK.md` told the operator it selected the plan. It matters
+  more now: the grid *is* the console, so a launch with no plan open is a blank window. The shipped
+  config points at `plans/11am/plan.json`, resolved relative to the folder `config.json` sits in — so
+  it means the same thing whatever drive letter the USB stick gets.
+
+Bugs found and fixed (all pre-existing, all invisible):
+
+- **Every slide thumbnail in the app was a 404.** `CuePreview.defaultAssetUrl` built
+  `/plan-assets/…` behind an `ASSUMPTION:` comment; `OverlayServer` serves `OVERLAY_ASSET_PATH`
+  (`/assets`) and has since Phase 6. Nothing failed loudly — a broken `<img alt="">` is an empty box,
+  and every unit test injected its own resolver, so the default resolver was the one path nobody
+  exercised. Now built from `@shared/net`'s `overlayAssetUrl`, with a regression test asserting the
+  component has no second opinion about the route.
+- **The renderer's CSP would have blocked those images anyway.** `img-src 'self' data:`, and the
+  renderer is loaded with `loadFile`, so its origin is `file://` and `'self'` does not cover
+  `127.0.0.1`. Widened to `http://127.0.0.1:*` — loopback only, exactly like `connect-src`.
+- **The documented keyboard shortcuts did nothing.** `App.tsx` filtered the operator's keymap down to
+  `confirm` and `dismiss` before handing it to the keyboard hook, and the only handler registrations
+  in the renderer were `SuggestionPanel`'s two and `PlanRunner`'s two — the latter on a dispatcher it
+  created itself. So on the shipped app `Y` and `N` worked and nothing else did: SPACE did not
+  advance, `1`–`4` did not switch cameras, SPACE-hold did not PANIC. `RUNBOOK.md` listed them all as
+  working. `input/useServiceActions.ts` is now the single registration site for all nine implemented
+  actions, and the shell filters the keymap through `isImplementedAction` so a key bound to an
+  unimplemented action keeps its browser default instead of being swallowed.
+- **A failed image fetch was silent.** `CuePreview` and `SlideGrid` now fall back to the labelled
+  placeholder on an image error, so a plan whose `assets\slides\` folder did not reach the USB stick
+  shows grey tiles with an icon — which is what `RUNBOOK.md` tells the operator to look for — instead
+  of a wall of empty rectangles.
+- **Phase 6's `PlanRunner` is never mounted.** Found while auditing: 494 lines and a full test file,
+  referenced only from comments. `SlideGrid` now genuinely fills that role. Left in place rather than
+  deleted, and recorded here so it is a decision rather than an oversight.
+
+Deliberately NOT done, and said plainly rather than faked:
+
+- **`output.black`, `output.logo`, `output.freeze` remain unimplemented.** obs-websocket has no
+  generic "black the program" call and doing it properly needs the operator to nominate a scene,
+  which is configuration this app does not have. The brief asked for `B` = blackout; `B` keeps its
+  1.5s destructive-hold gesture reserved so blackout can never later arrive as a tap, PANIC stays on
+  SPACE-hold where `SHORTCUTS_AND_A11Y.md` wants it, and `RUNBOOK.md` now carries a "listed but not
+  implemented yet" table instead of promising three dead keys.
+- `→` / `←` are `PEDAL_ALIAS_BINDINGS`, not defaults. `mergeWithDefaults` lets a stored binding
+  replace the defaults for its action, so a new default would have reached a fresh install and
+  silently skipped any operator who had ever customised anything — backwards for an alias whose whole
+  job is working out of the box on a foot pedal.
+- `PreflightScreen` still ships hardcoded English (the operator works in English; the audit reports
+  it), and `CueRow`'s drag handle is 32px, under the 44px floor. Both are inside the drawer.
+
+Verification, all run this session:
+
+- **2108 unit tests green across 74 files** (was 1964 across 68 — six new test files: SlideGrid,
+  BottomBar, SettingsDrawer, CuePreview, useServiceActions, App).
+- `tsc --noEmit` clean for both projects; `npm run build` clean; i18n audit **PASS**.
+- **All 9 e2e tests green against the real packaged app**, including a new one proving a cue added in
+  the plan editor appears as a tile on the operating surface and is still there after a renderer
+  reload — the thing `PlanRunner` never proved, because it was never on screen.
+- **The slide chain proven end to end on the real exe.** Launched
+  `release/0.1.0/win-unpacked/Verger.exe` and fetched
+  `http://127.0.0.1:7320/assets/slides/11-slide-001.png` → **HTTP 200, image/png, 161,249 bytes**,
+  byte-for-byte the file on disk, at exactly the URL `defaultAssetUrl` builds. A missing file still
+  404s. That single request proves config.json → plan auto-opened → asset root mounted → `/assets`
+  route → the `<img src>` the grid emits.
+- USB folder rebuilt and both real decks re-baked through the app's own importer via PowerPoint:
+  102/102 and 48/48 slides rendered, 75 and 43 auto-anchored. 427.7 MB.
+
+Still owed to the on-site test, unchanged from Cycle 11: a real OBS connection, a real go-live with
+recording confirmed, real speech against a live mic, and the build remains unsigned.

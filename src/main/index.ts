@@ -25,7 +25,7 @@ import { BrowserWindow, app } from 'electron'
 
 import { loadConfigFromDisk, summarize } from '@main/config/env'
 import type { AppConfig } from '@main/config/env'
-import { loadPortableConfig } from '@main/config/portable'
+import { loadPortableConfig, resolveConfiguredPlanPath } from '@main/config/portable'
 import type { PortableConfigResult } from '@main/config/portable'
 import { createLogger } from '@main/logging/logger'
 import type { Logger } from '@main/logging/logger'
@@ -35,6 +35,7 @@ import { getCheckpointStore, getHealthService, resetHealthService } from '@main/
 import { OverlayWatchdog } from '@main/health/overlayWatchdog'
 import { getObsClient } from '@main/obs'
 import { getOverlayServer } from '@main/overlay'
+import { getPlanService } from '@main/plan'
 import { getYouTubeService } from '@main/youtube'
 import { createMainWindow } from '@main/window'
 import { ErrorCode, err } from '@shared/result'
@@ -362,6 +363,38 @@ function composeServices(log: Logger, portable: PortableConfigResult): ComposedS
   // caller must remember" is exactly how the four defects above happened.
   const health = getHealthService({ logger: log })
   const checkpoints = getCheckpointStore({ logger: log })
+
+  // Open the service plan named in config.json, if there is one.
+  //
+  // `assets.plan` has been in the config schema since the portable build landed and nothing read it,
+  // which made it a promise the file was not keeping — `RUNBOOK.md` told the operator config.json
+  // selects the plan, and it did not. It matters more now than it did: after the UI redesign the
+  // slide grid IS the console, so a launch with no plan open shows "No service plan is open." across
+  // the whole window. An operator arriving at a church PC should double-click START.bat and see
+  // their deck, not go hunting through a file dialog in a dark booth.
+  //
+  // Deliberately AFTER health and the checkpoint store are constructed, so the subscribers that care
+  // about plan state exist before the plan moves.
+  //
+  // A relative path resolves against the folder `config.json` itself lives in — which is the folder
+  // the USB stick was copied to, whatever drive letter it got. Standing Rule 5: a missing or
+  // malformed plan warns and leaves the console empty; it never blocks startup.
+  const planPath = resolveConfiguredPlanPath(portable.config.assets.plan, portable.configDir)
+  if (planPath !== null) {
+    const opened = getPlanService({ logger: log }).open(planPath)
+    if (opened.ok) {
+      log.info('opened the service plan named in config.json', {
+        path: planPath,
+        cues: opened.value.plan.cues.length
+      })
+    } else {
+      log.warn('could not open the service plan named in config.json', {
+        path: planPath,
+        code: opened.error.code,
+        detail: opened.error.message
+      })
+    }
+  }
 
   // The overlay watchdog — the "overlay browser source crashes" row of BLUEPRINT.md §9.
   //
