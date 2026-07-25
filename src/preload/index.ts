@@ -42,6 +42,7 @@ import type { Checkpoint, HealthSnapshot } from '@shared/health'
 import { IPC_EVENT_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
+  AssetImportOutcome,
   DeckImportProgress,
   DeckImporterStatus,
   IpcEventValue,
@@ -261,6 +262,8 @@ const api: VergerApi = {
       ipcRenderer.invoke(IpcChannel.planSave, options),
     importDeck: (options: { path?: string }): Promise<Result<PlanState>> =>
       ipcRenderer.invoke(IpcChannel.planImportDeck, options),
+    importAsset: (options: { paths?: readonly string[] }): Promise<Result<AssetImportOutcome>> =>
+      ipcRenderer.invoke(IpcChannel.planImportAsset, options),
     fireCue: (options: { cueId: string }): Promise<Result<PlanState>> =>
       ipcRenderer.invoke(IpcChannel.planFireCue, options),
     advance: (): Promise<Result<PlanState>> => ipcRenderer.invoke(IpcChannel.planAdvance),

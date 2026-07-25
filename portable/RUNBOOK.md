@@ -71,7 +71,7 @@ To take over by hand:
 
 1. Ignore or close Verger if needed — do not worry about "stopping" anything in it.
 2. Switch cameras directly in **OBS**: click the scene you want in OBS's own Scene list.
-3. Verger's overlay layers (lower third, scripture, slide) can't be driven from OBS alone. If Verger is down, the simplest fallback is to hide the "Overlays" browser source in OBS to clear everything on screen, or leave the last state up if it's not distracting.
+3. Verger's overlay layers (lower third, scripture, slide) can't be driven from OBS alone. If Verger is down, the simplest fallback is to hide the "Overlays" browser source in OBS to clear everything on screen, or leave the last state up if it's not distracting. A video is part of that overlay, not a separate OBS source, so hiding the "Overlays" browser source stops the clip and its sound instantly — that is the manual kill switch for a video misbehaving on air. Hiding the slide layer in Verger does the same thing, if Verger is still answering.
 4. To advance slides without Verger: if you have the source PowerPoint deck open, run it directly and switch OBS to a "Slides" scene/source instead of relying on Verger's overlay slide layer.
 5. When Verger comes back (relaunch via START.bat), it **re-attaches to whatever OBS is already doing** — it will never start a second stream or open a second recording file. You may see "Re-attached to a stream already in progress." Do not press GO LIVE again if you're already live; use Retry only if prompted.
 
@@ -118,6 +118,20 @@ A USB foot pedal is just a keyboard — it sends a keystroke. Map its pedals to:
 Use the arrows if your pedal software offers them: `Space` doubles as PANIC when held for 3 seconds, and a pedal you rest your foot on could reach that. The arrows have no hold gesture at all, so they are the safer pair. A three-pedal unit is well served by `←` / `→` / `Y` (confirm the AI's suggestion).
 
 If your pedal sends something else entirely, remap Verger instead of the pedal: **Ctrl+,** → Shortcuts, and rebind Advance and Back to whatever it emits. If you bind Advance to `→` yourself there, that's fine — your binding simply takes over from the built-in one.
+
+## 6. Getting slides, images and video into the plan
+
+Both routes are behind **Ctrl+,** → **Plan**, and neither needs the internet.
+
+- **Import deck…** — pick any `.pptx` from anywhere on this PC. Every slide is rendered through PowerPoint. It **adds to** the plan that's already open rather than replacing it, so several decks can make up one service; import them in the order the service runs, then read the cue list back before you go live.
+- **Add image / video…** — pick one image or one video. Verger **copies** it into the open plan's own `assets` folder (images to `assets\slides\`, video to `assets\media\`) and makes a cue for it. The copy is the point: the plan keeps working after someone moves or renames the original, and after this folder is carried to another PC. Images: `.png .jpg .jpeg .gif .webp .bmp .avif`. Video: `.mp4 .webm .m4v .mov .mkv`.
+
+Two things that will stop you, both a minute's work to fix:
+
+- **A legacy `.ppt` won't import** — that's the pre-2007 format. Open it in PowerPoint, **Save As → .pptx**, import that instead.
+- **The plan has to be saved to disk first**, because the images are written beside its `plan.json`. The plans on this stick are already saved, so this only bites on a brand-new plan you just started — save it, then import. Verger tells you when this is the reason.
+
+**Video plays on the overlay, not through OBS**, so its sound comes out of the `Overlays` browser source and OBS has to be set up once to carry that audio. See **OBS-SETUP.md section 7** — and test it with the real clip before the service, not during it.
 
 ---
 

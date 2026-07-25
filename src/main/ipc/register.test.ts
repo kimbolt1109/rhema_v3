@@ -868,6 +868,8 @@ interface FakePlanService extends PlanServiceLike {
   readonly opened: string[]
   readonly saved: string[]
   readonly imported: string[]
+  /** Paths handed to `importAsset`, so the handler's boundary checks are assertable. */
+  readonly importedAssets: string[][]
   readonly fired: string[]
   readonly advances: () => number
   readonly backs: () => number
@@ -885,6 +887,7 @@ function createFakePlanService(): FakePlanService {
   const opened: string[] = []
   const saved: string[] = []
   const imported: string[] = []
+  const importedAssets: string[][] = []
   const fired: string[] = []
 
   const service: FakePlanService = {
@@ -892,6 +895,7 @@ function createFakePlanService(): FakePlanService {
     opened,
     saved,
     imported,
+    importedAssets,
     fired,
     advances: () => advanceCount,
     backs: () => backCount,
@@ -920,6 +924,10 @@ function createFakePlanService(): FakePlanService {
     importDeck: (path) => {
       imported.push(path)
       return ok(service.current)
+    },
+    importAsset: (paths) => {
+      importedAssets.push([...paths])
+      return ok({ state: service.current, added: [], failed: [] })
     },
     fireCue: (cueId) => {
       fired.push(cueId)
@@ -3980,6 +3988,7 @@ describe('registerIpc', () => {
         open: () => PLAN_STATE,
         save: () => PLAN_STATE,
         importDeck: () => PLAN_STATE,
+        importAsset: () => ({ state: PLAN_STATE, added: [], failed: [] }),
         fireCue: () => PLAN_STATE,
         advance: () => PLAN_STATE,
         back: () => PLAN_STATE,

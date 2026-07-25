@@ -252,6 +252,9 @@ const PROBED_CHANNELS: readonly ChannelProbe[] = [
   { channel: IpcChannel.planOpen, arg: {} },
   { channel: IpcChannel.planSave, arg: {} },
   { channel: IpcChannel.planImportDeck, arg: {} },
+  // No paths, so this opens the picker the harness always cancels — which is the branch that has to
+  // come back as a plain unchanged outcome rather than an error.
+  { channel: IpcChannel.planImportAsset, arg: {} },
   { channel: IpcChannel.planFireCue, arg: { cueId: 'no-such-cue' } },
   { channel: IpcChannel.planAdvance, arg: undefined },
   { channel: IpcChannel.planBack, arg: undefined },

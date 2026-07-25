@@ -143,13 +143,24 @@ body {
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Layer: slide — cross-fade
+   Layer: slide — cross-fade, and video
    ---------------------------------------------------------------------------------------------
-   Two stacked <img> frames. overlay.js loads the incoming image into whichever frame is idle and
-   only then swaps `.is-active`, so a slide change dissolves from the old image to the new one. A
-   single <img> would flash the transparent camera between `src` assignments.
+   Two stacked <img> frames plus one <video>, all three sharing the same geometry and the same
+   fade. overlay.js loads the incoming image into whichever frame is idle and only then swaps
+   `.is-active`, so a slide change dissolves from the old image to the new one. A single <img>
+   would flash the transparent camera between `src` assignments.
+
+   The video is a sibling, not a replacement, and gets the identical `.is-active` treatment so the
+   two kinds hand over to each other with one mechanism instead of two. It is painted last (source
+   order, no z-index needed) because a clip supersedes whatever still it replaces.
+
+   `object-fit: contain` on all three, so nothing is ever cropped — which means a clip that is not
+   the canvas aspect leaves TRANSPARENT letterbox bars, not black ones. That is the right default
+   over a camera (the stage shows through), and it is also why overlay.js empties the image frames
+   when a clip takes over: a still left loaded underneath would show through those bars.
    --------------------------------------------------------------------------------------------- */
-.slide__frame {
+.slide__frame,
+.slide__video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -159,7 +170,8 @@ body {
   transition: opacity var(--dur-in) var(--ease-out);
 }
 
-.slide__frame.is-active {
+.slide__frame.is-active,
+.slide__video.is-active {
   opacity: 1;
 }
 
@@ -435,6 +447,21 @@ body {
   color: #ef4444;
 }
 
+/* Slide-video playback state. The amber tier exists because "playing, but muted" is its own
+   outcome and not a shade of failure: the clip IS on air, the congregation just cannot hear it,
+   and that is the one fault an operator cannot diagnose by looking at the projector. */
+.debug__val[data-video='audio'] {
+  color: #22c55e;
+}
+
+.debug__val[data-video='muted'] {
+  color: #f59e0b;
+}
+
+.debug__val[data-video='blocked'] {
+  color: #ef4444;
+}
+
 /* ---------------------------------------------------------------------------------------------
    Reduced motion
    ---------------------------------------------------------------------------------------------
@@ -458,7 +485,8 @@ body {
       visibility 0s linear 0s;
   }
 
-  .slide__frame {
+  .slide__frame,
+  .slide__video {
     transition: opacity 140ms linear;
   }
 }

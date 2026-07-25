@@ -600,9 +600,13 @@
       "open": "열기…",
       "save": "저장",
       "import": "PPT 가져오기…",
+      "addAsset": "이미지 / 영상 추가…",
       "addCue": "큐 추가",
       "advance": "다음",
       "back": "이전"
+    },
+    "assets": {
+      "refused_other": "{{count}}개 파일을 추가하지 못했습니다:"
     },
     "list": {
       "label": "큐 목록 (순서대로)",

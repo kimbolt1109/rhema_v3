@@ -135,13 +135,31 @@ plans that ship in this folder:
 - `plans\11am\plan.json` — 102 slides
 - `plans\afternoon\plan.json` — 48 slides
 
-**To import a fresh PowerPoint deck:** click **Import deck…** and pick a `.pptx` file. Because this
-church PC has PowerPoint installed, Verger renders **every slide** through it (not just the first
-one) and automatically anchors each slide as a cue from its slide text — you don't have to build
-the cue list by hand.
+**To import a fresh PowerPoint deck:** click **Import deck…** and pick a `.pptx` file — from
+anywhere on this PC, it doesn't have to be in the Verger folder. Because this church PC has
+PowerPoint installed, Verger renders **every slide** through it (not just the first one) and
+automatically anchors each slide as a cue from its slide text — you don't have to build the cue
+list by hand. An import **adds to** the plan that's open rather than replacing it, so two or three
+decks can make up one service; import them in the order the service runs.
 
-Either way, check the cue list in the Plan tab reads the way the service actually runs before you
-go live.
+**To bring in a single image or a video:** click **Add image / video…** and pick the file. Verger
+**copies** it into the open plan's own `assets` folder — images into `assets\slides\`, video into
+`assets\media\` — and creates a cue for it. The copy is the whole point: the plan keeps working
+after someone moves or renames the original, and after this folder is carried to another PC. Images:
+`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.avif`. Video: `.mp4` `.webm` `.m4v` `.mov` `.mkv`.
+Like the deck import, this needs no internet — nothing is uploaded anywhere.
+
+**Two limits, worth knowing now rather than when you're in a hurry:**
+
+- A legacy **`.ppt`** — the pre-2007 PowerPoint format — cannot be imported. Open it in PowerPoint,
+  do **Save As → `.pptx`**, and import that file instead.
+- A plan must be **saved to disk** before anything can be imported into it, because the images are
+  written beside its `plan.json`. The two plans above already are, so this only comes up if you
+  started a brand-new plan from scratch — save it first. Verger says so plainly rather than failing
+  quietly.
+
+Whichever route you use, check the cue list in the Plan tab reads the way the service actually runs
+before you go live. **If you brought in a video, do step 7 too** — otherwise it plays silently.
 
 ---
 
@@ -170,5 +188,32 @@ reflect whatever OBS has right now.
 
 ---
 
-Once all six steps are done, service day should never require reopening OBS's settings — everything
-routine happens from Verger.
+## 7. Video sound — let the overlay's audio into the OBS mixer
+
+Skip this if you never play video. If you do, do it now: a silent video in front of a congregation
+cannot be fixed while it is playing.
+
+Verger plays video on the overlay, on the same full-frame layer that shows slides — not through an
+OBS media source. So the sound comes out of the **`Overlays`** browser source you added in step 4,
+and that audio does not appear in OBS's **Audio Mixer** — the mix the congregation and the stream
+actually hear — until you tell OBS to control it.
+
+1. In OBS, right-click the **`Overlays`** browser source → **Properties**.
+2. Tick **Control audio via OBS**, then **OK**.
+3. Look at OBS's **Audio Mixer** panel. **`Overlays`** should now be listed there. Check it is not
+   muted (speaker icon not struck through) and its volume slider is up, not sitting at the bottom.
+4. **Test it once with the actual video file, before the service.** Bring the clip in (step 5), fire
+   its cue, and listen where it matters — the stream, or a recording played back — not only this
+   PC's speakers.
+
+If you added `Overlays` to your other scenes with **Paste (Reference)** as step 4.4 says, it is one
+shared source, so ticking this once covers every scene.
+
+One thing to know for service day: **hiding the slide layer stops the video and its sound.** That is
+deliberate — it is the way out if a clip misbehaves on air. Hiding the `Overlays` browser source in
+OBS does the same for everything at once (RUNBOOK.md section 4).
+
+---
+
+Once steps 1–6 are done — plus step 7 if you play video — service day should never require reopening
+OBS's settings; everything routine happens from Verger.

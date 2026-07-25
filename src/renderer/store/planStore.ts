@@ -28,6 +28,7 @@
 import { create } from 'zustand'
 
 import type {
+  AssetImportOutcome,
   DeckImportProgress,
   DeckImporterStatus,
   PlanState,
@@ -234,6 +235,14 @@ export interface PlanStoreState {
   save: (options?: { path?: string }) => Promise<Result<PlanState>>
   /** Convert a .pptx into one slide cue per slide. Refused when no converter exists. */
   importDeck: (options?: { path?: string }) => Promise<Result<PlanState>>
+  /**
+   * Copy an image or a video into the plan folder and append a cue for it.
+   *
+   * Unlike {@link PlanStoreState.importDeck} this needs no converter on the machine — it is a file
+   * copy — so it is never disabled for that reason. It still needs a SAVED plan, because the file is
+   * copied in beside the plan file, and the main process says so when there isn't one.
+   */
+  importAsset: (options?: { paths?: readonly string[] }) => Promise<Result<AssetImportOutcome>>
   /** Fire one cue by id and move the pointer to it. */
   fireCue: (cueId: string) => Promise<Result<PlanState>>
   /** The SPACE key's action: fire the next cue. */
@@ -258,6 +267,7 @@ function initialState(): Omit<
   | 'open'
   | 'save'
   | 'importDeck'
+  | 'importAsset'
   | 'fireCue'
   | 'advance'
   | 'back'
@@ -427,6 +437,26 @@ export const usePlanStore = create<PlanStoreState>()((set, get) => {
       set({ importing: true, importProgress: null })
       const result = await run((bridge) => bridge.plan.importDeck(options))
       set({ importing: false })
+      return result
+    },
+
+    /**
+     * Add an image or a video.
+     *
+     * Not routed through `run`, because the answer is an {@link AssetImportOutcome} rather than a bare
+     * `PlanState` — the caller needs the `failed` list to tell the operator which files were refused,
+     * and a helper that only knows how to adopt a plan would throw that away.
+     */
+    importAsset: async (options = {}) => {
+      set({ busy: true })
+      const result = await callBridge((bridge) => bridge.plan.importAsset(options))
+      if (result.ok) {
+        adopt(result.value.state)
+        set({ busy: false, lastError: null })
+      } else {
+        // The mirrored plan is kept: a refused import has not un-authored anything.
+        set({ busy: false, lastError: result.error })
+      }
       return result
     },
 

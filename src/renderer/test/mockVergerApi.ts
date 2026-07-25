@@ -55,6 +55,7 @@ import {
 } from '@shared/golive'
 import type {
   AppVersions,
+  AssetImportOutcome,
   DeckImportProgress,
   DeckImporterStatus,
   IpcEventPayload,
@@ -208,6 +209,14 @@ export interface MockResponses {
    */
   planImportDeck: Result<PlanState> | null
   /**
+   * What `plan.importAsset` resolves with.
+   *
+   * `null` — the default — means "behave like the real service": append one cue per accepted file.
+   * Unlike deck import this needs no converter on the machine, so the honest default is SUCCESS: it
+   * is a file copy, and a fake that refused would make the control look permanently broken.
+   */
+  planImportAsset: Result<AssetImportOutcome> | null
+  /**
    * `null` — the default — means "behave like the real service": move the pointer to the named
    * cue, remember it as `lastFired`, and record it as fired.
    */
@@ -347,6 +356,7 @@ export interface MockCalls {
   readonly planOpen: { path?: string }[]
   readonly planSave: { path?: string }[]
   readonly planImportDeck: { path?: string }[]
+  readonly planImportAsset: { paths?: readonly string[] }[]
   readonly planFireCue: { cueId: string }[]
   readonly planAdvance: number[]
   readonly planBack: number[]
@@ -1383,6 +1393,7 @@ function defaultResponses(): MockResponses {
     planOpen: null,
     planSave: null,
     planImportDeck: null,
+    planImportAsset: null,
     planFireCue: null,
     planAdvance: null,
     planBack: null,
@@ -1452,6 +1463,7 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     planOpen: [],
     planSave: [],
     planImportDeck: [],
+    planImportAsset: [],
     planFireCue: [],
     planAdvance: [],
     planBack: [],
@@ -1873,6 +1885,39 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
           dirty: true,
         }
         return Promise.resolve(ok(planSnapshot))
+      },
+      importAsset: (options) => {
+        calls.planImportAsset.push(options)
+        const scripted = responses.planImportAsset
+        if (scripted !== null) return Promise.resolve(scripted)
+
+        // One cue per requested path, typed by extension exactly as the real service does. With no
+        // paths supplied the real handler opens a dialog, which a fake cannot; it reports the
+        // cancelled-dialog shape instead — nothing added, nothing failed, `ok: true`.
+        const paths = options.paths ?? []
+        const added: Cue[] = paths.map((path, index) => {
+          const lower = path.toLowerCase()
+          const isVideo = ['.mp4', '.webm', '.m4v', '.mov', '.mkv'].some((extension) =>
+            lower.endsWith(extension),
+          )
+          const name = path.split(/[\\/]/).pop() ?? 'PLACEHOLDER'
+          return {
+            id: `cue-asset-${String(index + 1)}`,
+            type: isVideo ? ('media' as const) : ('slide' as const),
+            label: name.replace(/\.[^.]+$/, ''),
+            trigger: { mode: 'manual' as const },
+            payload: { asset: `${isVideo ? 'media' : 'slides'}/${name}` },
+          }
+        })
+
+        if (added.length > 0) {
+          planSnapshot = {
+            ...planSnapshot,
+            plan: { ...planSnapshot.plan, cues: [...planSnapshot.plan.cues, ...added] },
+            dirty: true,
+          }
+        }
+        return Promise.resolve(ok({ state: planSnapshot, added, failed: [] }))
       },
       fireCue: (options) => {
         calls.planFireCue.push(options)

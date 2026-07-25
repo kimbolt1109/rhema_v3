@@ -364,14 +364,45 @@ describe('media cues and the OBS write allowlist', () => {
     ])
   })
 
-  it('reports a media cue that names no OBS input, once the guard permits the request', async () => {
+  it('plays a media cue that names no OBS input on the overlay, without touching OBS', async () => {
+    // This is the route that makes "add a video" work at all. A media cue with no `obsInputName` is
+    // a file the operator copied into the plan, so it goes to the overlay's full-frame layer exactly
+    // as a slide does, and therefore never near the OBS write allowlist.
+    //
+    // `allowMedia: true` is the load-bearing part of the setup: even with the guard wide open this
+    // path must make ZERO OBS calls. If it ever starts routing through OBS, that fails here rather
+    // than on a Sunday — when widening the allowlist is the fix somebody would reach for.
     const harness = createHarness({ allowMedia: true })
     loadPlan(harness, [cue({ id: 'c-m2', type: 'media', payload: { asset: 'media/clip.mp4' } })])
 
     const fired = await harness.service.fireCue('c-m2')
-    expect(fired.ok).toBe(false)
-    if (fired.ok) return
-    expect(fired.error.message).toContain('no OBS media input')
+    expect(fired.ok).toBe(true)
+    expect(harness.overlay.commands).toEqual([
+      { channel: 'command', name: 'slide.show', payload: { src: 'file:///assets/media/clip.mp4' } }
+    ])
+    // Layer independence, same as a slide cue: the video touches the overlay and nothing else.
+    expect(harness.obs.calls).toEqual([])
+    expect(harness.camera.slots).toEqual([])
+  })
+
+  it('sends a video to the SAME overlay layer as a slide, so the two cannot both be up', async () => {
+    // A slide and a video are both full-frame content for the congregation screen, and only one of
+    // them can be on it. Sharing `slide.show` makes that mutual exclusion structural rather than a
+    // convention somebody has to remember — and it means hiding the slide layer is already the stop
+    // button for a video, audio included.
+    const harness = createHarness({ allowMedia: true })
+    loadPlan(harness, [
+      SLIDE_CUE,
+      cue({ id: 'c-m3', type: 'media', payload: { asset: 'media/clip.mp4' } })
+    ])
+
+    await harness.service.advance()
+    await harness.service.advance()
+
+    expect(harness.overlay.commands.map((command) => command.name)).toEqual([
+      'slide.show',
+      'slide.show'
+    ])
   })
 })
 

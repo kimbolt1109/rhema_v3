@@ -67,6 +67,26 @@ export interface PlanState {
   readonly lastFired: Cue | null
 }
 
+/** One file that could not be brought into the plan, and the reason an operator can act on. */
+export interface AssetImportFailure {
+  readonly sourcePath: string
+  readonly reason: string
+}
+
+/**
+ * What came of an "add image / video" request.
+ *
+ * Both halves are reported, always. `added` is what is now in the plan; `failed` is every file that
+ * was refused and why. A batch containing one legacy `.ppt`, one 2 GB export and three good images
+ * must not report plain success — the operator has to be told which three arrived and which two did
+ * not, rather than finding out mid-service that a cue points at nothing.
+ */
+export interface AssetImportOutcome {
+  readonly state: PlanState
+  readonly added: readonly Cue[]
+  readonly failed: readonly AssetImportFailure[]
+}
+
 export interface OverlayServerInfo {
   readonly running: boolean
   readonly host: string
@@ -112,6 +132,7 @@ export const IpcChannel = {
   planOpen: 'verger:plan:open',
   planSave: 'verger:plan:save',
   planImportDeck: 'verger:plan:import-deck',
+  planImportAsset: 'verger:plan:import-asset',
   planFireCue: 'verger:plan:fire-cue',
   planAdvance: 'verger:plan:advance',
   planBack: 'verger:plan:back',
@@ -217,6 +238,7 @@ export interface IpcRequest {
   [IpcChannel.planOpen]: { path?: string }
   [IpcChannel.planSave]: { path?: string }
   [IpcChannel.planImportDeck]: { path?: string }
+  [IpcChannel.planImportAsset]: { paths?: readonly string[] }
   [IpcChannel.planFireCue]: { cueId: string }
   [IpcChannel.planAdvance]: void
   [IpcChannel.planBack]: void
@@ -275,6 +297,7 @@ export interface IpcResponse {
   [IpcChannel.planOpen]: Result<PlanState>
   [IpcChannel.planSave]: Result<PlanState>
   [IpcChannel.planImportDeck]: Result<PlanState>
+  [IpcChannel.planImportAsset]: Result<AssetImportOutcome>
   [IpcChannel.planFireCue]: Result<PlanState>
   [IpcChannel.planAdvance]: Result<PlanState>
   [IpcChannel.planBack]: Result<PlanState>
@@ -388,8 +411,16 @@ export interface VergerApi {
     set(plan: ServicePlan): Promise<Result<PlanState>>
     open(options: { path?: string }): Promise<Result<PlanState>>
     save(options: { path?: string }): Promise<Result<PlanState>>
-    /** Convert a .pptx into one slide cue per slide. */
+    /** Convert a .pptx into one slide cue per slide. Appends to the plan; never replaces it. */
     importDeck(options: { path?: string }): Promise<Result<PlanState>>
+    /**
+     * Copy an image or a video into the plan's asset folder and append a cue for it.
+     *
+     * The file is COPIED rather than referenced, which is the whole point: a plan that pointed at
+     * `C:\Users\someone\Desktop\clip.mp4` would break the moment the USB stick reached the church
+     * PC. Omitting `paths` opens a file dialog in the main process.
+     */
+    importAsset(options: { paths?: readonly string[] }): Promise<Result<AssetImportOutcome>>
     fireCue(options: { cueId: string }): Promise<Result<PlanState>>
     advance(): Promise<Result<PlanState>>
     back(): Promise<Result<PlanState>>

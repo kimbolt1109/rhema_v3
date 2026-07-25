@@ -601,9 +601,14 @@
       "open": "Open…",
       "save": "Save",
       "import": "Import deck…",
+      "addAsset": "Add image / video…",
       "addCue": "Add cue",
       "advance": "Advance",
       "back": "Back"
+    },
+    "assets": {
+      "refused_one": "{{count}} file was not added:",
+      "refused_other": "{{count}} files were not added:"
     },
     "list": {
       "label": "Cues, in order",

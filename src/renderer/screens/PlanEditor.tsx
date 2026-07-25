@@ -23,7 +23,7 @@
  * - **Deleting a cue is a hold.** Standing Rule 6, via `HoldButton` in the editor panel.
  */
 
-import { FileUp, FolderOpen, Plus, Save, SkipBack, SkipForward } from 'lucide-react'
+import { FileUp, FolderOpen, ImagePlus, Plus, Save, SkipBack, SkipForward } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -42,6 +42,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 
+import type { AssetImportFailure } from '@shared/ipc'
 import type { Cue, CueType } from '@shared/plan'
 import { CUE_TYPES } from '@shared/plan'
 
@@ -89,6 +90,7 @@ export function PlanEditor(): React.JSX.Element {
   const open = usePlanStore((state) => state.open)
   const save = usePlanStore((state) => state.save)
   const importDeck = usePlanStore((state) => state.importDeck)
+  const importAsset = usePlanStore((state) => state.importAsset)
   const fireCue = usePlanStore((state) => state.fireCue)
   const advance = usePlanStore((state) => state.advance)
   const back = usePlanStore((state) => state.back)
@@ -103,6 +105,15 @@ export function PlanEditor(): React.JSX.Element {
     return unsubscribe
   }, [hydrate, subscribe])
 
+  /**
+   * Files the last "add image / video" refused, and why.
+   *
+   * Local rather than in the store because it is a transcript of one action, not app state: the next
+   * import replaces it and remounting the panel should forget it. The store already carries
+   * `lastError` for a request that failed outright; this is the PARTIAL success case, which is the one
+   * an operator would otherwise never find out about.
+   */
+  const [refusedAssets, setRefusedAssets] = useState<readonly AssetImportFailure[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [newCueType, setNewCueType] = useState<CueType>('slide')
 
@@ -283,7 +294,49 @@ export function PlanEditor(): React.JSX.Element {
           >
             {t('plan.actions.import')}
           </Button>
+          {/*
+            Not gated on `importer.available`. Copying a file in needs no PowerPoint and no
+            LibreOffice — only a saved plan to copy it beside, and the main process says so when
+            there isn't one. Disabling this alongside the deck button would hide the one route that
+            still works on a machine with no converter at all.
+          */}
+          <Button
+            variant="secondary"
+            icon={ImagePlus}
+            data-testid="plan-add-asset"
+            disabled={importing || !bridgeAvailable}
+            onClick={() => {
+              flush()
+              void importAsset().then((result) => {
+                setRefusedAssets(result.ok ? result.value.failed : [])
+              })
+            }}
+          >
+            {t('plan.actions.addAsset')}
+          </Button>
         </div>
+
+        {refusedAssets.length === 0 ? null : (
+          <div
+            role="alert"
+            data-testid="asset-import-refused"
+            className="flex flex-col gap-1 rounded-glass border border-panic/60 bg-surface-2 p-3"
+          >
+            <p className="text-sm font-semibold text-panic">
+              {t('plan.assets.refused', { count: refusedAssets.length })}
+            </p>
+            <ul className="flex flex-col gap-1">
+              {refusedAssets.map((failure) => (
+                <li
+                  key={failure.sourcePath}
+                  className="select-text break-all font-mono text-xs text-text-muted"
+                >
+                  {failure.sourcePath} — {failure.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {importer.available ? (
           <p className="font-mono text-xs text-text-muted">

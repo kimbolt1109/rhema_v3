@@ -14,7 +14,7 @@
  * | `lowerthird` | overlay `lowerThird.show`                                                |
  * | `scripture`  | overlay `scripture.show` with the REFERENCE and an EMPTY text            |
  * | `scene`      | the camera service when the name is a camera slot, else OBS by name      |
- * | `media`      | refused — see below                                                      |
+ * | `media`      | overlay `slide.show` with the asset URL — or refused, see below           |
  * | `action`     | the matching overlay command (`clearAll`, `slide.hide`, …)               |
  *
  * ### Scripture cues carry a reference, never verse text (Standing Rule 4)
@@ -23,14 +23,20 @@
  * to. The overlay is given the reference and an empty string; Phase 8 resolves the text from a
  * licensed API at fire time. Nothing in Verger authors, stores, or ships verse text.
  *
- * ### Media cues are refused, on purpose
+ * ### Media cues take one of two routes, and the OBS one is still refused
  *
- * Playing an OBS media source needs `TriggerMediaInputAction`, and that request is not on
- * `ALLOWED_WRITE_REQUESTS` in `src/main/obs/ObsClient.ts` — a deliberate seven-name list that
- * keeps Verger from rearranging the operator's OBS (Standing Rule 2). This module therefore
- * ASKS the guard rather than assuming, and when the answer is no it returns a clear `Err` saying
- * the allowlist would have to be widened in a reviewed change. A phase does not get to quietly
- * punch through that guard, so this one does not.
+ * A `media` cue with **no** `obsInputName` is a file the operator added to the plan. It plays on the
+ * overlay's full-frame slide layer, which asks nothing of OBS beyond the browser source already in
+ * every scene — so it never goes near the write allowlist. That is how "add a video" works.
+ *
+ * A `media` cue that **does** name an `obsInputName` is asking Verger to drive a media source inside
+ * the operator's own OBS, and that needs `TriggerMediaInputAction`, which is not on
+ * `ALLOWED_WRITE_REQUESTS` in `src/main/obs/ObsClient.ts` — a deliberate seven-name list that keeps
+ * Verger from rearranging the operator's OBS (Standing Rule 2). This module therefore ASKS the guard
+ * rather than assuming, and when the answer is no it returns a clear `Err` saying the allowlist would
+ * have to be widened in a reviewed change. A phase does not get to quietly punch through that guard,
+ * so this one does not — and note that widening it would buy nothing for the "add a video" case
+ * anyway, because that OBS action only restarts a source somebody had already added by hand.
  *
  * ## Advance moves forward; back only moves the pointer
  *
@@ -44,12 +50,16 @@
  * Every method returns a {@link Result}; every seam call and every subscriber is wrapped.
  */
 
+import { randomUUID } from 'node:crypto'
+import { basename, extname } from 'node:path'
+
 import type { z } from 'zod'
 
 import { isAllowedRequest } from '@main/obs/ObsClient'
 import { CAMERA_SLOTS } from '@shared/camera'
 import type { CameraSlot } from '@shared/camera'
 import type {
+  AssetImportOutcome,
   DeckImportProgress,
   DeckImporterStatus,
   PlanState,
@@ -71,6 +81,8 @@ import type { Cue, PlanPosition, ServicePlan } from '@shared/plan'
 import { ErrorCode, err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
 
+import { copyAssetsIntoPlan } from './assetImport'
+import type { CopiedAsset } from './assetImport'
 import { resolveAssetDir, validatePlanDocument } from './planFile'
 import type { LoadedPlan } from './planFile'
 
@@ -192,6 +204,26 @@ type CuePayloadKind = keyof typeof cuePayloadSchemas
 
 /** The validated payload shape for one cue type. */
 type CuePayloadFor<K extends CuePayloadKind> = z.infer<(typeof cuePayloadSchemas)[K]>
+
+/**
+ * The cue an imported file becomes.
+ *
+ * An image becomes a `slide` cue and a video becomes a `media` cue; both land on the overlay's
+ * full-frame layer when fired (see {@link PlanService.fireMedia}). The label is the filename without
+ * its extension, because that is the only name the operator has ever had for this file — a generated
+ * "Media 7" would be unrecognisable in a cue list at 10:58 on a Sunday.
+ */
+export function cueForCopiedAsset(asset: CopiedAsset): Cue {
+  const stem = basename(asset.relative, extname(asset.relative)).trim()
+  return {
+    id: randomUUID(),
+    type: asset.kind === 'image' ? 'slide' : 'media',
+    // `label` is bounded 1..200 by the schema, and a file named just `.png` leaves an empty stem.
+    label: (stem.length === 0 ? asset.kind : stem).slice(0, 200),
+    trigger: { mode: 'manual' },
+    payload: { asset: asset.relative }
+  }
+}
 
 /** The obs-websocket request a media cue would need. NOT on the allowlist — see the docblock. */
 export const MEDIA_TRIGGER_REQUEST = 'TriggerMediaInputAction'
@@ -527,6 +559,71 @@ export class PlanService {
     }
   }
 
+  /**
+   * Copy images and videos into the plan's asset folder and append a cue for each.
+   *
+   * ## Why the file is copied rather than referenced
+   *
+   * A cue pointing at `C:\Users\someone\Desktop\clip.mp4` would work on the machine it was authored
+   * on and nowhere else — and "nowhere else" includes the church PC this whole app exists to be
+   * carried to on a USB stick. Copying into `assetDir` keeps the plan folder self-contained, which is
+   * the same property that lets `plans\11am` be handed to a different computer and still work.
+   *
+   * ## Partial success is reported, not smoothed over
+   *
+   * `failed` carries every file that was refused, with a reason the operator can act on, and the
+   * cues for the files that did arrive are appended anyway. Refusing a whole batch because one file
+   * was a 2 GB export would be the worse behaviour; so would reporting plain success and letting them
+   * discover the gap mid-service.
+   *
+   * Appends, exactly like {@link PlanService.importDeck}. Nothing is ever replaced.
+   */
+  async importAsset(paths: readonly string[]): Promise<Result<AssetImportOutcome>> {
+    if (this.disposed) return this.disposedError()
+    if (paths.length === 0) {
+      return err(ErrorCode.INVALID_ARG, 'no file was chosen to add')
+    }
+
+    const planPath = this.path
+    if (planPath === null) {
+      return err(
+        ErrorCode.NOT_CONFIGURED,
+        'save the plan before adding images or video — the files are copied in beside the plan file'
+      )
+    }
+
+    const assetDir = resolveAssetDir(planPath, this.plan)
+    if (!assetDir.ok) return assetDir
+
+    const outcome = await this.attemptAsync(
+      async () => ok(await copyAssetsIntoPlan({ assetDir: assetDir.value, paths })),
+      'the files could not be copied into the plan folder'
+    )
+    if (!outcome.ok) return outcome
+
+    const added = outcome.value.copied.map(cueForCopiedAsset)
+
+    if (added.length > 0) {
+      const merged: ServicePlan = { ...this.plan, cues: [...this.plan.cues, ...added] }
+      const validated = validatePlanDocument(merged)
+      if (!validated.ok) {
+        this.log.error('the imported files did not produce a valid plan; nothing was changed', {
+          detail: validated.error.detail
+        })
+        return validated
+      }
+      this.plan = validated.value
+      this.dirty = true
+    }
+
+    this.log.info('imported plan assets', {
+      added: added.length,
+      failed: outcome.value.failed.length
+    })
+
+    return ok({ state: this.publish(), added, failed: outcome.value.failed })
+  }
+
   // -------------------------------------------------------------------------
   // Driving
   // -------------------------------------------------------------------------
@@ -767,6 +864,19 @@ export class PlanService {
     const payload = this.readPayload(cue, 'media')
     if (!payload.ok) return payload
 
+    const inputName = payload.value.obsInputName
+
+    // No OBS input named: this is a file the operator added to the plan, and it plays on the
+    // overlay's full-frame layer exactly as a slide does. That route asks nothing of OBS beyond the
+    // browser source already sitting in every scene, so it never goes near the write allowlist.
+    if (inputName === undefined || inputName.trim() === '') {
+      return this.fireOverlayMedia(cue, payload.value.asset)
+    }
+
+    // An input WAS named, so the operator is asking Verger to drive a media source inside their own
+    // OBS. That is precisely the case the allowlist exists for, and the refusal below stands
+    // unchanged: `TriggerMediaInputAction` restarts a source somebody already added to OBS, it
+    // cannot play a file Verger picked, so widening the list would buy the operator nothing here.
     if (!this.isObsRequestAllowed(MEDIA_TRIGGER_REQUEST)) {
       const message =
         `media cues cannot fire: OBS request "${MEDIA_TRIGGER_REQUEST}" is not on Verger's OBS ` +
@@ -779,15 +889,6 @@ export class PlanService {
       )
     }
 
-    const inputName = payload.value.obsInputName
-    if (inputName === undefined || inputName.trim() === '') {
-      return err(
-        ErrorCode.INVALID_ARG,
-        'this media cue names no OBS media input to play',
-        cue.id
-      )
-    }
-
     const called = await this.attemptAsync(
       () =>
         this.obs.call(MEDIA_TRIGGER_REQUEST, {
@@ -797,6 +898,42 @@ export class PlanService {
       'OBS could not play the media input'
     )
     return called.ok ? ok(undefined) : called
+  }
+
+  /**
+   * Put a video — or any full-frame media file — on the overlay's slide layer.
+   *
+   * The SAME layer as a slide, deliberately. A slide and a video are both full-frame content for the
+   * congregation screen and only one of them can be on it at a time, so one layer is the correct
+   * model rather than a shortcut: it makes "show a video" and "show a slide" mutually exclusive by
+   * construction instead of by convention. It also means the overlay's existing hide-the-slide-layer
+   * path is already the stop button for a video, audio included, which is the one thing an operator
+   * needs to be able to do instantly when a clip misbehaves on air.
+   */
+  private fireOverlayMedia(cue: Cue, asset: string): Result<void> {
+    const files = this.files
+    if (files === null) return this.noFilesError('play a video')
+
+    const planPath = this.path
+    if (planPath === null) {
+      return err(
+        ErrorCode.NOT_CONFIGURED,
+        'save the plan before playing media — media assets are resolved relative to the plan file',
+        cue.id
+      )
+    }
+
+    const url = this.attempt(
+      () => files.assetUrl(planPath, this.plan, asset),
+      'the media asset could not be resolved'
+    )
+    if (!url.ok) return url
+
+    return this.sendOverlay({
+      channel: 'command',
+      name: 'slide.show',
+      payload: { src: url.value }
+    })
   }
 
   private fireAction(cue: Cue): Result<void> {

@@ -9,7 +9,7 @@ video using its alpha channel.
 | --- | --- |
 | `overlay.html` | The page. Three sibling layer containers + the CSP. |
 | `overlay.css` | Broadcast styling, layer animations, the three lower-third templates. |
-| `overlay.js` | WebSocket client, declarative renderer, reconnect loop. |
+| `overlay.js` | WebSocket client, declarative renderer, slide image/video playback, reconnect loop. |
 | `protocol.js` | Hand-kept JS mirror of `src/shared/overlay.ts`. |
 
 ---
@@ -79,9 +79,9 @@ other scenes so all of them share a single source.
 | **Height** | `1080` | Match the canvas resolution. |
 | **Use custom frame rate** | off (inherit) | 30 fps is plenty for CSS transitions; there is nothing to gain from 60. |
 | **Custom CSS** | leave OBS's default | OBS pre-fills a rule that forces a transparent body. Harmless — `overlay.css` sets that itself and does not depend on it. Do **not** paste a `background-color` in here. |
-| **Shutdown source when not visible** | **OFF** | With it on, OBS tears the page down on every scene change and rebuilds it on the way back — the overlay would flicker on each camera cut. |
-| **Refresh browser when scene becomes active** | **OFF** | Same reason. The page would reload on every cut. It *would* resync correctly (that is the whole design), but it would visibly re-animate every layer while doing so. |
-| **Control audio via OBS** | off | The page has no audio. |
+| **Shutdown source when not visible** | **OFF** | With it on, OBS tears the page down on every scene change and rebuilds it on the way back — the overlay would flicker on each camera cut. A clip playing on the slide layer would also be torn down and restarted from the top by a camera cut. |
+| **Refresh browser when scene becomes active** | **OFF** | Same reason. The page would reload on every cut. It *would* resync correctly (that is the whole design), but it would visibly re-animate every layer while doing so, and restart any clip. |
+| **Control audio via OBS** | **ON** | **The page has audio now.** The slide layer plays video, and with this off the clip's sound goes to the machine's default output device instead of into OBS — so it is audible in the booth and absent from the stream. With it on, the Browser Source appears in the Audio Mixer with its own fader, which is also how the operator rides or kills a clip's volume live. |
 | **Page permissions** | default / "No access to OBS" | The page needs nothing from OBS. |
 
 Then, in **every** camera scene:
@@ -114,9 +114,9 @@ http://127.0.0.1:7320/overlay?debug=1
 ```
 
 `?debug=1` shows a small HUD in the top-left corner with the socket URL, connection state, the
-last-applied revision, and the last notable event. It is **off by default** so an operator who
-pastes the plain URL into OBS can never accidentally broadcast diagnostics. Never leave `?debug=1`
-on the URL that OBS uses.
+last-applied revision, the slide video's playback state, and the last notable event. It is **off by
+default** so an operator who pastes the plain URL into OBS can never accidentally broadcast
+diagnostics. Never leave `?debug=1` on the URL that OBS uses.
 
 Things to know while testing in a browser tab:
 
@@ -134,6 +134,48 @@ Things to know while testing in a browser tab:
   own when Verger starts again.
 - **Reduced motion** is honoured: with the OS "reduce motion" setting on, layers cross-fade in
   place instead of sliding.
+- **A clip may come up silent in a browser tab, and that is not a bug in the page.** The tab has had
+  no user gesture, so Chromium refuses autoplay-with-audio; the page retries muted and the HUD's
+  `video` row goes amber. Click anywhere on the tab once and fire the cue again — it will play with
+  sound. In OBS the first attempt succeeds, and the HUD row is green. If it is **red**, the clip is
+  not playing at all: check the console for the filename and re-encode it as H.264/AAC `.mp4`.
+
+## The slide layer plays video as well as stills
+
+`SlideState` is `{ visible, src }` and nothing more — there is no "kind" on the wire. `overlay.js`
+decides from the **extension** of `src` (`.mp4`, `.webm`, `.m4v`, `.mov`, `.mkv`, case-insensitive,
+`?query`/`#hash` ignored) whether to render the clip into the layer's single `<video>` or the still
+into one of its two cross-fading `<img>` frames. That list mirrors `VIDEO_EXTENSIONS` in
+`src/main/plan/assetImport.ts`, which is what the file picker accepts; **change the two together.**
+
+Video plays on the OVERLAY, not through OBS. `TriggerMediaInputAction` is not on Verger's OBS write
+allowlist (Standing Rule 2 — Verger never rearranges the operator's OBS), and it could only restart
+a media source the operator had already built by hand. The overlay is already composited over the
+camera and already serves the plan's asset folder at `/assets`, so the clip goes where the slide
+goes.
+
+What to expect:
+
+- **It plays automatically, with sound.** OBS runs its Chromium with
+  `--autoplay-policy=no-user-gesture-required`, so the with-audio attempt succeeds there. A plain
+  browser tab may refuse it, in which case the page retries **once muted** rather than sitting on a
+  frozen frame — the `video` row on the `?debug=1` HUD says which happened (green `playing + audio`,
+  amber `playing (muted)`, red `will not play`).
+- **Hiding the layer stops and releases the clip.** `slide.hide` and `clearAll` pause it, detach the
+  file and drop the decoder. This is not optional politeness: a hidden `<video>` that kept playing
+  would keep sending audio to the congregation after the operator took it off screen.
+- **Re-showing a clip starts it from the top.** There is no resume, and no pause control — the
+  protocol has `slide.show` and `slide.hide` and that is the whole vocabulary. Re-firing a cue while
+  the clip is *still playing* does nothing; hide, then show, to restart it.
+- **When a clip ends, its last frame stays up** until the operator hides the layer. The server owns
+  visibility and the page never invents a command it was not sent.
+- **Containers are the browser's business, not ours.** Chromium plays H.264/AAC MP4 and WebM
+  reliably; `.mkv`, and `.mov` carrying anything exotic, often will not decode even though the
+  importer accepted the file. That is reported, never silent: the previous slide stays on air, the
+  HUD shows `load failed`, and the console names the file. **Prefer `.mp4` (H.264/AAC) or `.webm`
+  for anything that has to work on a Sunday.**
+- **Letterbox bars are transparent, not black.** Everything on this layer is `object-fit: contain`,
+  so a clip that is not 16:9 shows the camera around it rather than black bars.
 
 ## The three lower-third templates
 
@@ -161,3 +203,6 @@ Adding a fourth means adding it to `LOWER_THIRD_TEMPLATES` in **both** `src/shar
    enforces this, and it should stay that way.
 5. Never author Bible verse text or song lyrics into these files, including as placeholder content
    (Standing Rule 4). Every string on screen arrives at runtime.
+6. **Hiding the slide layer must release the `<video>`** — pause it, drop its `src`, `load()` it
+   empty. Making it invisible is not enough: audio from a hidden clip keeps going out to the
+   congregation, and it is the one bug on this page that the operator can hear but not see.

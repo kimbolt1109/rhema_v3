@@ -922,3 +922,76 @@ Verification, all run this session:
 
 Still owed to the on-site test, unchanged from Cycle 11: a real OBS connection, a real go-live with
 recording confirmed, real speech against a live mic, and the build remains unsigned.
+
+## Cycle 13 — Bring in any image or video, and play video on the overlay
+
+The operator asked whether they could upload any PowerPoint, video or image, not just the two decks
+that were prepared for them. The honest answer was one yes and two noes, so the two noes were built.
+
+Where it stood:
+
+- **`.pptx` — already worked.** `Plan → Import deck…` opens a real file dialog on any `.pptx`
+  anywhere on the machine, renders every slide through PowerPoint, and **appends** to the current
+  plan (so several decks can make one service). Two limits found and now documented rather than
+  discovered on a Sunday: legacy `.ppt` cannot be read (the importer unzips the file, and `.ppt` is
+  not a zip — Save As `.pptx` first), and a deck can only be imported once the plan has been **saved**,
+  because the images are written beside the plan file.
+- **Images — no route at all.** A `slide` cue could only name a file already sitting inside the plan's
+  asset folder, with the relative path typed by hand.
+- **Video — deliberately refused.** `PlanService` refused every `media` cue because
+  `TriggerMediaInputAction` is not on `ALLOWED_WRITE_REQUESTS` (Standing Rule 2). That refusal was
+  correct and stays; what it hid is that widening the allowlist would not have helped anyway, since
+  that OBS action only restarts a source somebody had already added to OBS by hand.
+
+Delivered:
+
+- **`Add image / video…`** in the plan editor. A file dialog, then the file is **copied into the
+  plan's own `assets` folder** (`slides/` for stills, `media/` for clips) and a cue is appended for
+  it. Copied rather than referenced on purpose: a cue pointing at someone's Desktop breaks the moment
+  the USB stick reaches the church PC. `src/main/plan/assetImport.ts` does the copying —
+  extension-classified, basename-sanitised, containment-proved, and **never overwriting** (a second
+  `logo.png` becomes `logo-2.png`, enforced by `COPYFILE_EXCL` rather than an exists-check, so two
+  imports cannot race). Hangul filenames survive intact; `.svg` is excluded as a scriptable document.
+- **Video plays on the overlay's full-frame slide layer.** `overlay.js` builds a `<video>` when the
+  source is a clip and keeps the existing cross-fading `<img>` pair otherwise. No protocol change:
+  `SlideState` is still `{visible, src}` and `slide.show`/`slide.hide` are still the only commands.
+  A slide and a video are both full-frame content and only one can be on screen, so sharing one layer
+  makes that exclusion structural instead of a convention — and it means **hiding the slide layer is
+  already the stop button for a video, audio included**, which is the one thing an operator must be
+  able to do instantly when a clip misbehaves on air.
+- **`media` cues now route by whether they name an OBS input.** No `obsInputName` — the "operator
+  added a file" case — goes to the overlay and never touches OBS. A cue that *does* name an input is
+  asking Verger to drive a source inside the operator's own OBS, and gets the same allowlist refusal
+  as before, unchanged. The test asserts **zero OBS calls** on the overlay path even with the guard
+  wide open, so a future change cannot quietly start routing video through OBS.
+- **Autoplay with audio, honestly.** Chromium blocks autoplay-with-audio without a gesture and an OBS
+  Browser Source has no gesture; OBS passes `--autoplay-policy=no-user-gesture-required` so it works
+  there. The page calls `play()`, retries once muted if that rejects, and reports which happened on
+  the `?debug=1` HUD — so "no audio" is distinguishable from "not playing" instead of both looking
+  like a frozen frame. The Browser Source needs **Control audio via OBS** on, now documented.
+- Docs: `RUNBOOK.md` and `obs/OBS-SETUP.md` cover the three import routes, the supported extensions,
+  the two `.pptx` limits, the audio setting, and video's place in the manual-fallback plan.
+
+One guard worth naming: the video extension list now exists in **three** places — the importer, the
+IPC boundary's dialog filter, and `overlay.js`'s own copy (the overlay page is loaded raw as a browser
+source and cannot import from `src/`, exactly like `protocol.js`). Drift there is silent and ugly: a
+new extension would import fine, become a `media` cue, fire, and render as a **broken image** on the
+congregation screen. `assetImport.test.ts` now reads `overlay.js` as text and compares the lists.
+
+Verification, all run this session:
+
+- **2145 unit tests green across 75 files** (was 2108 across 74; +36 for `assetImport`, +2 for the
+  media routing, +1 drift guard). `tsc` clean both projects, `npm run build` clean, i18n audit PASS,
+  and all **9 e2e tests** green against the real app.
+- **Proved end to end against the running app**, not just in units. A `.png` and a `.mp4` from outside
+  the plan folder were imported through the real IPC path: the image landed in `assets/slides/`, the
+  clip in `assets/media/`, both got the right cue type and a label from the filename, the grid
+  rendered the image tile, and the overlay server served it at
+  `http://127.0.0.1:7320/assets/slides/PLACEHOLDER%20logo.png` → **200, image/png, 161,249 bytes**
+  (note the space correctly percent-encoded). A `.txt` was refused at the boundary. Firing the media
+  cue made the overlay build a **`<video>`** with the right URL, clear the image frame, and report
+  `will not play` on the debug HUD — correct, because the test file was 18 bytes of text.
+- **NOT verified: decoding a real video.** There is no genuine video file on this machine, so the
+  element choice, the URL, the error path and the audio plumbing are proven but playback itself is
+  not. That is the first thing to try at church: add a real clip, fire it, and confirm both picture
+  and sound reach the stream.

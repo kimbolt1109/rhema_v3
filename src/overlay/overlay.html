@@ -38,6 +38,11 @@
                           — slide images are served by the overlay server itself. A `slide.src`
                             arriving from the control app can therefore never pull a remote
                             asset into a live broadcast.
+    - media-src   'self'  — slide VIDEO, served from the same plan asset folder as the stills.
+                            `default-src` already permits exactly this, so the directive changes
+                            no behaviour; it is stated because a clip is the only thing on this
+                            page that puts AUDIO into a live service, and where audio may be
+                            loaded from is a decision worth writing down rather than inheriting.
 
   `frame-ancestors` is deliberately absent: Chromium ignores it when it arrives via <meta> and
   logs an error for every page load. It belongs on the response header instead, which is the
@@ -48,7 +53,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Verger Overlay</title>
@@ -74,10 +79,28 @@
     -->
 
     <!-- ── Layer: slide ──────────────────────────────────────────────────────────────── -->
-    <!-- Two frames so a slide change cross-fades instead of flashing through transparent. -->
+    <!--
+      Two <img> frames so a slide change cross-fades instead of flashing through transparent, plus
+      exactly ONE <video> for the case where the cue points at a clip.
+
+      One video element is enough. A clip has nothing to dissolve into itself, and a second one
+      would hold a second decoder open for the sake of a transition nobody asked for. It is LAST in
+      source order so it paints OVER the frames rather than under them, which is what lets overlay.js
+      leave the outgoing still on screen for the whole of the clip's load — however long that takes
+      for a large file — and empty the frames only once the clip has a first frame to show.
+
+      `aria-hidden` here for the same reason the frames carry `alt=""` — the picture is decorative
+      to assistive tech and the meaning lives in the operator's cue label, so neither needs an
+      accessible name. The layer's own `aria-hidden` is the one that tracks visibility.
+
+      No `controls`, and deliberately no `autoplay` attribute: playback is started from overlay.js
+      so that the with-audio attempt, and its muted fallback, can be observed and reported instead
+      of failing silently inside the element.
+    -->
     <section id="slide" class="layer layer--slide" aria-hidden="true">
       <img class="slide__frame is-active" alt="" decoding="async" />
       <img class="slide__frame" alt="" decoding="async" />
+      <video class="slide__video" aria-hidden="true" playsinline preload="auto"></video>
     </section>
 
     <!-- ── Layer: scripture ──────────────────────────────────────────────────────────── -->
@@ -118,6 +141,12 @@
       <div class="debug__row"><span class="debug__key">socket</span><span class="debug__val" id="debug-socket">—</span></div>
       <div class="debug__row"><span class="debug__key">state</span><span class="debug__val" id="debug-status">starting</span></div>
       <div class="debug__row"><span class="debug__key">rev</span><span class="debug__val" id="debug-revision">—</span></div>
+      <!--
+        Its own row rather than a note in `last`, because it answers a question nothing else on this
+        page can: a clip that plays silently and a clip that does not play at all look identical on
+        the projector. Green = playing with audio, amber = playing muted, red = not playing.
+      -->
+      <div class="debug__row"><span class="debug__key">video</span><span class="debug__val" id="debug-video" data-video="idle">—</span></div>
       <div class="debug__row"><span class="debug__key">last</span><span class="debug__val" id="debug-note">—</span></div>
     </aside>
 

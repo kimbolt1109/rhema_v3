@@ -135,6 +135,7 @@ import type { Checkpoint, HealthSnapshot, SubsystemHealth } from '@shared/health
 import { IPC_CHANNEL_VALUES, IpcChannel, IpcEvent } from '@shared/ipc'
 import type {
   AppVersions,
+  AssetImportOutcome,
   DeckImportProgress,
   DeckImporterStatus,
   IpcChannelValue,
@@ -391,6 +392,8 @@ export interface PlanServiceLike {
   save(path: string): ClientCall<PlanState>
   /** Convert a .pptx at an absolute, already-validated path into one slide cue per slide. */
   importDeck(path: string): ClientCall<PlanState>
+  /** Copy images/videos at absolute, already-validated paths in, and append a cue for each. */
+  importAsset(paths: readonly string[]): ClientCall<AssetImportOutcome>
   /** Fire one cue by id. The operator's out-of-order override. */
   fireCue(cueId: string): ClientCall<PlanState>
   /** Fire the next cue. The SPACE key. */
@@ -1139,6 +1142,26 @@ const optionalPathArg: ArgValidator<{ path?: string }> = (raw) => {
   return ok(path === undefined ? {} : { path })
 }
 
+/**
+ * The envelope for `planImportAsset`.
+ *
+ * Bounded at 50 files per request. Not a guess: the dialog is single-select today, so anything past
+ * one path is a renderer that has been tampered with or a future multi-select, and a batch big enough
+ * to copy for minutes while the main process holds the plan is not something to accept silently.
+ */
+const optionalPathsSchema = z
+  .object({ paths: z.array(z.string().min(1).max(1024)).max(50).optional() })
+  .optional()
+
+const optionalPathsArg: ArgValidator<{ paths?: readonly string[] }> = (raw) => {
+  const parsed = optionalPathsSchema.safeParse(raw)
+  if (!parsed.success) {
+    return err('INVALID_ARG', 'the request payload failed validation', describeIssues(parsed.error))
+  }
+  const paths = parsed.data?.paths
+  return ok(paths === undefined ? {} : { paths })
+}
+
 // ---------------------------------------------------------------------------
 // ASR argument validation (BLUEPRINT.md §4 and §8)
 // ---------------------------------------------------------------------------
@@ -1666,6 +1689,29 @@ const PLAN_FILE_EXTENSIONS: readonly string[] = ['.json']
 
 /** Extensions `planImportDeck` accepts. */
 const DECK_FILE_EXTENSIONS: readonly string[] = ['.pptx']
+
+/**
+ * Extensions `planImportAsset` accepts — every still image and video the overlay can render.
+ *
+ * Kept here as well as in `assetImport.ts` on purpose, and they must agree: this list is what the
+ * native file dialog filters on and what `acceptPath` enforces at the process boundary, while
+ * `classifyAsset` decides which CUE TYPE the accepted file becomes. Two questions, two places,
+ * checked twice — a file that slipped past the dialog still has to pass the boundary.
+ */
+const ASSET_FILE_EXTENSIONS: readonly string[] = [
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.bmp',
+  '.avif',
+  '.mp4',
+  '.webm',
+  '.m4v',
+  '.mov',
+  '.mkv'
+]
 
 /** The real filesystem. Every failure mode — missing, unreadable, broken link — reads `missing`. */
 const nodeFilePathProbe: FilePathProbeLike = {
@@ -2645,6 +2691,22 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     return resolveCall(service.getState())
   }
 
+  /**
+   * The same, for `planImportAsset`, whose result is an {@link AssetImportOutcome} rather than a bare
+   * plan: nothing added, nothing failed, and the plan exactly as it was.
+   *
+   * Empty `failed` is the load-bearing part. A cancelled dialog is not a refused file, and reporting
+   * it as one would put "could not add" in front of an operator who simply changed their mind.
+   */
+  async function unchangedAssets(
+    service: PlanServiceLike
+  ): Promise<Result<AssetImportOutcome>> {
+    log.debug('an asset file dialog was cancelled; nothing changed', { what: 'import-asset' })
+    const state = await resolveCall(service.getState())
+    if (!state.ok) return state
+    return { ok: true, value: { state: state.value, added: [], failed: [] } }
+  }
+
   safeHandle(IpcChannel.planGet, noArg, async () => {
     if (plan === null) return planUnavailable()
     return resolveCall(plan.getState())
@@ -2719,6 +2781,46 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     if (!chosen.ok) return chosen
     if (chosen.value === null) return unchangedPlan(plan, 'import-deck')
     return resolveCall(plan.importDeck(chosen.value))
+  })
+
+  /**
+   * Copy an image or a video into the plan folder and append a cue for it.
+   *
+   * Every path is put through `acceptPath` even when the operator picked it from our own dialog: the
+   * renderer is the untrusted side of this boundary, and `{ paths: ['C:\\Windows\\System32\\x.dll'] }`
+   * is a message anybody with the devtools open can send. So each one must be an absolute, existing
+   * file whose extension is on {@link ASSET_FILE_EXTENSIONS} before the service sees it — and the
+   * service then re-checks containment when it copies, because two cheap checks in different places
+   * is how a traversal stops being one missed `..` away.
+   *
+   * The dialog is single-select, so a cancelled dialog yields no paths at all. That is reported the
+   * same way `unchangedPlan` reports a cancelled open — `ok: true`, nothing added, nothing failed.
+   * Backing out of a file picker is not an error and must never reach the operator as a red banner.
+   */
+  safeHandle(IpcChannel.planImportAsset, optionalPathsArg, async ({ paths }) => {
+    if (plan === null) return planUnavailable()
+
+    const supplied = paths ?? []
+    if (supplied.length === 0) {
+      const chosen = await choosePath({
+        supplied: undefined,
+        use: 'read',
+        extensions: ASSET_FILE_EXTENSIONS,
+        title: 'Add an image or a video',
+        filterName: 'Images and video'
+      })
+      if (!chosen.ok) return chosen
+      if (chosen.value === null) return unchangedAssets(plan)
+      return resolveCall(plan.importAsset([chosen.value]))
+    }
+
+    const accepted: string[] = []
+    for (const candidate of supplied) {
+      const checked = acceptPath(candidate, ASSET_FILE_EXTENSIONS, 'read', filePaths)
+      if (!checked.ok) return checked
+      accepted.push(checked.value)
+    }
+    return resolveCall(plan.importAsset(accepted))
   })
 
   safeHandle(IpcChannel.planFireCue, fireCueArg, async ({ cueId }) => {
