@@ -183,20 +183,20 @@ export function SubsystemLight({
         <p
           className={clsx(
             'font-semibold uppercase leading-tight tracking-wide text-text',
-            large ? 'text-sm' : 'text-xs',
+            large ? 'text-micro' : 'text-micro',
           )}
         >
           {name}
         </p>
         {/* The words carry the meaning; the tint only reinforces them. */}
-        <p className={clsx('leading-tight', style.tone, large ? 'text-base' : 'text-xs')}>
+        <p className={clsx('leading-tight', style.tone, large ? 'text-label font-normal' : 'text-meta')}>
           <span data-testid={`health-level-${subsystem.id}`}>{levelLabel}</span>
           {timed ? (
             <span className="whitespace-nowrap"> · {t('health.forDuration', { duration })}</span>
           ) : null}
         </p>
         {large ? (
-          <p className="mt-0.5 truncate text-xs text-text-muted">{subsystem.detail}</p>
+          <p className="mt-0.5 truncate text-meta text-text-muted">{subsystem.detail}</p>
         ) : null}
       </div>
     </div>

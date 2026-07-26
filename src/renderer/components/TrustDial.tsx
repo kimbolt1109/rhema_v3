@@ -57,8 +57,8 @@ export function TrustDial(): React.JSX.Element {
       className="flex flex-col gap-4 rounded-glass border border-border bg-surface p-4"
     >
       <div>
-        <h2 className="text-base font-semibold text-text">{t('cue.trust.title')}</h2>
-        <p className="mt-1 max-w-2xl text-sm text-text-muted">{t('cue.trust.subtitle')}</p>
+        <h2 className="text-title font-semibold text-text">{t('cue.trust.title')}</h2>
+        <p className="mt-1 max-w-2xl text-body text-text-muted">{t('cue.trust.subtitle')}</p>
       </div>
 
       {panicked ? (
@@ -69,11 +69,11 @@ export function TrustDial(): React.JSX.Element {
           data-testid="panic-active"
           className="rounded-glass border-2 border-panic bg-panic/10 p-3"
         >
-          <p className="text-base font-semibold uppercase tracking-wide text-panic">
+          <p className="text-label font-semibold uppercase tracking-wide text-panic">
             {t('cue.panic.panickedTitle')}
           </p>
-          <p className="mt-1 text-sm text-text">{t('cue.panic.panickedBody')}</p>
-          <ul className="mt-2 space-y-1 text-xs text-text-muted">
+          <p className="mt-1 text-body text-text">{t('cue.panic.panickedBody')}</p>
+          <ul className="mt-2 space-y-1 text-meta text-text-muted">
             <li>{t('cue.panic.notStream')}</li>
             <li>{t('cue.panic.notRecording')}</li>
             <li>{t('cue.panic.notScreen')}</li>
@@ -85,12 +85,13 @@ export function TrustDial(): React.JSX.Element {
             onClick={() => {
               void resume()
             }}
-            className="mt-3 inline-flex min-h-touch-lg items-center gap-2 rounded-glass border border-accent-hover bg-accent px-6 text-base font-semibold text-text shadow-glow hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted disabled:shadow-none"
+            // Outlined cap: `bg-accent` is chalk since the restyle, so this label measured 1.37:1.
+            className="mt-3 inline-flex min-h-touch-lg items-center gap-2 rounded-glass border border-accent bg-surface-2 px-6 text-label font-semibold text-text shadow-edge hover:bg-surface-3 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted disabled:shadow-none"
           >
             <Play aria-hidden="true" className="h-5 w-5 shrink-0" />
             {t('cue.panic.resume')}
           </button>
-          <p className="mt-2 text-xs text-text-muted">{t('cue.panic.resumeHint')}</p>
+          <p className="mt-2 text-meta text-text-muted">{t('cue.panic.resumeHint')}</p>
         </div>
       ) : null}
 
@@ -119,30 +120,29 @@ export function TrustDial(): React.JSX.Element {
               }}
               className={clsx(
                 'flex min-h-touch-lg flex-col items-start gap-1 rounded-glass border-2 p-3 text-start',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                 'disabled:cursor-not-allowed disabled:opacity-60',
                 selected ? 'border-accent bg-surface-2' : 'border-border bg-surface-2/50',
               )}
             >
               <span className="flex flex-wrap items-center gap-2">
-                <span className="text-base font-semibold text-text">{t(`cue.mode.${mode}`)}</span>
+                <span className="text-label font-semibold text-text">{t(`cue.mode.${mode}`)}</span>
                 {recommended ? (
                   <>
-                    <span className="rounded-glass border border-accent/60 px-2 py-0.5 text-[11px] font-medium text-accent">
+                    <span className="rounded-glass border border-accent/60 px-2 py-0.5 text-micro font-medium text-accent">
                       {t('cue.modeBadge.default')}
                     </span>
-                    <span className="rounded-glass border border-accent/60 px-2 py-0.5 text-[11px] font-medium text-accent">
+                    <span className="rounded-glass border border-accent/60 px-2 py-0.5 text-micro font-medium text-accent">
                       {t('cue.modeBadge.recommended')}
                     </span>
                   </>
                 ) : null}
               </span>
-              <span className="text-xs text-text-muted">{t(`cue.modeDetail.${mode}`)}</span>
+              <span className="text-meta text-text-muted">{t(`cue.modeDetail.${mode}`)}</span>
               {mode === 'auto' ? (
                 // Always visible, never a tooltip. Somebody choosing Auto has to have been told.
                 <span
                   data-testid="trust-auto-caution"
-                  className="mt-1 rounded-glass border border-panic/50 bg-panic/10 p-2 text-xs text-panic"
+                  className="mt-1 rounded-glass border border-panic/50 bg-panic/10 p-2 text-meta text-panic"
                 >
                   {t('cue.trust.autoCaution')}
                 </span>
@@ -152,12 +152,12 @@ export function TrustDial(): React.JSX.Element {
         })}
       </div>
 
-      <p className="text-xs text-text-muted" data-testid="trust-current">
+      <p className="text-meta text-text-muted" data-testid="trust-current">
         {panicked
           ? t('cue.panic.lockedWhilePanicked')
           : t('cue.trust.current', { mode: t(`cue.mode.${engine.mode}`) })}
       </p>
-      <p className="text-xs text-text-muted">{t('cue.trust.perCueNote')}</p>
+      <p className="text-meta text-text-muted">{t('cue.trust.perCueNote')}</p>
 
       {/* Physically separated: its own block, its own border, well below the mode buttons. */}
       <div
@@ -168,22 +168,22 @@ export function TrustDial(): React.JSX.Element {
       >
         <div className="flex items-center gap-2">
           <OctagonAlert aria-hidden="true" className="h-5 w-5 shrink-0 text-panic" />
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-panic">
+          <h3 className="text-micro font-semibold uppercase tracking-wide text-panic">
             {t('cue.panic.title')}
           </h3>
         </div>
-        <p className="max-w-2xl text-sm text-text">{t('cue.panic.does')}</p>
+        <p className="max-w-2xl text-body text-text">{t('cue.panic.does')}</p>
 
         <div className="max-w-2xl rounded-glass border border-border bg-surface-2 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          <p className="text-micro font-semibold uppercase tracking-wide text-text-muted">
             {t('cue.panic.doesNotLabel')}
           </p>
-          <ul className="mt-1 space-y-1 text-sm text-text">
+          <ul className="mt-1 space-y-1 text-body text-text">
             <li>{t('cue.panic.notStream')}</li>
             <li>{t('cue.panic.notRecording')}</li>
             <li>{t('cue.panic.notScreen')}</li>
           </ul>
-          <p className="mt-2 text-xs text-text-muted">{t('cue.panic.reassurance')}</p>
+          <p className="mt-2 text-meta text-text-muted">{t('cue.panic.reassurance')}</p>
         </div>
 
         <HoldButton

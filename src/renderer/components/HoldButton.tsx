@@ -234,7 +234,6 @@ export function HoldButton({
           // colour in this theme, and bone measures 12.77:1 on the tint where red measured 4.1:1.
           'overflow-hidden rounded-panel border-2 border-panic bg-panic/12 px-6',
           'text-label uppercase tracking-[0.08em] text-text',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-panic focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim',
           className,
         )}
@@ -255,7 +254,7 @@ export function HoldButton({
             <span>{label}</span>
             {/* `aria-hidden` because the accessible name already states the hold duration;
                 repeating it would make the name and the visible label disagree. */}
-            <span aria-hidden="true" className="text-xs font-normal normal-case text-text-muted">
+            <span aria-hidden="true" className="text-meta font-normal normal-case text-text-muted">
               {t('holdButton.hint', { seconds })}
             </span>
           </span>

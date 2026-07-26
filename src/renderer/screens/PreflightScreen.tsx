@@ -195,8 +195,8 @@ export function PreflightScreen(): React.JSX.Element {
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-text">Preflight</h1>
-          <p className="mt-1 max-w-2xl text-sm text-text-muted">
+          <h1 className="text-readout font-semibold text-text">Preflight</h1>
+          <p className="mt-1 max-w-2xl text-body text-text-muted">
             A quick check that everything is ready before the service. Fix anything red, then use the
             test buttons to confirm the lower-third and cameras on the real screen.
           </p>
@@ -207,7 +207,7 @@ export function PreflightScreen(): React.JSX.Element {
       </header>
 
       <div
-        className={`rounded-glass-lg border p-4 text-sm ${
+        className={`rounded-glass-lg border p-4 text-body ${
           failing > 0
             ? 'border-panic/50 bg-surface text-panic'
             : warning > 0
@@ -229,8 +229,8 @@ export function PreflightScreen(): React.JSX.Element {
       </section>
 
       <section aria-label="Hardware tests" className="rounded-glass-lg border border-border bg-surface p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">On-screen tests</h2>
-        <p className="mt-1 text-xs text-text-muted">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">On-screen tests</h2>
+        <p className="mt-1 text-meta text-text-muted">
           Watch the congregation screen (the OBS output) while you run these.
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
@@ -254,7 +254,7 @@ export function PreflightScreen(): React.JSX.Element {
           </Button>
         </div>
         {!serverInfo.running ? (
-          <p className="mt-3 text-xs text-text-muted">
+          <p className="mt-3 text-meta text-text-muted">
             The lower-third test needs the overlay server running and a Browser Source attached in OBS.
           </p>
         ) : null}
@@ -285,10 +285,10 @@ function CheckRow({ check }: { check: Check }): React.JSX.Element {
     <div className="flex min-h-touch items-start gap-3 rounded-glass border border-border bg-surface px-4 py-3">
       <Icon aria-hidden="true" className={`mt-0.5 h-5 w-5 shrink-0 ${tone}`} />
       <div className="min-w-0">
-        <p className="text-sm font-medium text-text">{check.label}</p>
-        <p className="mt-0.5 select-text break-words text-xs text-text-muted">{check.detail}</p>
+        <p className="text-body font-medium text-text">{check.label}</p>
+        <p className="mt-0.5 select-text break-words text-meta text-text-muted">{check.detail}</p>
         {check.fix !== undefined ? (
-          <p className="mt-1 break-words text-xs text-accent-2">→ {check.fix}</p>
+          <p className="mt-1 break-words text-meta text-accent-2">→ {check.fix}</p>
         ) : null}
       </div>
     </div>

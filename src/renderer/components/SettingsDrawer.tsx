@@ -237,12 +237,12 @@ export function SettingsDrawer({
       >
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-4 py-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h2 className="text-base font-semibold tracking-tight text-text">
+            <h2 className="text-title font-semibold tracking-tight text-text">
               {t('console.drawer.title')}
             </h2>
-            <span className="text-xs text-text-muted">{t('console.drawer.closeHint')}</span>
+            <span className="text-meta text-text-muted">{t('console.drawer.closeHint')}</span>
             {/* Selectable: the point of this line is that it can be pasted into a bug report. */}
-            <p className="select-text font-mono text-[11px] text-text-muted">
+            <p className="select-text font-mono text-micro font-normal text-text-muted">
               {versions === null
                 ? t('app.versionsUnknown')
                 : t('app.versions', {
@@ -257,7 +257,7 @@ export function SettingsDrawer({
             data-testid="settings-drawer-close"
             aria-label={t('console.drawer.close')}
             onClick={onClose}
-            className="flex min-h-touch min-w-touch items-center justify-center rounded-glass border border-border bg-surface-2 text-text transition-colors duration-150 hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="flex min-h-touch min-w-touch items-center justify-center rounded-glass border border-border bg-surface-2 text-text transition-colors duration-150 hover:border-accent/60"
           >
             <X aria-hidden="true" className="h-5 w-5" />
           </button>
@@ -298,8 +298,7 @@ export function SettingsDrawer({
                     }
                   }}
                   className={clsx(
-                    'flex min-h-touch w-full items-center rounded-glass border px-3 text-left text-sm font-medium transition-colors duration-150',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                    'flex min-h-touch w-full items-center rounded-glass border px-3 text-left text-label font-medium transition-colors duration-150',
                     selected
                       ? 'border-accent bg-surface-2 text-text'
                       : 'border-transparent text-text-muted hover:text-text',

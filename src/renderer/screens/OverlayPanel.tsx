@@ -96,8 +96,8 @@ export function OverlayPanel(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('overlay.title')}</h1>
-        <p className="mt-1 max-w-2xl text-sm text-text-muted">{t('overlay.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('overlay.title')}</h1>
+        <p className="mt-1 max-w-2xl text-body text-text-muted">{t('overlay.subtitle')}</p>
       </header>
 
       {!bridgeAvailable ? (
@@ -106,7 +106,7 @@ export function OverlayPanel(): React.JSX.Element {
           className="rounded-glass-lg border border-panic/50 bg-surface p-5"
         >
           <h2 className="font-semibold text-panic">{t('overlay.bridgeUnavailable.title')}</h2>
-          <p className="mt-2 max-w-2xl text-sm text-text-muted">
+          <p className="mt-2 max-w-2xl text-body text-text-muted">
             {t('overlay.bridgeUnavailable.body')}
           </p>
         </section>
@@ -124,7 +124,7 @@ export function OverlayPanel(): React.JSX.Element {
             <CircleAlert aria-hidden="true" className="h-5 w-5 shrink-0" />
             {t('overlay.warning.noClientsTitle')}
           </h2>
-          <p className="mt-2 max-w-2xl text-sm text-text-muted">
+          <p className="mt-2 max-w-2xl text-body text-text-muted">
             {t('overlay.warning.noClientsBody')}
           </p>
         </section>
@@ -152,7 +152,7 @@ export function OverlayPanel(): React.JSX.Element {
         />
 
         <fieldset className="flex flex-col gap-2">
-          <legend className="text-sm font-medium text-text">
+          <legend className="text-label font-medium text-text">
             {t('overlay.lowerThird.template')}
           </legend>
           <div className="flex flex-wrap gap-2">
@@ -161,7 +161,7 @@ export function OverlayPanel(): React.JSX.Element {
                 key={option}
                 className={clsx(
                   'flex min-h-touch cursor-pointer items-center gap-2 rounded-glass border px-4',
-                  'text-sm text-text',
+                  'text-label text-text',
                   option === template ? 'border-accent bg-surface-2' : 'border-border',
                 )}
               >
@@ -283,7 +283,7 @@ export function OverlayPanel(): React.JSX.Element {
       </LayerSection>
 
       {lastError !== null ? (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -299,10 +299,10 @@ export function OverlayPanel(): React.JSX.Element {
         // slipping distance of a SHOW button.
         className="mt-10 flex flex-col items-start gap-3 rounded-glass-lg border-2 border-dashed border-panic/50 bg-surface p-5"
       >
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-panic">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-panic">
           {t('overlay.clear.title')}
         </h2>
-        <p className="max-w-2xl text-sm text-text-muted">{t('overlay.clear.description')}</p>
+        <p className="max-w-2xl text-body text-text-muted">{t('overlay.clear.description')}</p>
         <HoldButton
           id="overlay-clear-all"
           label={t('overlay.clear.label')}
@@ -349,7 +349,7 @@ function ServerBlock(): React.JSX.Element {
           aria-hidden="true"
           className={clsx('h-4 w-4 shrink-0', serverInfo.running ? 'text-live' : 'text-panic')}
         />
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
           {t('overlay.server.title')}
         </h2>
       </div>
@@ -370,14 +370,14 @@ function ServerBlock(): React.JSX.Element {
       </dl>
 
       <div className="mt-4 rounded-glass border border-accent/50 bg-surface-2 p-4">
-        <p id={urlId} className="text-sm font-semibold text-text">
+        <p id={urlId} className="text-body font-semibold text-text">
           {t('overlay.server.obsUrlLabel')}
         </p>
-        <p className="mt-1 text-xs text-text-muted">{t('overlay.server.obsUrlHint')}</p>
+        <p className="mt-1 text-meta text-text-muted">{t('overlay.server.obsUrlHint')}</p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <code
             data-testid="overlay-page-url"
-            className="select-text break-all rounded-glass border border-border bg-background px-3 py-2 font-mono text-sm text-accent-2"
+            className="select-text break-all rounded-glass border border-border bg-background px-3 py-2 font-mono text-body text-accent-2"
           >
             {serverInfo.pageUrl}
           </code>
@@ -391,7 +391,7 @@ function ServerBlock(): React.JSX.Element {
       </div>
 
       {serverInfo.lastError !== null ? (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="mt-3 flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">{serverInfo.lastError}</span>
         </p>
@@ -432,10 +432,10 @@ function StateReadout(): React.JSX.Element {
       className="rounded-glass-lg border border-border bg-surface p-5"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
           {t('overlay.readout.title')}
         </h2>
-        <p className="font-mono text-xs text-text-muted" data-testid="overlay-revision">
+        <p className="font-mono text-meta text-text-muted" data-testid="overlay-revision">
           {t('overlay.readout.revision', { revision: state.revision })}
         </p>
       </div>
@@ -448,7 +448,7 @@ function StateReadout(): React.JSX.Element {
             data-layer-visible={row.visible ? 'true' : 'false'}
             className="flex min-h-touch flex-wrap items-center justify-between gap-3 rounded-glass border border-border bg-surface-2 px-3 py-2"
           >
-            <span className="flex items-center gap-2 text-sm text-text">
+            <span className="flex items-center gap-2 text-body text-text">
               {row.visible ? (
                 <Eye aria-hidden="true" className="h-4 w-4 shrink-0 text-live" />
               ) : (
@@ -458,12 +458,12 @@ function StateReadout(): React.JSX.Element {
             </span>
             <span className="flex min-w-0 flex-wrap items-center gap-3">
               {row.summary.length > 0 ? (
-                <span className="truncate text-xs text-text-muted">{row.summary}</span>
+                <span className="truncate text-meta text-text-muted">{row.summary}</span>
               ) : null}
               {/* Text, not colour alone — the operator reads this from across a dark room. */}
               <span
                 className={clsx(
-                  'rounded-glass border px-2 py-0.5 text-xs font-medium',
+                  'rounded-glass border px-2 py-0.5 text-meta font-medium',
                   row.visible ? 'border-live/60 text-live' : 'border-border text-text-muted',
                 )}
               >
@@ -493,7 +493,7 @@ function LayerSection({
     >
       <div className="flex items-center gap-2">
         <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted" />
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">{title}</h2>
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">{title}</h2>
       </div>
       {children}
     </section>
@@ -552,7 +552,7 @@ function TextArea({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-text">
+      <label htmlFor={id} className="text-label font-medium text-text">
         {label}
       </label>
       <textarea
@@ -566,11 +566,10 @@ function TextArea({
         }}
         className={clsx(
           'w-full select-text rounded-glass border border-border bg-surface-2 px-3 py-2',
-          'text-base text-text placeholder:text-text-muted/70',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'text-label font-normal text-text placeholder:text-text-muted/70',
         )}
       />
-      <p id={hintId} className="text-xs text-text-muted">
+      <p id={hintId} className="text-meta text-text-muted">
         {hint}
       </p>
     </div>
@@ -580,8 +579,8 @@ function TextArea({
 function Detail({ term, value }: { term: string; value: string }): React.JSX.Element {
   return (
     <div className="rounded-glass border border-border bg-surface-2 px-3 py-2">
-      <dt className="text-xs text-text-muted">{term}</dt>
-      <dd className="select-text font-mono text-sm text-text">{value}</dd>
+      <dt className="text-meta text-text-muted">{term}</dt>
+      <dd className="select-text font-mono text-body text-text">{value}</dd>
     </div>
   )
 }

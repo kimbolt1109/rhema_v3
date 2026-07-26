@@ -321,10 +321,10 @@ export function ShortcutSettings({
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">
+        <h1 className="text-readout font-semibold text-text">
           {text('shortcuts.title', 'Shortcuts, foot pedals & Stream Deck')}
         </h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">
+        <p className="mt-1 max-w-3xl text-body text-text-muted">
           {text(
             'shortcuts.subtitle',
             'Every operator action can be triggered by a key. Changes apply as soon as you save.',
@@ -340,7 +340,7 @@ export function ShortcutSettings({
           <Keyboard aria-hidden="true" className="h-5 w-5 shrink-0" />
           {text('shortcuts.pedal.title', 'Foot pedals and Stream Decks')}
         </h2>
-        <p className="mt-2 max-w-3xl text-sm text-text-muted">
+        <p className="mt-2 max-w-3xl text-body text-text-muted">
           {text(
             'shortcuts.pedal.body',
             'A foot pedal or Stream Deck is just a keyboard: it sends an ordinary key code. So there is nothing extra to install — choose an action below, press Rebind, and then press the pedal or the Stream Deck button itself. Verger records whatever key it sends. If your pedal has configuration software, set it to send a key nothing else uses, such as F13.',
@@ -349,7 +349,7 @@ export function ShortcutSettings({
       </section>
 
       {repaired ? (
-        <p role="status" className="text-sm text-panic">
+        <p role="status" className="text-body text-panic">
           {text(
             'shortcuts.repaired',
             'Some saved shortcuts could not be read and were put back to their defaults.',
@@ -361,7 +361,7 @@ export function ShortcutSettings({
         <p
           role="status"
           aria-live="assertive"
-          className="rounded-glass border border-accent bg-surface-2 p-4 text-sm text-text"
+          className="rounded-glass border border-accent bg-surface-2 p-4 text-body text-text"
         >
           {text(
             'shortcuts.capture.prompt',
@@ -370,12 +370,12 @@ export function ShortcutSettings({
         </p>
       ) : null}
 
-      <table className="w-full border-collapse text-left text-sm">
+      <table className="w-full border-collapse text-left text-body">
         <caption className="sr-only">
           {text('shortcuts.tableCaption', 'Actions and the keys bound to them')}
         </caption>
         <thead>
-          <tr className="border-b border-border text-xs uppercase tracking-wide text-text-muted">
+          <tr className="border-b border-border text-micro uppercase tracking-wide text-text-muted">
             <th scope="col" className="py-2 pr-3">
               {text('shortcuts.column.action', 'Action')}
             </th>
@@ -414,7 +414,9 @@ export function ShortcutSettings({
                 <th scope="row" className="py-3 pr-3 font-medium text-text">
                   {name}
                   {destructive ? (
-                    <span className="ml-2 rounded-glass border border-panic/60 px-1.5 py-0.5 text-[0.65rem] uppercase text-panic">
+                    // `text-[0.65rem]` was 10.4px — under the 11px floor the type scale documents
+                    // as unreadable in a dark booth. `micro` is the step for a fixed legend.
+                    <span className="ml-2 rounded-glass border border-panic/60 px-1.5 py-0.5 text-micro uppercase text-panic">
                       {text('shortcuts.destructive', 'Hold only')}
                     </span>
                   ) : null}
@@ -497,7 +499,7 @@ export function ShortcutSettings({
                           rejection === null ? 'border-border' : 'border-panic',
                         )}
                       />
-                      <span className="ml-2 text-xs text-text-muted">
+                      <span className="ml-2 text-meta text-text-muted">
                         {text('shortcuts.holdRange', 'min {{floor}}, max {{max}}', {
                           floor,
                           max: MAX_HOLD_MS,
@@ -559,11 +561,11 @@ export function ShortcutSettings({
       </div>
 
       {saveError !== null ? (
-        <p role="alert" className="text-sm font-medium text-panic">
+        <p role="alert" className="text-body font-medium text-panic">
           {saveError}
         </p>
       ) : null}
-      <p role="status" className="text-sm text-text-muted">
+      <p role="status" className="text-body text-text-muted">
         {saved ? text('shortcuts.saved', 'Shortcuts saved.') : ''}
       </p>
 
@@ -572,16 +574,16 @@ export function ShortcutSettings({
           aria-label={text('shortcuts.card.title', 'Shortcut card')}
           className="rounded-glass-lg border border-border bg-surface p-5"
         >
-          <h2 className="text-lg font-semibold text-text">
+          <h2 className="text-title font-semibold text-text">
             {text('shortcuts.card.title', 'Shortcut card')}
           </h2>
-          <p className="mt-1 max-w-3xl text-sm text-text-muted">
+          <p className="mt-1 max-w-3xl text-body text-text-muted">
             {text(
               'shortcuts.card.body',
               'Print this and tape it to the booth keyboard. The blueprint asks for it by name: the key that hands control back to the human must be readable without opening the app.',
             )}
           </p>
-          <ul className="mt-3 flex flex-col gap-1 text-sm text-text">
+          <ul className="mt-3 flex flex-col gap-1 text-body text-text">
             {activeBindings.map((binding, index) => {
               const label = text(actionKey(binding.action), ACTION_LABELS[binding.action])
               const name = binding.param === undefined ? label : `${label} — ${binding.param}`

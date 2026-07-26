@@ -68,8 +68,8 @@ function withOptions(cue: Cue, next: CueOptions): Cue {
 }
 
 const inputClass =
-  'min-h-touch w-full rounded-glass border border-border bg-surface-2 px-3 text-sm text-text ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
+  'min-h-touch w-full rounded-glass border border-border bg-surface-2 px-3 text-body text-text ' +
+  '' +
   'disabled:text-text-muted'
 
 function Field({
@@ -85,12 +85,12 @@ function Field({
 }): React.JSX.Element {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-text">
+      <label htmlFor={id} className="text-label font-medium text-text">
         {label}
       </label>
       {children}
       {hint === undefined ? null : (
-        <p id={`${id}-hint`} className="text-xs text-text-muted">
+        <p id={`${id}-hint`} className="text-meta text-text-muted">
           {hint}
         </p>
       )}
@@ -154,13 +154,13 @@ export function CueEditorPanel({
     >
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-text">{t('plan.editor.title')}</h2>
-          <p className="text-xs text-text-muted">{cue.id}</p>
+          <h2 className="text-title font-semibold text-text">{t('plan.editor.title')}</h2>
+          <p className="text-meta text-text-muted">{cue.id}</p>
         </div>
       </header>
 
       {parsed.success ? null : (
-        <p role="alert" className="rounded-glass border border-panic/60 bg-surface-2 p-3 text-sm text-panic">
+        <p role="alert" className="rounded-glass border border-panic/60 bg-surface-2 p-3 text-body text-panic">
           {t('plan.editor.invalid')}
         </p>
       )}
@@ -350,7 +350,7 @@ export function CueEditorPanel({
               every operator asks when they look at this form. */}
           <p
             data-testid="scripture-no-text-note"
-            className="rounded-glass border border-border bg-surface-2 p-3 text-xs text-text-muted"
+            className="rounded-glass border border-border bg-surface-2 p-3 text-meta text-text-muted"
           >
             {t('plan.scriptureNote')}
           </p>
@@ -439,7 +439,7 @@ export function CueEditorPanel({
       {/* ------------------------------------ trigger ------------------------------------ */}
 
       <fieldset className="flex flex-col gap-3 rounded-glass border border-border p-4">
-        <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+        <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
           {t('plan.trigger.label')}
         </legend>
 
@@ -467,7 +467,7 @@ export function CueEditorPanel({
         </Field>
 
         {cue.trigger.mode === 'manual' ? (
-          <p className="text-xs text-text-muted">{t('plan.trigger.manualNote')}</p>
+          <p className="text-meta text-text-muted">{t('plan.trigger.manualNote')}</p>
         ) : (
           <Field id={ids.triggerText} label={t('plan.trigger.textField')}>
             <input
@@ -492,7 +492,7 @@ export function CueEditorPanel({
                 id={`${ids.triggerText}-error`}
                 role="alert"
                 data-testid="trigger-text-error"
-                className="text-xs font-medium text-panic"
+                className="text-meta font-medium text-panic"
               >
                 {t('plan.trigger.textRequired', {
                   mode: t(`plan.trigger.mode.${cue.trigger.mode}`),
@@ -506,7 +506,7 @@ export function CueEditorPanel({
       {/* ------------------------------------ options ------------------------------------ */}
 
       <fieldset className="flex flex-col gap-3 rounded-glass border border-border p-4">
-        <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+        <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
           {t('plan.options.title')}
         </legend>
 
@@ -538,7 +538,7 @@ export function CueEditorPanel({
               }}
               className="flex-1"
             />
-            <span data-testid="threshold-readout" className="w-16 text-end font-mono text-sm text-text">
+            <span data-testid="threshold-readout" className="w-16 text-end font-mono text-body text-text">
               {threshold === undefined
                 ? t('plan.options.thresholdUnset')
                 : `${String(Math.round(threshold * 100))}%`}
@@ -566,10 +566,10 @@ export function CueEditorPanel({
             className="mt-1 h-5 w-5 shrink-0"
           />
           <div className="flex flex-col gap-1">
-            <label htmlFor={ids.confirm} className="text-sm font-medium text-text">
+            <label htmlFor={ids.confirm} className="text-label font-medium text-text">
               {t('plan.options.confirmAlways')}
             </label>
-            <p id={`${ids.confirm}-hint`} className="text-xs text-text-muted">
+            <p id={`${ids.confirm}-hint`} className="text-meta text-text-muted">
               {t('plan.options.confirmAlwaysHint')}
             </p>
           </div>
@@ -591,7 +591,7 @@ export function CueEditorPanel({
             }
             onChange({ ...cue, note: event.target.value })
           }}
-          className="w-full rounded-glass border border-border bg-surface-2 p-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-full rounded-glass border border-border bg-surface-2 p-3 text-label font-normal text-text"
         />
       </Field>
 

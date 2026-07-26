@@ -79,8 +79,8 @@ function Fact({
 }): React.JSX.Element {
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] uppercase tracking-wide text-text-muted">{label}</dt>
-      <dd className="text-sm text-text" data-testid={testId}>
+      <dt className="text-micro uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-body text-text" data-testid={testId}>
         {children}
       </dd>
     </div>
@@ -116,14 +116,14 @@ function ScriptureDetail({
       data-resolution={resolution}
       className="rounded-glass border border-border bg-surface-2 p-3"
     >
-      <p className="text-lg font-semibold text-text">{canonical}</p>
+      <p className="text-title font-semibold text-text">{canonical}</p>
       {spoken === canonical ? null : (
-        <p className="text-xs text-text-muted">{t('cue.suggestion.spokenAs', { reference: spoken })}</p>
+        <p className="text-meta text-text-muted">{t('cue.suggestion.spokenAs', { reference: spoken })}</p>
       )}
-      <p className="mt-1 text-xs text-text-muted">{t(`cue.band.${reference.band}`)}</p>
+      <p className="mt-1 text-meta text-text-muted">{t(`cue.band.${reference.band}`)}</p>
 
       {resolution === 'resolving' ? (
-        <p className="mt-2 text-sm text-text-muted">{t('cue.suggestion.resolving')}</p>
+        <p className="mt-2 text-body text-text-muted">{t('cue.suggestion.resolving')}</p>
       ) : null}
 
       {resolution === 'resolved' && resolved !== null ? (
@@ -141,17 +141,17 @@ function ScriptureDetail({
         // Deliberately loud, and deliberately not a tidy empty card. This is the state the
         // never-auto-show-unless-resolved gate exists for.
         <div className="mt-2 rounded-glass border border-panic/60 bg-panic/10 p-2">
-          <p className="text-sm font-semibold text-panic">{t('cue.suggestion.textUnavailable')}</p>
-          <p className="mt-1 text-xs text-text">{t('cue.suggestion.textUnavailableDetail')}</p>
+          <p className="text-body font-semibold text-panic">{t('cue.suggestion.textUnavailable')}</p>
+          <p className="mt-1 text-meta text-text">{t('cue.suggestion.textUnavailableDetail')}</p>
           {resolveError === null ? null : (
-            <p className="mt-1 text-xs text-text-muted">
+            <p className="mt-1 text-meta text-text-muted">
               {t('cue.suggestion.textUnavailableReason', { reason: resolveError.message })}
             </p>
           )}
         </div>
       ) : null}
 
-      <p className="mt-2 text-[11px] text-text-muted">{t('cue.suggestion.textNote')}</p>
+      <p className="mt-2 text-micro font-normal text-text-muted">{t('cue.suggestion.textNote')}</p>
     </div>
   )
 }
@@ -180,7 +180,7 @@ function IdleReadout({
         })()
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta">
       <span
         data-testid="cue-idle-mode"
         className={clsx(
@@ -203,7 +203,7 @@ function IdleReadout({
         <button
           type="button"
           onClick={onUndo}
-          className="ms-auto inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-3 text-xs font-medium text-text hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="ms-auto inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-3 text-meta font-medium text-text hover:border-accent/60"
         >
           <RotateCcw aria-hidden="true" className="h-4 w-4 shrink-0" />
           {t('cue.suggestion.undo', { label: lastFiredLabel })}
@@ -272,7 +272,7 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
         className="border-b border-border bg-surface px-4 py-2"
       >
         {bridgeAvailable || !hydrated ? null : (
-          <p className="mb-1 text-xs text-panic">{t('cue.bridgeUnavailable.body')}</p>
+          <p className="mb-1 text-meta text-panic">{t('cue.bridgeUnavailable.body')}</p>
         )}
         <IdleReadout onUndo={undo} lastFiredLabel={lastFiredLabel} />
       </section>
@@ -314,10 +314,10 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] uppercase tracking-wide text-text-muted">
+          <p className="text-micro uppercase tracking-wide text-text-muted">
             {t('cue.suggestion.whatLabel')}
           </p>
-          <p data-testid="cue-suggestion-what" className="text-xl font-semibold text-text">
+          <p data-testid="cue-suggestion-what" className="text-title font-semibold text-text">
             {what}
           </p>
 
@@ -342,20 +342,20 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
           )}
 
           {cueMissing ? (
-            <p role="alert" className="mt-2 text-sm text-panic">
+            <p role="alert" className="mt-2 text-body text-panic">
               {t('cue.suggestion.cueMissing')}
             </p>
           ) : null}
 
           <p
             data-testid="cue-suggestion-consequence"
-            className={clsx('mt-3 text-sm', autoFiring ? 'text-accent-2' : 'text-text-muted')}
+            className={clsx('mt-3 text-body', autoFiring ? 'text-accent-2' : 'text-text-muted')}
           >
             {autoFiring ? t('cue.suggestion.willAutoFire') : t('cue.suggestion.willNotAutoFire')}
           </p>
 
           {lastError === null ? null : (
-            <p className="mt-2 text-xs text-panic">
+            <p className="mt-2 text-meta text-panic">
               {t('cue.suggestion.error')}: {lastError.message}
             </p>
           )}
@@ -371,13 +371,18 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
             onClick={() => {
               void useCueStore.getState().confirm(pending.id)
             }}
-            className="inline-flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center rounded-glass border border-accent-hover bg-accent px-6 text-base font-semibold text-text shadow-glow transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted disabled:shadow-none"
+            // Outlined cap, not a filled chalk field: after the restyle repointed `--color-accent`
+            // to chalk, `bg-accent` + `text-text` measured 1.37:1, so the one button the operator
+            // taps to accept a cue mid-service had an invisible label. ERGO-1 also forbids a light
+            // filled surface outright. `shadow-glow` went with it — it aliases to a page-black
+            // keyline, which is a tile treatment and does nothing useful on a control.
+            className="inline-flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center rounded-glass border border-accent bg-surface-2 px-6 text-label font-semibold text-text shadow-edge transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted disabled:shadow-none"
           >
             <span className="flex items-center gap-2">
               <Check aria-hidden="true" className="h-5 w-5 shrink-0" />
               {t('cue.suggestion.confirm')}
             </span>
-            <span aria-hidden="true" className="text-[11px] font-normal text-text-muted">
+            <span aria-hidden="true" className="text-micro font-normal text-text-muted">
               {t('cue.suggestion.confirmHint')}
             </span>
           </button>
@@ -388,13 +393,13 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
             onClick={() => {
               void useCueStore.getState().dismiss(pending.id)
             }}
-            className="inline-flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center rounded-glass border border-border bg-surface-2 px-6 text-base font-semibold text-text transition-colors hover:border-panic/60 hover:text-panic focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center rounded-glass border border-border bg-surface-2 px-6 text-label font-semibold text-text transition-colors hover:border-panic/60 hover:text-panic"
           >
             <span className="flex items-center gap-2">
               <X aria-hidden="true" className="h-5 w-5 shrink-0" />
               {t('cue.suggestion.dismiss')}
             </span>
-            <span aria-hidden="true" className="text-[11px] font-normal text-text-muted">
+            <span aria-hidden="true" className="text-micro font-normal text-text-muted">
               {t('cue.suggestion.dismissHint')}
             </span>
           </button>
@@ -403,26 +408,26 @@ export function SuggestionPanel({ dispatcher }: SuggestionPanelProps = {}): Reac
 
       {undo === null || lastFiredLabel === null ? null : (
         <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-2">
-          <span className="text-[11px] uppercase tracking-wide text-text-muted">
+          <span className="text-micro uppercase tracking-wide text-text-muted">
             {t('cue.suggestion.lastFiredLabel')}
           </span>
           <button
             type="button"
             data-testid="cue-undo"
             onClick={undo}
-            className="inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-3 text-xs font-medium text-text hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-3 text-meta font-medium text-text hover:border-accent/60"
           >
             <RotateCcw aria-hidden="true" className="h-4 w-4 shrink-0" />
             {t('cue.suggestion.undo', { label: lastFiredLabel })}
           </button>
-          <span className="text-[11px] text-text-muted">{t('cue.suggestion.undoHint')}</span>
+          <span className="text-micro font-normal text-text-muted">{t('cue.suggestion.undoHint')}</span>
         </div>
       )}
 
       {resolution === 'unavailable' ? (
         // Repeated outside the scripture card, next to the buttons, because this is the one fact
         // that changes what CONFIRM means and the operator's eyes are on the buttons.
-        <p data-testid="cue-no-auto-show" className="mt-2 text-xs text-panic">
+        <p data-testid="cue-no-auto-show" className="mt-2 text-meta text-panic">
           {t('cue.suggestion.textUnavailable')} — {t('cue.suggestion.textUnavailableDetail')}
         </p>
       ) : null}

@@ -111,14 +111,14 @@ export function CueRow({
         {...listeners}
         data-testid={`cue-drag-${cue.id}`}
         aria-label={t('plan.row.dragHandle', { label: cue.label })}
-        className="flex min-h-touch w-8 shrink-0 cursor-grab items-center justify-center rounded-glass text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-h-touch w-8 shrink-0 cursor-grab items-center justify-center rounded-glass text-text-muted"
       >
         <GripVertical aria-hidden="true" className="h-5 w-5" />
       </button>
 
       <span
         aria-hidden="true"
-        className="w-6 shrink-0 text-end font-mono text-xs text-text-muted"
+        className="w-6 shrink-0 text-end font-mono text-meta text-text-muted"
       >
         {ordinal}
       </span>
@@ -138,7 +138,7 @@ export function CueRow({
         onClick={() => {
           onSelect(cue.id)
         }}
-        className="min-w-0 flex-1 truncate text-start text-sm font-medium text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="min-w-0 flex-1 truncate text-start text-label font-medium text-text"
       >
         <span className="truncate">{cue.label}</span>
         <span className="sr-only">
@@ -153,7 +153,7 @@ export function CueRow({
         </span>
       </button>
 
-      <span className="shrink-0 rounded-glass border border-border px-2 py-0.5 text-[11px] uppercase tracking-wide text-text-muted">
+      <span className="shrink-0 rounded-glass border border-border px-2 py-0.5 text-micro uppercase tracking-wide text-text-muted">
         {typeLabel}
       </span>
 
@@ -161,7 +161,7 @@ export function CueRow({
         data-testid={`cue-trigger-${cue.id}`}
         data-trigger-mode={cue.trigger.mode}
         className={clsx(
-          'shrink-0 rounded-glass border px-2 py-0.5 text-[11px] uppercase tracking-wide',
+          'shrink-0 rounded-glass border px-2 py-0.5 text-micro uppercase tracking-wide',
           cue.trigger.mode === 'manual'
             ? 'border-border text-text-muted'
             : 'border-accent text-accent',
@@ -174,7 +174,7 @@ export function CueRow({
         <span
           aria-hidden="true"
           className={clsx(
-            'shrink-0 rounded-glass px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
+            'shrink-0 rounded-glass px-2 py-0.5 text-micro font-semibold uppercase tracking-wide',
             position === 'current' ? 'bg-live/20 text-live' : 'bg-accent/20 text-accent',
           )}
         >
@@ -190,7 +190,10 @@ export function CueRow({
           onFire(cue.id)
         }}
         aria-label={t('plan.row.fire', { label: cue.label })}
-        className="flex min-h-touch min-w-touch shrink-0 items-center justify-center rounded-glass border border-accent bg-surface-2 text-accent hover:bg-accent hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:border-border disabled:text-text-muted"
+        // `hover:bg-accent` used to invert this to a filled chalk field, which since the restyle
+        // means a light surface (ERGO-1) carrying near-invisible text. Hover now brightens the
+        // control's own surface instead, which is the only hover treatment in this theme.
+        className="flex min-h-touch min-w-touch shrink-0 items-center justify-center rounded-glass border border-accent bg-surface-2 text-accent hover:bg-surface-3 hover:text-text disabled:border-border disabled:text-text-muted"
       >
         <Play aria-hidden="true" className="h-5 w-5" />
       </button>

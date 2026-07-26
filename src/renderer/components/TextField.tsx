@@ -65,7 +65,7 @@ export function TextField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={inputId} className="text-sm font-medium text-text">
+      <label htmlFor={inputId} className="text-label font-medium text-text">
         {label}
       </label>
 
@@ -85,11 +85,10 @@ export function TextField({
             onValueChange(event.target.value)
           }}
           className={clsx(
-            'min-h-touch w-full rounded-glass border bg-surface-2 px-3 text-base text-text',
+            'min-h-touch w-full rounded-glass border bg-surface-2 px-3 text-label font-normal text-text',
             // `select-text` re-enables selection, which `body { user-select: none }` disabled
             // globally. An operator must be able to select and correct a mistyped URL.
             'select-text placeholder:text-text-muted/70',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             'disabled:cursor-not-allowed disabled:opacity-60',
             isPassword ? 'pe-touch' : '',
             error !== undefined ? 'border-panic' : 'border-border',
@@ -109,7 +108,6 @@ export function TextField({
             className={clsx(
               'absolute end-0 flex min-h-touch min-w-touch items-center justify-center',
               'rounded-glass text-text-muted hover:text-text',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:cursor-not-allowed disabled:opacity-60',
             )}
           >
@@ -123,13 +121,13 @@ export function TextField({
       </div>
 
       {hint !== undefined ? (
-        <p id={hintId} className="text-xs text-text-muted">
+        <p id={hintId} className="text-meta text-text-muted">
           {hint}
         </p>
       ) : null}
 
       {error !== undefined ? (
-        <p id={errorId} role="alert" className="text-xs font-medium text-panic">
+        <p id={errorId} role="alert" className="text-meta font-medium text-panic">
           {error}
         </p>
       ) : null}

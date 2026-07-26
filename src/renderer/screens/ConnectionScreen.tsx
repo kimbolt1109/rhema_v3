@@ -85,8 +85,8 @@ export function ConnectionScreen(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('connection.title')}</h1>
-        <p className="mt-1 max-w-2xl text-sm text-text-muted">{t('connection.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('connection.title')}</h1>
+        <p className="mt-1 max-w-2xl text-body text-text-muted">{t('connection.subtitle')}</p>
       </header>
 
       <StatusIndicator status={status} />
@@ -165,7 +165,7 @@ export function ConnectionScreen(): React.JSX.Element {
           aria-label={t('connection.details.title')}
           className="rounded-glass-lg border border-border bg-surface p-5"
         >
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+          <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
             {t('connection.details.title')}
           </h2>
           <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -200,16 +200,16 @@ export function ConnectionScreen(): React.JSX.Element {
         >
           <div className="flex items-center gap-2">
             <Layers aria-hidden="true" className="h-4 w-4 text-text-muted" />
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+            <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
               {t('connection.scenes.title')}
             </h2>
           </div>
 
           {sceneList === null || sceneList.scenes.length === 0 ? (
-            <p className="mt-3 text-sm text-text-muted">{t('connection.scenes.empty')}</p>
+            <p className="mt-3 text-body text-text-muted">{t('connection.scenes.empty')}</p>
           ) : (
             <>
-              <p className="mt-1 text-xs text-text-muted">
+              <p className="mt-1 text-meta text-text-muted">
                 {t('connection.scenes.countLabel', { total: sceneList.scenes.length })}
               </p>
               <ul className="mt-3 flex flex-col gap-2">
@@ -221,7 +221,7 @@ export function ConnectionScreen(): React.JSX.Element {
                       key={`${String(scene.index)}-${scene.name}`}
                       className="flex min-h-touch items-center justify-between gap-3 rounded-glass border border-border bg-surface-2 px-3"
                     >
-                      <span className="truncate text-sm text-text">{scene.name}</span>
+                      <span className="truncate text-body text-text">{scene.name}</span>
                       <span className="flex shrink-0 gap-2">
                         {isProgram ? <Badge tone="live">{t('connection.scenes.program')}</Badge> : null}
                         {isPreview ? (
@@ -235,7 +235,7 @@ export function ConnectionScreen(): React.JSX.Element {
             </>
           )}
 
-          <p className="mt-3 flex items-start gap-1.5 text-xs text-text-muted">
+          <p className="mt-3 flex items-start gap-1.5 text-meta text-text-muted">
             <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{t('connection.scenes.readOnlyNote')}</span>
           </p>
@@ -248,8 +248,8 @@ export function ConnectionScreen(): React.JSX.Element {
 function Detail({ term, value }: { term: string; value: string }): React.JSX.Element {
   return (
     <div className="rounded-glass border border-border bg-surface-2 px-3 py-2">
-      <dt className="text-xs text-text-muted">{term}</dt>
-      <dd className="select-text font-mono text-sm text-text">{value}</dd>
+      <dt className="text-meta text-text-muted">{term}</dt>
+      <dd className="select-text font-mono text-body text-text">{value}</dd>
     </div>
   )
 }
@@ -265,8 +265,8 @@ function Badge({
     <span
       className={
         tone === 'live'
-          ? 'rounded-glass border border-live/60 px-2 py-0.5 text-xs font-medium text-live'
-          : 'rounded-glass border border-accent/60 px-2 py-0.5 text-xs font-medium text-accent-2'
+          ? 'rounded-glass border border-live/60 px-2 py-0.5 text-meta font-medium text-live'
+          : 'rounded-glass border border-accent/60 px-2 py-0.5 text-meta font-medium text-accent-2'
       }
     >
       {children}
@@ -295,7 +295,7 @@ function Callout({
       <h2 className={tone === 'panic' ? 'font-semibold text-panic' : 'font-semibold text-text'}>
         {title}
       </h2>
-      <div className="mt-2 max-w-2xl text-sm text-text-muted">{children}</div>
+      <div className="mt-2 max-w-2xl text-body text-text-muted">{children}</div>
     </section>
   )
 }

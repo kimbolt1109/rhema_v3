@@ -187,10 +187,10 @@ export function TuningSettings(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">
+        <h1 className="text-readout font-semibold text-text">
           {t('tuning.title', { defaultValue: 'Confidence tuning' })}
         </h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">
+        <p className="mt-1 max-w-3xl text-body text-text-muted">
           {t('tuning.subtitle', {
             defaultValue:
               'These numbers decide how sure Verger has to be before it does anything on its own. ' +
@@ -207,7 +207,7 @@ export function TuningSettings(): React.JSX.Element {
         <h2 className="font-semibold text-text">
           {t('tuning.scope.title', { defaultValue: 'What this screen changes' })}
         </h2>
-        <p className="mt-2 max-w-3xl text-sm text-text-muted">
+        <p className="mt-2 max-w-3xl text-body text-text-muted">
           {t('tuning.scope.body', {
             defaultValue:
               'Only the default auto-fire threshold is saved in this build. The scripture bands, the ' +
@@ -218,7 +218,7 @@ export function TuningSettings(): React.JSX.Element {
       </section>
 
       <fieldset className="flex flex-col gap-4 rounded-glass-lg border border-border bg-surface p-5">
-        <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+        <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
           {t('tuning.autoFire.legend', { defaultValue: 'Auto-fire' })}
         </legend>
 
@@ -268,7 +268,7 @@ export function TuningSettings(): React.JSX.Element {
               value: formatConfidence(RECOMMENDED_TUNING.autoFireThreshold),
             })}
           </Button>
-          <p role="status" className="text-sm text-text-muted">
+          <p role="status" className="text-body text-text-muted">
             {saved ? t('tuning.saved', { defaultValue: 'Tuning saved.' }) : ''}
           </p>
         </div>
@@ -277,7 +277,7 @@ export function TuningSettings(): React.JSX.Element {
           <p
             role="alert"
             data-testid="tuning-loose-warning"
-            className="flex items-start gap-2 text-sm font-medium text-panic"
+            className="flex items-start gap-2 text-body font-medium text-panic"
           >
             <TriangleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
             {t('tuning.autoFire.looseWarning', {
@@ -290,7 +290,7 @@ export function TuningSettings(): React.JSX.Element {
       </fieldset>
 
       <fieldset className="flex flex-col gap-4 rounded-glass-lg border border-border bg-surface p-5">
-        <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+        <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
           {t('tuning.scripture.legend', { defaultValue: 'Scripture confidence bands' })}
         </legend>
 
@@ -333,7 +333,7 @@ export function TuningSettings(): React.JSX.Element {
       </fieldset>
 
       <fieldset className="flex flex-col gap-4 rounded-glass-lg border border-border bg-surface p-5">
-        <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+        <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
           {t('tuning.plan.legend', { defaultValue: 'Following the plan' })}
         </legend>
 
@@ -384,7 +384,7 @@ export function TuningSettings(): React.JSX.Element {
         <h2 className="font-semibold text-text">
           {t('tuning.overrides.title', { defaultValue: 'Per-cue overrides' })}
         </h2>
-        <p className="max-w-3xl text-sm text-text-muted">
+        <p className="max-w-3xl text-body text-text-muted">
           {t('tuning.overrides.hint', {
             defaultValue:
               'Cues in the open plan that set their own rules. These are authored in the plan editor and ' +
@@ -393,7 +393,7 @@ export function TuningSettings(): React.JSX.Element {
         </p>
 
         {overrides.length === 0 ? (
-          <p className="text-sm text-text-muted">
+          <p className="text-body text-text-muted">
             {t('tuning.overrides.empty', {
               defaultValue: 'No cue in this plan overrides the service default.',
             })}
@@ -410,8 +410,8 @@ export function TuningSettings(): React.JSX.Element {
                 data-looser={row.looser ? 'true' : 'false'}
                 className="flex flex-col gap-1 rounded-glass border border-border bg-surface-2 p-3"
               >
-                <span className="text-sm font-medium text-text">{row.label}</span>
-                <span className="text-xs text-text-muted">
+                <span className="text-body font-medium text-text">{row.label}</span>
+                <span className="text-meta text-text-muted">
                   {row.autoFireThreshold === null
                     ? t('tuning.overrides.inherits', {
                         defaultValue: 'Uses the service default threshold.',
@@ -422,7 +422,7 @@ export function TuningSettings(): React.JSX.Element {
                       })}
                 </span>
                 {row.confirmAlways ? (
-                  <span className="text-xs text-text-muted">
+                  <span className="text-meta text-text-muted">
                     {t('tuning.overrides.confirmAlways', {
                       defaultValue:
                         'Always asks first. This cue can never fire on its own, whatever the mode.',
@@ -430,7 +430,7 @@ export function TuningSettings(): React.JSX.Element {
                   </span>
                 ) : null}
                 {row.looser ? (
-                  <span className="flex items-start gap-2 text-xs font-medium text-panic">
+                  <span className="flex items-start gap-2 text-meta font-medium text-panic">
                     <TriangleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     {t('tuning.overrides.looseWarning', {
                       defaultValue:
@@ -446,7 +446,7 @@ export function TuningSettings(): React.JSX.Element {
       </section>
 
       {lastError === null ? null : (
-        <p className="text-xs text-panic">
+        <p className="text-meta text-panic">
           {t('tuning.saveFailed', { defaultValue: 'The tuning was not saved.' })} {lastError.message}
         </p>
       )}
@@ -494,10 +494,10 @@ function TuningSlider({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <label htmlFor={id} className="text-sm font-medium text-text">
+        <label htmlFor={id} className="text-label font-medium text-text">
           {label}
         </label>
-        <span data-testid={`${id}-readout`} className="text-sm tabular-nums text-text">
+        <span data-testid={`${id}-readout`} className="text-body tabular-nums text-text">
           {readout}
         </span>
       </div>
@@ -515,16 +515,16 @@ function TuningSlider({
         onChange={(event) => {
           onChange?.(Number(event.target.value))
         }}
-        className="h-2 w-full cursor-pointer accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-70"
+        className="h-2 w-full cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-70"
       />
 
-      <p id={`${id}-plain`} className="max-w-3xl text-xs text-text-muted">
+      <p id={`${id}-plain`} className="max-w-3xl text-meta text-text-muted">
         {plain}
       </p>
-      <p id={`${id}-consequence`} className="max-w-3xl text-xs text-text-muted">
+      <p id={`${id}-consequence`} className="max-w-3xl text-meta text-text-muted">
         {consequence}
       </p>
-      <p id={`${id}-recommended`} className="max-w-3xl text-xs text-text-muted">
+      <p id={`${id}-recommended`} className="max-w-3xl text-meta text-text-muted">
         {fixed
           ? t('tuning.fixedHint', {
               defaultValue: `Fixed at ${recommendedReadout} in this build — changing it is a code change, not a setting.`,

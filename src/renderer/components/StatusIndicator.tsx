@@ -197,18 +197,18 @@ export function StatusIndicator({ status, size = 'lg' }: StatusIndicatorProps): 
       />
 
       <div className="min-w-0 flex-1">
-        <p className={clsx('font-semibold leading-tight', style.tone, large ? 'text-2xl' : 'text-sm')}>
+        <p className={clsx('font-semibold leading-tight', style.tone, large ? 'text-readout' : 'text-body')}>
           {label}
         </p>
 
-        <p className={clsx('mt-1 text-text-muted', large ? 'text-sm' : 'text-xs')}>{detail}</p>
+        <p className={clsx('mt-1 text-text-muted', large ? 'text-body' : 'text-meta')}>{detail}</p>
 
         {isRetrying ? (
           <p
             // Aria-hidden on purpose: the numbers change twice a second. The live region below
             // announces the state change once, which is the part that carries meaning.
             aria-hidden="true"
-            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-text-muted"
+            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-text-muted"
           >
             <span>{t('status.attempt', { count: status.attempt })}</span>
             <span>
@@ -220,7 +220,7 @@ export function StatusIndicator({ status, size = 'lg' }: StatusIndicatorProps): 
         ) : null}
 
         {status.lastError !== null ? (
-          <p className={clsx('mt-2 flex items-start gap-1.5 text-xs', 'text-text-muted')}>
+          <p className={clsx('mt-2 flex items-start gap-1.5 text-meta', 'text-text-muted')}>
             <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
             <span className="select-text">
               {t(`errors.code.${status.lastError.code}`)} — {status.lastError.message}

@@ -102,8 +102,8 @@ export function CameraPanel(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('camera.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('camera.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('camera.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('camera.subtitle')}</p>
       </header>
 
       {block === 'bridge' ? (
@@ -121,24 +121,24 @@ export function CameraPanel(): React.JSX.Element {
         className="rounded-glass-lg border border-border bg-surface p-4"
       >
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+          <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
             {t('camera.programScene')}
           </h2>
-          <p data-testid="camera-program-scene" className="select-text font-mono text-sm text-text">
+          <p data-testid="camera-program-scene" className="select-text font-mono text-body text-text">
             {state.currentProgramScene ?? t('camera.programSceneUnknown')}
           </p>
         </div>
 
         {/* A live region, because the most important change here is one the operator did not
             make: someone switched a scene in OBS itself. */}
-        <p role="status" className="mt-2 text-sm text-text-muted">
+        <p role="status" className="mt-2 text-body text-text-muted">
           {liveButton === null
             ? t('camera.noneLive')
             : t('camera.liveNow', { camera: labelFor(liveButton.slot, liveButton.label) })}
         </p>
 
         {liveButton === null && state.currentProgramScene !== null ? (
-          <p className="mt-2 max-w-3xl text-xs text-text-muted">
+          <p className="mt-2 max-w-3xl text-meta text-text-muted">
             {t('camera.unmappedProgramScene', { scene: state.currentProgramScene })}
           </p>
         ) : null}
@@ -167,7 +167,6 @@ export function CameraPanel(): React.JSX.Element {
                 className={clsx(
                   'flex min-h-touch-xl w-full flex-col items-start justify-center gap-1',
                   'rounded-glass-lg border-2 px-4 py-3 text-start transition-colors duration-150',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   'disabled:cursor-not-allowed disabled:opacity-60',
                   button.live
                     ? 'border-live bg-surface-2 shadow-glow'
@@ -175,7 +174,7 @@ export function CameraPanel(): React.JSX.Element {
                 )}
               >
                 <span className="flex w-full items-center justify-between gap-2">
-                  <span className="text-2xl font-bold uppercase tracking-wide text-text">
+                  <span className="text-readout font-bold uppercase tracking-wide text-text">
                     {label}
                   </span>
                   {/* Text first, colour second: this badge is the reason an operator across the
@@ -183,7 +182,7 @@ export function CameraPanel(): React.JSX.Element {
                   <span
                     className={clsx(
                       'flex shrink-0 items-center gap-1 rounded-glass border px-2 py-0.5',
-                      'text-xs font-semibold uppercase tracking-wide',
+                      'text-micro font-semibold uppercase tracking-wide',
                       button.live ? 'border-live text-live' : 'border-border text-text-muted',
                     )}
                   >
@@ -196,7 +195,7 @@ export function CameraPanel(): React.JSX.Element {
                   </span>
                 </span>
 
-                <span className="flex w-full flex-wrap items-center gap-2 text-xs text-text-muted">
+                <span className="flex w-full flex-wrap items-center gap-2 text-meta text-text-muted">
                   {button.sceneName === null ? (
                     <span className="flex items-center gap-1 font-medium text-panic">
                       <VideoOff aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
@@ -213,7 +212,7 @@ export function CameraPanel(): React.JSX.Element {
                 </span>
 
                 {button.sceneName === null ? (
-                  <span className="text-xs text-text-muted">{t('camera.unmapped.hint')}</span>
+                  <span className="text-meta text-text-muted">{t('camera.unmapped.hint')}</span>
                 ) : null}
               </button>
             </li>
@@ -222,7 +221,7 @@ export function CameraPanel(): React.JSX.Element {
       </ul>
 
       {lastError !== null ? (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -246,7 +245,7 @@ function Callout({
       className="rounded-glass-lg border border-panic/50 bg-surface p-5"
     >
       <h2 className="font-semibold text-panic">{title}</h2>
-      <p className="mt-2 max-w-3xl text-sm text-text-muted">{children}</p>
+      <p className="mt-2 max-w-3xl text-body text-text-muted">{children}</p>
     </section>
   )
 }

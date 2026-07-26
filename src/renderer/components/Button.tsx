@@ -8,9 +8,14 @@
  * service costs more than a mis-hit on a secondary one, and more finger surface means fewer
  * mis-hits under stress.
  *
- * Every variant carries a visible focus ring — one ring, defined once in `styles/index.css` and
- * reinforced here with Tailwind's `focus-visible:ring` so it survives a `outline: none` reset.
- * v2 left focus-visible "not yet standardized"; not repeating that.
+ * Every variant carries a visible focus ring, and it is **the** ring — the single
+ * `:focus-visible` outline in `styles/index.css`, inherited rather than restated. This component
+ * used to re-declare it locally as `focus-visible:outline-none` plus a box-shadow ring, which is
+ * self-defeating: the `outline-none` half is what suppressed the global outline in the first
+ * place, so every control had to opt back in by hand and any that forgot shipped with no ring at
+ * all. That is precisely the failure v2 logged as focus-visible "not yet standardized"
+ * (SHORTCUTS_AND_A11Y.md §9.5). Deleting the local override makes the global rule load-bearing:
+ * a control cannot now ship without a ring, because it cannot turn one off by omission.
  */
 
 import clsx from 'clsx'
@@ -75,7 +80,6 @@ export function Button({
       className={clsx(
         'inline-flex items-center justify-center gap-2 rounded-glass font-medium',
         'transition-colors duration-150 ease-out',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:cursor-not-allowed disabled:opacity-60',
         SIZE_CLASSES[size],
         VARIANT_CLASSES[variant],

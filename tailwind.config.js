@@ -23,7 +23,15 @@
  */
 export default {
   darkMode: 'class',
-  content: ['./src/renderer/index.html', './src/renderer/**/*.{ts,tsx,html}'],
+  content: [
+    './src/renderer/index.html',
+    './src/renderer/**/*.{ts,tsx,html}',
+    // Tests must not contribute utilities to the shipped stylesheet. A test that merely NAMES a
+    // class — asserting on it, or explaining in a comment why it is banned — would otherwise emit
+    // a real rule into production CSS. `styles/typography.test.ts` guards the type scale by naming
+    // the sizes it forbids, and without this line every one of them shipped.
+    '!./src/renderer/**/*.test.{ts,tsx}'
+  ],
   theme: {
     extend: {
       colors: {

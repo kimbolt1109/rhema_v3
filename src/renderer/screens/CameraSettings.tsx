@@ -175,8 +175,8 @@ export function CameraSettings(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('camera.settings.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('camera.settings.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('camera.settings.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('camera.settings.subtitle')}</p>
       </header>
 
       {scenesUnavailable ? (
@@ -185,7 +185,7 @@ export function CameraSettings(): React.JSX.Element {
           className="rounded-glass-lg border border-panic/50 bg-surface p-5"
         >
           <h2 className="font-semibold text-panic">{t('camera.settings.noScenes.title')}</h2>
-          <p className="mt-2 max-w-3xl text-sm text-text-muted">
+          <p className="mt-2 max-w-3xl text-body text-text-muted">
             {t('camera.settings.noScenes.body')}
           </p>
         </section>
@@ -218,7 +218,7 @@ export function CameraSettings(): React.JSX.Element {
               data-slot={slot}
               className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5"
             >
-              <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+              <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
                 {camera}
               </legend>
 
@@ -239,7 +239,7 @@ export function CameraSettings(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
-                <p id={`${sceneId}-hint`} className="text-xs text-text-muted">
+                <p id={`${sceneId}-hint`} className="text-meta text-text-muted">
                   {t('camera.settings.sceneHint')}
                 </p>
               </Field>
@@ -261,7 +261,7 @@ export function CameraSettings(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
-                <p id={`${transitionId}-hint`} className="text-xs text-text-muted">
+                <p id={`${transitionId}-hint`} className="text-meta text-text-muted">
                   {transitionOptions.length === 0
                     ? t('camera.settings.noTransitions')
                     : t('camera.settings.transitionHint')}
@@ -287,8 +287,7 @@ export function CameraSettings(): React.JSX.Element {
                   }}
                   className={clsx(
                     'min-h-touch w-full select-text rounded-glass border bg-surface-2 px-3',
-                    'text-base text-text',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                    'text-label font-normal text-text',
                     invalid ? 'border-panic' : 'border-border',
                   )}
                 />
@@ -296,12 +295,12 @@ export function CameraSettings(): React.JSX.Element {
                   <p
                     id={`${durationId}-error`}
                     role="alert"
-                    className="text-xs font-medium text-panic"
+                    className="text-meta font-medium text-panic"
                   >
                     {t('camera.settings.durationInvalid')}
                   </p>
                 ) : (
-                  <p id={`${durationId}-hint`} className="text-xs text-text-muted">
+                  <p id={`${durationId}-hint`} className="text-meta text-text-muted">
                     {t('camera.settings.durationHint')}
                   </p>
                 )}
@@ -314,14 +313,14 @@ export function CameraSettings(): React.JSX.Element {
           <Button type="submit" variant="primary" size="lg" icon={Save} disabled={saving}>
             {t('camera.settings.save')}
           </Button>
-          <p role="status" className="text-sm text-text-muted">
+          <p role="status" className="text-body text-text-muted">
             {saved ? t('camera.settings.saved') : ''}
           </p>
         </div>
       </form>
 
       {lastError !== null ? (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -334,8 +333,7 @@ export function CameraSettings(): React.JSX.Element {
 
 const selectClass = clsx(
   'min-h-touch w-full rounded-glass border border-border bg-surface-2 px-3',
-  'text-base text-text',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+  'text-label font-normal text-text',
 )
 
 function Field({
@@ -349,7 +347,7 @@ function Field({
 }): React.JSX.Element {
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-text">
+      <label htmlFor={id} className="text-label font-medium text-text">
         {label}
       </label>
       {children}

@@ -190,8 +190,8 @@ export function AsrSettings({
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('asr.settings.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('asr.settings.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('asr.settings.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('asr.settings.subtitle')}</p>
       </header>
 
       {status.state === 'not-configured' ? (
@@ -200,10 +200,10 @@ export function AsrSettings({
           className="rounded-glass-lg border border-border bg-surface p-5"
         >
           <h2 className="font-semibold text-text">{t('asr.settings.notConfigured.title')}</h2>
-          <p className="mt-2 max-w-3xl text-sm text-text-muted">
+          <p className="mt-2 max-w-3xl text-body text-text-muted">
             {t('asr.settings.notConfigured.body')}
           </p>
-          <p className="mt-2 max-w-3xl text-sm text-text-muted">
+          <p className="mt-2 max-w-3xl text-body text-text-muted">
             {t('asr.settings.notConfigured.humanTasks')}
           </p>
         </section>
@@ -215,10 +215,10 @@ export function AsrSettings({
         className="flex flex-col gap-5"
       >
         <fieldset className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5">
-          <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('asr.settings.modeLegend')}
           </legend>
-          <p className="text-xs text-text-muted">{t('asr.settings.modeHint')}</p>
+          <p className="text-meta text-text-muted">{t('asr.settings.modeHint')}</p>
           {ASR_SELECTION_MODES.map((mode) => (
             <Radio
               key={mode}
@@ -235,10 +235,10 @@ export function AsrSettings({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5">
-          <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('asr.settings.languageLegend')}
           </legend>
-          <p className="text-xs text-text-muted">{t('asr.settings.languageHint')}</p>
+          <p className="text-meta text-text-muted">{t('asr.settings.languageHint')}</p>
           {ASR_LANGUAGES.map((language) => (
             <Radio
               key={language}
@@ -254,10 +254,10 @@ export function AsrSettings({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5">
-          <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('asr.settings.deviceLegend')}
           </legend>
-          <label htmlFor="asr-device" className="text-sm font-medium text-text">
+          <label htmlFor="asr-device" className="text-label font-medium text-text">
             {t('asr.settings.deviceLabel')}
           </label>
           <select
@@ -276,7 +276,7 @@ export function AsrSettings({
               </option>
             ))}
           </select>
-          <p id="asr-device-hint" className="text-xs text-text-muted">
+          <p id="asr-device-hint" className="text-meta text-text-muted">
             {deviceError === null ? t('asr.settings.deviceHint') : t('asr.settings.deviceUnavailable')}
           </p>
           <div>
@@ -293,10 +293,10 @@ export function AsrSettings({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5">
-          <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('asr.settings.modelLegend')}
           </legend>
-          <label htmlFor="asr-model" className="text-sm font-medium text-text">
+          <label htmlFor="asr-model" className="text-label font-medium text-text">
             {t('asr.settings.modelLabel')}
           </label>
           <select
@@ -314,21 +314,21 @@ export function AsrSettings({
               </option>
             ))}
           </select>
-          <p id="asr-model-hint" className="text-xs text-text-muted">
+          <p id="asr-model-hint" className="text-meta text-text-muted">
             {t('asr.settings.modelHint')}
           </p>
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-5">
-          <legend className="px-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <legend className="px-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('asr.settings.vocabulary.legend')}
           </legend>
-          <p className="max-w-3xl text-sm text-text-muted">{t('asr.settings.vocabulary.hint')}</p>
-          <p className="max-w-3xl text-xs text-text-muted">
+          <p className="max-w-3xl text-body text-text-muted">{t('asr.settings.vocabulary.hint')}</p>
+          <p className="max-w-3xl text-meta text-text-muted">
             {t('asr.settings.vocabulary.examples')}
           </p>
 
-          <label htmlFor="asr-vocabulary-term" className="text-sm font-medium text-text">
+          <label htmlFor="asr-vocabulary-term" className="text-label font-medium text-text">
             {t('asr.settings.vocabulary.addLabel')}
           </label>
           <div className="flex flex-wrap items-start gap-2">
@@ -352,8 +352,7 @@ export function AsrSettings({
               }}
               className={clsx(
                 'min-h-touch min-w-[16rem] flex-1 select-text rounded-glass border border-border bg-surface-2 px-3',
-                'text-base text-text',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                'text-label font-normal text-text',
               )}
             />
             <Button variant="secondary" icon={Plus} onClick={handleAddTerm}>
@@ -361,13 +360,13 @@ export function AsrSettings({
             </Button>
           </div>
           {rejection === null ? null : (
-            <p id="asr-vocabulary-error" role="alert" className="text-xs font-medium text-panic">
+            <p id="asr-vocabulary-error" role="alert" className="text-meta font-medium text-panic">
               {rejection}
             </p>
           )}
 
           {draft.customVocabulary.length === 0 ? (
-            <p className="text-sm text-text-muted">{t('asr.settings.vocabulary.empty')}</p>
+            <p className="text-body text-text-muted">{t('asr.settings.vocabulary.empty')}</p>
           ) : (
             <ul aria-label={t('asr.settings.vocabulary.listLabel')} className="flex flex-wrap gap-2">
               {draft.customVocabulary.map((entry) => (
@@ -375,7 +374,7 @@ export function AsrSettings({
                   key={entry}
                   className="flex items-center gap-2 rounded-glass border border-border bg-surface-2 py-1 pl-3 pr-1"
                 >
-                  <span className="select-text text-sm text-text">{entry}</span>
+                  <span className="select-text text-body text-text">{entry}</span>
                   <button
                     type="button"
                     aria-label={t('asr.settings.vocabulary.remove', { term: entry })}
@@ -383,7 +382,7 @@ export function AsrSettings({
                       setRejection(null)
                       update({ customVocabulary: removeVocabularyTerm(draft.customVocabulary, entry) })
                     }}
-                    className="inline-flex h-touch w-touch items-center justify-center rounded-glass text-text-muted hover:text-panic focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex h-touch w-touch items-center justify-center rounded-glass text-text-muted hover:text-panic"
                   >
                     <X aria-hidden="true" className="h-4 w-4" />
                   </button>
@@ -397,14 +396,14 @@ export function AsrSettings({
           <Button type="submit" variant="primary" size="lg" icon={Save} disabled={busy}>
             {t('asr.settings.save')}
           </Button>
-          <p role="status" className="text-sm text-text-muted">
+          <p role="status" className="text-body text-text-muted">
             {saved ? t('asr.settings.saved') : ''}
           </p>
         </div>
       </form>
 
       {lastError !== null ? (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -417,8 +416,7 @@ export function AsrSettings({
 
 const selectClass = clsx(
   'min-h-touch w-full rounded-glass border border-border bg-surface-2 px-3',
-  'text-base text-text',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+  'text-label font-normal text-text',
 )
 
 function Radio({
@@ -448,14 +446,14 @@ function Radio({
         // make the option's accessible name a whole paragraph, which a screen reader has to read
         // out before the operator learns which radio they are on.
         aria-describedby={detail === undefined ? undefined : `${id}-detail`}
-        className="mt-1 h-5 w-5 shrink-0 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="mt-1 h-5 w-5 shrink-0 accent-accent"
       />
       <div className="flex flex-col gap-0.5">
-        <label htmlFor={id} className="text-sm font-medium text-text">
+        <label htmlFor={id} className="text-label font-medium text-text">
           {label}
         </label>
         {detail === undefined ? null : (
-          <span id={`${id}-detail`} className="text-xs text-text-muted">
+          <span id={`${id}-detail`} className="text-meta text-text-muted">
             {detail}
           </span>
         )}

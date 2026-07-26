@@ -221,13 +221,13 @@ export function GoLivePanel(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('goLive.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('goLive.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('goLive.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('goLive.subtitle')}</p>
       </header>
 
       {bridgeAvailable ? null : (
         <Panel tone="panic" title={t('goLive.bridgeUnavailable.title')}>
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.bridgeUnavailable.body')}</p>
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.bridgeUnavailable.body')}</p>
         </Panel>
       )}
 
@@ -241,8 +241,8 @@ export function GoLivePanel(): React.JSX.Element {
 
       {reattached ? (
         <Panel tone="warning" title={t('goLive.reattached.title')}>
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.reattached.body')}</p>
-          <p className="max-w-3xl text-sm text-text-muted">
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.reattached.body')}</p>
+          <p className="max-w-3xl text-body text-text-muted">
             {t('goLive.reattached.elapsedNote')}
           </p>
         </Panel>
@@ -250,15 +250,15 @@ export function GoLivePanel(): React.JSX.Element {
 
       {isRecordingMissing(obs) ? (
         <Panel tone="panic" title={t('goLive.recordingMissing.title')} alert>
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.recordingMissing.body')}</p>
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.recordingMissing.body')}</p>
         </Panel>
       ) : null}
 
       {phase === 'partial' ? (
         <Panel tone="panic" title={t('goLive.partial.title')} alert>
-          <p className="max-w-3xl text-sm text-text">{t('goLive.partial.body')}</p>
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.partial.stillRunning')}</p>
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.partial.notHappening')}</p>
+          <p className="max-w-3xl text-body text-text">{t('goLive.partial.body')}</p>
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.partial.stillRunning')}</p>
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.partial.notHappening')}</p>
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -266,9 +266,8 @@ export function GoLivePanel(): React.JSX.Element {
               onClick={handleStart}
               className={clsx(
                 'inline-flex min-h-touch-lg items-center justify-center gap-2 rounded-glass px-6',
-                'border border-accent-hover bg-accent text-base font-semibold text-text',
-                'hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2',
-                'focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                'border border-accent bg-surface-2 text-label font-semibold text-text shadow-edge',
+                'hover:bg-surface-3',
                 'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted',
               )}
             >
@@ -276,14 +275,14 @@ export function GoLivePanel(): React.JSX.Element {
               <span>{t('goLive.partial.retry')}</span>
             </button>
           </div>
-          <p className="max-w-3xl text-xs text-text-muted">{t('goLive.partial.retryHint')}</p>
-          <p className="max-w-3xl text-xs text-text-muted">{t('goLive.partial.manual')}</p>
+          <p className="max-w-3xl text-meta text-text-muted">{t('goLive.partial.retryHint')}</p>
+          <p className="max-w-3xl text-meta text-text-muted">{t('goLive.partial.manual')}</p>
         </Panel>
       ) : null}
 
       {phase === 'failed' ? (
         <Panel tone="panic" title={t('goLive.failed.title')} alert>
-          <p className="max-w-3xl text-sm text-text">{t('goLive.failed.body')}</p>
+          <p className="max-w-3xl text-body text-text">{t('goLive.failed.body')}</p>
         </Panel>
       ) : null}
 
@@ -309,9 +308,13 @@ export function GoLivePanel(): React.JSX.Element {
             onClick={handleStart}
             className={clsx(
               'flex min-h-touch-xl w-full items-center justify-center gap-3 rounded-glass px-6 py-4',
-              'border-2 border-accent-hover bg-accent text-2xl font-bold uppercase tracking-wide text-text',
-              'transition-colors duration-150 ease-out hover:bg-accent-hover',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              // NOT a filled chalk field. `--color-accent` became CHALK in the restyle, so
+              // `bg-accent` + `text-text` measures 1.37:1 — this label was invisible — and a light
+              // filled surface is forbidden outright by ERGO-1 in a dark booth. Same outlined cap
+              // as Button.tsx's `primary`: the brightest border in the room, which is all
+              // "primary" has to mean. `border-2` stays because this is the biggest control here.
+              'border-2 border-accent bg-surface-2 text-readout font-bold uppercase tracking-wide text-text shadow-edge',
+              'transition-colors duration-150 ease-out hover:bg-surface-3',
               'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted disabled:opacity-70',
             )}
           >
@@ -320,14 +323,14 @@ export function GoLivePanel(): React.JSX.Element {
           </button>
 
           {disabledReason === null ? (
-            <p className="max-w-3xl text-sm text-text-muted">{t('goLive.button.hint')}</p>
+            <p className="max-w-3xl text-body text-text-muted">{t('goLive.button.hint')}</p>
           ) : (
             // The reason is the button's accessible description, so it is announced with the
             // control rather than sitting nearby as decoration.
             <p
               id={reasonId}
               data-testid="go-live-disabled-reason"
-              className="flex max-w-3xl items-start gap-1.5 text-sm text-text-muted"
+              className="flex max-w-3xl items-start gap-1.5 text-body text-text-muted"
             >
               <CircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-accent-2" />
               <span>{disabledReason}</span>
@@ -353,7 +356,7 @@ export function GoLivePanel(): React.JSX.Element {
           {t('goLive.end.title')}
         </h2>
         <div className="mt-3 flex flex-col gap-3">
-          <p className="max-w-3xl text-sm text-text-muted">{t('goLive.end.description')}</p>
+          <p className="max-w-3xl text-body text-text-muted">{t('goLive.end.description')}</p>
           <HoldButton
             label={t('goLive.end.label')}
             icon={CircleStop}
@@ -364,17 +367,17 @@ export function GoLivePanel(): React.JSX.Element {
             className="w-full"
           />
           {canEnd ? null : (
-            <p className="max-w-3xl text-sm text-text-muted">{t('goLive.end.nothingToEnd')}</p>
+            <p className="max-w-3xl text-body text-text-muted">{t('goLive.end.nothingToEnd')}</p>
           )}
         </div>
       </section>
 
       <Panel tone="neutral" title={t('goLive.quota.title')}>
-        <p className="max-w-3xl text-sm text-text-muted">{t('goLive.quota.body')}</p>
+        <p className="max-w-3xl text-body text-text-muted">{t('goLive.quota.body')}</p>
       </Panel>
 
       {lastError === null ? null : (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t('goLive.lastError')}: {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -485,21 +488,21 @@ function StatusBanner({
             STREAM_TONE[stream],
           )}
         >
-          <span className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-muted">
+          <span className="flex items-center gap-2 text-micro uppercase tracking-wide text-text-muted">
             <Radio aria-hidden="true" className={clsx('h-4 w-4 shrink-0', STREAM_TONE[stream])} />
             {t('goLive.indicator.streamLabel')}
           </span>
-          <span className={clsx('text-3xl font-bold uppercase leading-none', STREAM_TONE[stream])}>
+          <span className={clsx('text-metric font-bold uppercase leading-none', STREAM_TONE[stream])}>
             {streamText}
           </span>
-          <span className="text-sm text-text-muted">
+          <span className="text-body text-text-muted">
             {t('goLive.indicator.elapsedLabel')}:{' '}
-            <span data-testid="live-elapsed" className="font-mono text-base text-text">
+            <span data-testid="live-elapsed" className="font-mono text-label text-text">
               {streamMs === null ? t('goLive.indicator.elapsedUnknown') : formatElapsed(streamMs)}
             </span>
           </span>
           {reattached ? (
-            <span className="text-xs text-accent-2">{t('goLive.reattached.elapsedNote')}</span>
+            <span className="text-meta text-accent-2">{t('goLive.reattached.elapsedNote')}</span>
           ) : null}
         </div>
 
@@ -512,16 +515,16 @@ function StatusBanner({
             RECORD_TONE[record],
           )}
         >
-          <span className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-muted">
+          <span className="flex items-center gap-2 text-micro uppercase tracking-wide text-text-muted">
             <Disc aria-hidden="true" className={clsx('h-4 w-4 shrink-0', RECORD_TONE[record])} />
             {t('goLive.indicator.recordLabel')}
           </span>
-          <span className={clsx('text-3xl font-bold uppercase leading-none', RECORD_TONE[record])}>
+          <span className={clsx('text-metric font-bold uppercase leading-none', RECORD_TONE[record])}>
             {recordText}
           </span>
-          <span className="text-sm text-text-muted">
+          <span className="text-body text-text-muted">
             {t('goLive.indicator.elapsedLabel')}:{' '}
-            <span data-testid="record-elapsed" className="font-mono text-base text-text">
+            <span data-testid="record-elapsed" className="font-mono text-label text-text">
               {recordMs === null ? t('goLive.indicator.elapsedUnknown') : formatElapsed(recordMs)}
             </span>
           </span>
@@ -554,19 +557,19 @@ function StepList({ state }: { state: GoLiveState }): React.JSX.Element {
 
       <ol
         aria-label={t('goLive.steps.listLabel')}
-        className="mt-3 flex flex-col gap-2 text-sm"
+        className="mt-3 flex flex-col gap-2 text-body"
       >
         {state.steps.map((step) => (
           <StepRow key={step.step} step={step} />
         ))}
       </ol>
 
-      <p role="status" className="mt-3 text-sm text-text-muted">
+      <p role="status" className="mt-3 text-body text-text-muted">
         {active === null
           ? ''
           : t('goLive.steps.announcement', { step: t(`goLive.steps.name.${active}`) })}
       </p>
-      <p className="mt-1 max-w-3xl text-xs text-text-muted">{t('goLive.steps.recordNote')}</p>
+      <p className="mt-1 max-w-3xl text-meta text-text-muted">{t('goLive.steps.recordNote')}</p>
     </section>
   )
 }
@@ -588,11 +591,11 @@ function StepRow({ step }: { step: GoLiveStepStatus }): React.JSX.Element {
       <span className="flex flex-1 flex-col gap-0.5">
         <span className="text-text">{t(`goLive.steps.name.${step.step}`)}</span>
         {step.message === null ? null : (
-          <span className="select-text text-xs text-text-muted">{step.message}</span>
+          <span className="select-text text-meta text-text-muted">{step.message}</span>
         )}
       </span>
       {/* The state is a word, not a colour. */}
-      <span className={clsx('text-xs font-semibold uppercase tracking-wide', STEP_TONE[step.state])}>
+      <span className={clsx('text-micro font-semibold uppercase tracking-wide', STEP_TONE[step.state])}>
         {t(`goLive.steps.state.${step.state}`)}
       </span>
     </li>
@@ -606,9 +609,9 @@ function RecordingFile({ obs }: { obs: ObsOutputState }): React.JSX.Element {
   return (
     <Panel tone="neutral" title={t('goLive.recordingFile.title')}>
       {obs.recordingPath === null ? (
-        <p className="max-w-3xl text-sm text-text-muted">{t('goLive.recordingFile.none')}</p>
+        <p className="max-w-3xl text-body text-text-muted">{t('goLive.recordingFile.none')}</p>
       ) : (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
           <dt className="flex items-center gap-1.5 text-text-muted">
             <FileVideo aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
             {t('goLive.recordingFile.pathLabel')}
@@ -621,7 +624,7 @@ function RecordingFile({ obs }: { obs: ObsOutputState }): React.JSX.Element {
           </dd>
         </dl>
       )}
-      <p className="max-w-3xl text-xs text-text-muted">{t('goLive.recordingFile.note')}</p>
+      <p className="max-w-3xl text-meta text-text-muted">{t('goLive.recordingFile.note')}</p>
     </Panel>
   )
 }
@@ -646,17 +649,17 @@ function HealthReadout({ obs }: { obs: ObsOutputState }): React.JSX.Element {
         <div className="flex items-start gap-2 rounded-glass border border-accent-2/60 bg-surface-2 p-3">
           <TriangleAlert aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-accent-2" />
           <span className="flex flex-col gap-1">
-            <span className="text-sm font-semibold text-accent-2">
+            <span className="text-body font-semibold text-accent-2">
               {t('goLive.health.reconnectingTitle')}
             </span>
-            <span className="max-w-3xl text-sm text-text-muted">
+            <span className="max-w-3xl text-body text-text-muted">
               {t('goLive.health.reconnectingBody')}
             </span>
           </span>
         </div>
       ) : null}
 
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
         <dt className="flex items-center gap-1.5 text-text-muted">
           <Activity aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
           {t('goLive.health.droppedLabel')}
@@ -666,7 +669,7 @@ function HealthReadout({ obs }: { obs: ObsOutputState }): React.JSX.Element {
         </dd>
       </dl>
 
-      <p className="max-w-3xl text-xs text-text-muted">{t('goLive.health.bitrateNote')}</p>
+      <p className="max-w-3xl text-meta text-text-muted">{t('goLive.health.bitrateNote')}</p>
     </Panel>
   )
 }
@@ -684,33 +687,33 @@ function YouTubeNotConfigured(): React.JSX.Element {
 
   return (
     <Panel tone="warning" title={t('goLive.youtubeNotConfigured.title')}>
-      <p className="max-w-3xl text-sm text-text">{t('goLive.youtubeNotConfigured.body')}</p>
+      <p className="max-w-3xl text-body text-text">{t('goLive.youtubeNotConfigured.body')}</p>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-2 rounded-glass border border-border bg-surface-2 p-3">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-live">
+          <p className="flex items-center gap-1.5 text-micro font-semibold uppercase tracking-wide text-live">
             <CircleCheck aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
             {t('goLive.youtubeNotConfigured.willLabel')}
           </p>
-          <ul className="ms-4 flex list-disc flex-col gap-1 text-sm text-text-muted">
+          <ul className="ms-4 flex list-disc flex-col gap-1 text-body text-text-muted">
             <li>{t('goLive.youtubeNotConfigured.will1')}</li>
             <li>{t('goLive.youtubeNotConfigured.will2')}</li>
           </ul>
         </div>
 
         <div className="flex flex-col gap-2 rounded-glass border border-border bg-surface-2 p-3">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-panic">
+          <p className="flex items-center gap-1.5 text-micro font-semibold uppercase tracking-wide text-panic">
             <MinusCircle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
             {t('goLive.youtubeNotConfigured.willNotLabel')}
           </p>
-          <ul className="ms-4 flex list-disc flex-col gap-1 text-sm text-text-muted">
+          <ul className="ms-4 flex list-disc flex-col gap-1 text-body text-text-muted">
             <li>{t('goLive.youtubeNotConfigured.willNot1')}</li>
             <li>{t('goLive.youtubeNotConfigured.willNot2')}</li>
           </ul>
         </div>
       </div>
 
-      <p className="max-w-3xl text-sm text-text-muted">{t('goLive.youtubeNotConfigured.where')}</p>
+      <p className="max-w-3xl text-body text-text-muted">{t('goLive.youtubeNotConfigured.where')}</p>
     </Panel>
   )
 }

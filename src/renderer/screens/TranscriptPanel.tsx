@@ -221,8 +221,8 @@ export function TranscriptPanel({
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-4 p-6">
       <header className="shrink-0">
-        <h1 className="text-2xl font-semibold text-text">{t('asr.panel.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('asr.panel.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('asr.panel.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('asr.panel.subtitle')}</p>
       </header>
 
       {/* The health readout. `role="status"` so a state change is announced once, unlike the
@@ -347,7 +347,7 @@ export function TranscriptPanel({
             {t('asr.panel.resumeAutoScroll')}
           </Button>
         ) : null}
-        <p className="text-xs text-text-muted" data-testid="asr-follow-state">
+        <p className="text-meta text-text-muted" data-testid="asr-follow-state">
           {following ? t('asr.panel.autoScrollOn') : t('asr.panel.autoScrollPaused')}
         </p>
       </div>
@@ -363,12 +363,15 @@ export function TranscriptPanel({
           // Focusable so the transcript is scrollable from the keyboard — a scroll container that
           // only a mouse can reach is an accessibility defect, not a style choice.
           tabIndex={0}
-          className="min-h-0 flex-1 overflow-y-auto p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          // The one global focus outline, but drawn INSIDE the box. This is a flush scroll region
+          // inside a bordered panel, so the default `outline-offset: 2px` would land on — or be
+          // clipped by — the panel edge. A negative offset keeps the same single ring visible.
+          className="min-h-0 flex-1 overflow-y-auto p-4 focus-visible:[outline-offset:-2px]"
         >
           {segments.length === 0 ? (
             <div className="flex h-full flex-col items-start justify-center gap-1">
-              <p className="text-sm font-medium text-text">{t('asr.panel.empty')}</p>
-              <p className="max-w-2xl text-sm text-text-muted">{t('asr.panel.emptyHint')}</p>
+              <p className="text-body font-medium text-text">{t('asr.panel.empty')}</p>
+              <p className="max-w-2xl text-body text-text-muted">{t('asr.panel.emptyHint')}</p>
             </div>
           ) : (
             <ol className="flex flex-col gap-2">
@@ -378,13 +381,13 @@ export function TranscriptPanel({
             </ol>
           )}
         </div>
-        <p className="shrink-0 border-t border-border px-4 py-2 text-xs text-text-muted">
+        <p className="shrink-0 border-t border-border px-4 py-2 text-meta text-text-muted">
           {t('asr.panel.draftHint')}
         </p>
       </section>
 
       {captureError !== null ? (
-        <p role="alert" className="flex shrink-0 items-start gap-1.5 text-xs text-panic">
+        <p role="alert" className="flex shrink-0 items-start gap-1.5 text-meta text-panic">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span className="select-text">
             {t('asr.panel.micUnavailable', { reason: captureError.message })}
@@ -393,7 +396,7 @@ export function TranscriptPanel({
       ) : null}
 
       {lastError !== null ? (
-        <p className="flex shrink-0 items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex shrink-0 items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -412,8 +415,8 @@ function Readout({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <span className="flex items-baseline gap-2 text-sm">
-      <span className="text-xs uppercase tracking-wide text-text-muted">{label}</span>
+    <span className="flex items-baseline gap-2 text-body">
+      <span className="text-micro uppercase tracking-wide text-text-muted">{label}</span>
       {children}
     </span>
   )
@@ -438,7 +441,7 @@ function Banner({
     <section
       aria-label={title}
       className={clsx(
-        'shrink-0 rounded-glass-lg border bg-surface p-4 text-sm text-text-muted',
+        'shrink-0 rounded-glass-lg border bg-surface p-4 text-body text-text-muted',
         BANNER_TONES[tone],
       )}
     >
@@ -473,17 +476,17 @@ function SegmentRow({ segment }: { segment: TranscriptSegment }): React.JSX.Elem
     >
       <div className="flex flex-wrap items-center gap-2">
         {settling ? (
-          <span className="rounded-glass border border-accent-2/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-2">
+          <span className="rounded-glass border border-accent-2/60 px-1.5 py-0.5 text-micro font-semibold uppercase tracking-wide text-accent-2">
             {segment.isDraft ? t('asr.panel.draftBadge') : t('asr.panel.partialBadge')}
           </span>
         ) : null}
-        <span className="text-[10px] uppercase tracking-wide text-text-muted">
+        <span className="text-micro uppercase tracking-wide text-text-muted">
           {t(`asr.provider.${segment.provider}`)}
         </span>
       </div>
       <p
         className={clsx(
-          'select-text text-base leading-snug',
+          'select-text text-label font-normal leading-snug',
           settling ? 'italic text-text-muted' : 'text-text',
         )}
       >

@@ -588,4 +588,39 @@ test.describe('service day — the real app, end to end', () => {
       'down',
     )
   })
+
+  test('9 · a keyboard-focused control really carries the one 2px chalk outline', async () => {
+    // The companion to the drift guard in `src/renderer/styles/typography.test.ts`. That test
+    // proves no component re-declares a ring; this one proves the single global rule it now
+    // depends on actually paints — measured on a real control in the packaged app, with the real
+    // stylesheet loaded. Between them, a control cannot ship ringless: it can no longer suppress
+    // the outline locally, and if the global rule were deleted this test goes red.
+    //
+    // `:focus-visible` deliberately does NOT engage for a mouse click, so the focus has to come
+    // from the keyboard — which is also the operator who actually needs the ring.
+    await page.keyboard.press('Tab')
+
+    const ring = await page.evaluate(() => {
+      const el = document.activeElement
+      if (el === null || el === document.body) return null
+      const style = getComputedStyle(el)
+      return {
+        tag: el.tagName,
+        focusVisible: el.matches(':focus-visible'),
+        width: style.outlineWidth,
+        style: style.outlineStyle,
+        colour: style.outlineColor,
+        offset: style.outlineOffset,
+      }
+    })
+
+    expect(ring, 'Tab moved focus to a real control').not.toBeNull()
+    expect(ring?.focusVisible).toBe(true)
+    expect(ring?.width).toBe('2px')
+    expect(ring?.style).toBe('solid')
+    expect(ring?.offset).toBe('2px')
+    // CHALK (--color-ring: 201 199 192), not a hue. A focus ring answers "where is my keyboard";
+    // spending a saturated colour on it would put a decorative hue beside a red tally lamp.
+    expect(ring?.colour).toBe('rgb(201, 199, 192)')
+  })
 })

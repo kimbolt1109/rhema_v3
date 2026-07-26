@@ -167,13 +167,13 @@ export function GoLiveSettings(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-6 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('youtube.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('youtube.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('youtube.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('youtube.subtitle')}</p>
       </header>
 
       {!bridgeAvailable ? (
         <Panel tone="panic" title={t('youtube.bridgeUnavailable.title')}>
-          <p className="max-w-3xl text-sm text-text-muted">
+          <p className="max-w-3xl text-body text-text-muted">
             {t('youtube.bridgeUnavailable.body')}
           </p>
         </Panel>
@@ -224,11 +224,11 @@ export function GoLiveSettings(): React.JSX.Element {
       <StreamPanel status={status} />
 
       <Panel tone="neutral" title={t('youtube.quota.title')}>
-        <p className="max-w-3xl text-sm text-text-muted">{t('youtube.quota.body')}</p>
+        <p className="max-w-3xl text-body text-text-muted">{t('youtube.quota.body')}</p>
       </Panel>
 
       {lastError !== null ? (
-        <p className="flex items-start gap-1.5 text-xs text-text-muted">
+        <p className="flex items-start gap-1.5 text-meta text-text-muted">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
           <span className="select-text">
             {t('youtube.lastError')}: {t(`errors.code.${lastError.code}`)} — {lastError.message}
@@ -289,20 +289,20 @@ function NotConfiguredPanel(): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <Panel tone="warning" title={t('youtube.notConfigured.title')}>
-      <p className="max-w-3xl text-sm text-text-muted">{t('youtube.notConfigured.body')}</p>
+      <p className="max-w-3xl text-body text-text-muted">{t('youtube.notConfigured.body')}</p>
       <ol
         aria-label={t('youtube.notConfigured.stepsLabel')}
-        className="ms-5 flex list-decimal flex-col gap-2 text-sm text-text"
+        className="ms-5 flex list-decimal flex-col gap-2 text-body text-text"
       >
         <li className="select-text">{t('youtube.notConfigured.step1')}</li>
         <li className="select-text">{t('youtube.notConfigured.step2')}</li>
         <li className="select-text">{t('youtube.notConfigured.step3')}</li>
         <li className="select-text">{t('youtube.notConfigured.step4')}</li>
       </ol>
-      <p className="max-w-3xl select-text text-sm text-text-muted">
+      <p className="max-w-3xl select-text text-body text-text-muted">
         {t('youtube.notConfigured.humanTasks')}
       </p>
-      <p className="max-w-3xl text-sm text-text-muted">{t('youtube.notConfigured.safe')}</p>
+      <p className="max-w-3xl text-body text-text-muted">{t('youtube.notConfigured.safe')}</p>
     </Panel>
   )
 }
@@ -326,7 +326,7 @@ function AccountPanel({
 
   return (
     <Panel tone={state === 'auth-error' ? 'panic' : 'neutral'} title={t('youtube.account.title')}>
-      <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+      <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-body">
         <dt className="text-text-muted">{t('youtube.account.stateLabel')}</dt>
         <dd data-auth-state={state} className="font-medium text-text">
           {t(`youtube.state.${state}`)}
@@ -335,20 +335,20 @@ function AccountPanel({
 
       {signedIn ? (
         channel === null ? (
-          <p className="text-sm text-text-muted">{t('youtube.account.channelUnknown')}</p>
+          <p className="text-body text-text-muted">{t('youtube.account.channelUnknown')}</p>
         ) : (
           <div className="flex flex-col gap-2 rounded-glass border border-border bg-surface-2 p-4">
             <div className="flex items-center gap-2">
               <Cast aria-hidden="true" className="h-5 w-5 shrink-0 text-live" />
-              <span className="text-xs uppercase tracking-wide text-text-muted">
+              <span className="text-micro uppercase tracking-wide text-text-muted">
                 {t('youtube.account.connectedAsLabel')}
               </span>
             </div>
-            <p className="select-text text-lg font-semibold text-text">{channel.title}</p>
+            <p className="select-text text-title font-semibold text-text">{channel.title}</p>
             {channel.customUrl === null ? null : (
-              <p className="select-text font-mono text-xs text-text-muted">{channel.customUrl}</p>
+              <p className="select-text font-mono text-meta text-text-muted">{channel.customUrl}</p>
             )}
-            <p className="max-w-3xl text-sm text-text-muted">
+            <p className="max-w-3xl text-body text-text-muted">
               {t('youtube.account.confirmChannel')}
             </p>
           </div>
@@ -356,7 +356,7 @@ function AccountPanel({
       ) : null}
 
       {lastError === null ? null : (
-        <p role="alert" className="flex items-start gap-1.5 text-sm text-panic">
+        <p role="alert" className="flex items-start gap-1.5 text-body text-panic">
           <CircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="select-text">
             {t('youtube.account.authError')} — {lastError}
@@ -388,7 +388,7 @@ function AccountPanel({
         )}
       </div>
 
-      <p className="max-w-3xl text-xs text-text-muted">
+      <p className="max-w-3xl text-meta text-text-muted">
         {signedIn ? t('youtube.account.signedOutHint') : t('youtube.account.signInHint')}
       </p>
     </Panel>
@@ -415,11 +415,11 @@ function PreflightPanel({
   return (
     <Panel tone={errors.length > 0 ? 'panic' : 'neutral'} title={t('youtube.preflight.title')}>
       {total === 0 ? (
-        <p className="text-sm text-text-muted">{t('youtube.preflight.allClear')}</p>
+        <p className="text-body text-text-muted">{t('youtube.preflight.allClear')}</p>
       ) : (
         <ul
           aria-label={t('youtube.preflight.listLabel')}
-          className="flex flex-col gap-2 text-sm"
+          className="flex flex-col gap-2 text-body"
         >
           {[...errors, ...warnings].map((issue) => (
             <li
@@ -441,7 +441,7 @@ function PreflightPanel({
               <span className="flex flex-col gap-0.5">
                 <span
                   className={clsx(
-                    'text-xs font-semibold uppercase tracking-wide',
+                    'text-micro font-semibold uppercase tracking-wide',
                     issue.severity === 'error' ? 'text-panic' : 'text-accent-2',
                   )}
                 >
@@ -455,16 +455,15 @@ function PreflightPanel({
           ))}
         </ul>
       )}
-      <p className="max-w-3xl text-xs text-text-muted">{t('youtube.preflight.blocksNote')}</p>
-      <p className="max-w-3xl text-xs text-text-muted">{t('youtube.preflight.ccliNote')}</p>
+      <p className="max-w-3xl text-meta text-text-muted">{t('youtube.preflight.blocksNote')}</p>
+      <p className="max-w-3xl text-meta text-text-muted">{t('youtube.preflight.ccliNote')}</p>
     </Panel>
   )
 }
 
 const controlClass = clsx(
   'min-h-touch w-full select-text rounded-glass border border-border bg-surface-2 px-3',
-  'text-base text-text',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+  'text-label font-normal text-text',
   'disabled:cursor-not-allowed disabled:opacity-60',
 )
 
@@ -525,20 +524,20 @@ function TemplateForm({
           />
           {/* The live preview runs the shared expander, so there is exactly one implementation of
               `{date}` between here and the broadcast YouTube actually receives. */}
-          <p className="text-xs font-medium text-text-muted">
+          <p className="text-meta font-medium text-text-muted">
             {t('youtube.template.previewLabel')}
           </p>
           <p
             data-testid="title-preview"
             aria-live="polite"
-            className="select-text rounded-glass border border-border bg-surface-2 px-3 py-2 text-base text-text"
+            className="select-text rounded-glass border border-border bg-surface-2 px-3 py-2 text-label text-text"
           >
             {titlePreview.length === 0 ? t('youtube.template.previewEmpty') : titlePreview}
           </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={descriptionId} className="text-sm font-medium text-text">
+          <label htmlFor={descriptionId} className="text-label font-medium text-text">
             {t('youtube.template.descriptionLabel')}
           </label>
           <textarea
@@ -552,13 +551,13 @@ function TemplateForm({
             }}
             className={clsx(controlClass, 'py-2')}
           />
-          <p id={`${descriptionId}-hint`} className="text-xs text-text-muted">
+          <p id={`${descriptionId}-hint`} className="text-meta text-text-muted">
             {t('youtube.template.descriptionHint')}
           </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={privacyId} className="text-sm font-medium text-text">
+          <label htmlFor={privacyId} className="text-label font-medium text-text">
             {t('youtube.template.privacyLabel')}
           </label>
           <select
@@ -577,7 +576,7 @@ function TemplateForm({
               </option>
             ))}
           </select>
-          <p id={`${privacyId}-hint`} className="text-xs text-text-muted">
+          <p id={`${privacyId}-hint`} className="text-meta text-text-muted">
             {t('youtube.template.privacyHint')}
           </p>
 
@@ -590,10 +589,10 @@ function TemplateForm({
             >
               <TriangleAlert aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-panic" />
               <span className="flex flex-col gap-1">
-                <span className="text-sm font-semibold text-panic">
+                <span className="text-body font-semibold text-panic">
                   {t('youtube.publicWarning.title')}
                 </span>
-                <span className="max-w-3xl text-sm text-text-muted">
+                <span className="max-w-3xl text-body text-text-muted">
                   {t('youtube.publicWarning.body')}
                 </span>
               </span>
@@ -602,7 +601,7 @@ function TemplateForm({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={scheduledId} className="text-sm font-medium text-text">
+          <label htmlFor={scheduledId} className="text-label font-medium text-text">
             {t('youtube.template.scheduledLabel')}
           </label>
           <input
@@ -616,7 +615,7 @@ function TemplateForm({
             }}
             className={controlClass}
           />
-          <p id={`${scheduledId}-hint`} className="text-xs text-text-muted">
+          <p id={`${scheduledId}-hint`} className="text-meta text-text-muted">
             {t('youtube.template.scheduledHint')}
           </p>
         </div>
@@ -632,7 +631,7 @@ function TemplateForm({
         />
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={timeZoneId} className="text-sm font-medium text-text">
+          <label htmlFor={timeZoneId} className="text-label font-medium text-text">
             {t('youtube.template.timeZoneLabel')}
           </label>
           <input
@@ -646,7 +645,7 @@ function TemplateForm({
             }}
             className={controlClass}
           />
-          <p id={`${timeZoneId}-hint`} className="text-xs text-text-muted">
+          <p id={`${timeZoneId}-hint`} className="text-meta text-text-muted">
             {t('youtube.template.timeZoneHint')}
           </p>
         </div>
@@ -661,7 +660,7 @@ function TemplateForm({
           >
             {t('youtube.template.save')}
           </Button>
-          <p role="status" className="text-sm text-text-muted">
+          <p role="status" className="text-body text-text-muted">
             {saved ? t('youtube.template.saved') : ''}
           </p>
         </div>
@@ -687,9 +686,9 @@ function BroadcastPanel({
   return (
     <Panel tone="neutral" title={t('youtube.broadcast.title')}>
       {broadcast === null ? (
-        <p className="text-sm text-text-muted">{t('youtube.broadcast.none')}</p>
+        <p className="text-body text-text-muted">{t('youtube.broadcast.none')}</p>
       ) : (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
           <Row label={t('youtube.broadcast.titleLabel')} value={broadcast.title} />
           <Row
             label={t('youtube.broadcast.privacyLabel')}
@@ -724,7 +723,7 @@ function BroadcastPanel({
           {creating ? t('youtube.broadcast.creating') : t('youtube.broadcast.create')}
         </Button>
       </div>
-      <p className="max-w-3xl text-xs text-text-muted">{t('youtube.broadcast.createHint')}</p>
+      <p className="max-w-3xl text-meta text-text-muted">{t('youtube.broadcast.createHint')}</p>
     </Panel>
   )
 }
@@ -735,12 +734,12 @@ function StreamPanel({ status }: { status: YouTubeStatus }): React.JSX.Element {
 
   return (
     <Panel tone="neutral" title={t('youtube.stream.title')}>
-      <p className="max-w-3xl text-sm text-text-muted">{t('youtube.stream.explain')}</p>
+      <p className="max-w-3xl text-body text-text-muted">{t('youtube.stream.explain')}</p>
 
       {stream === null ? (
-        <p className="text-sm text-text-muted">{t('youtube.stream.none')}</p>
+        <p className="text-body text-text-muted">{t('youtube.stream.none')}</p>
       ) : (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
           <Row label={t('youtube.stream.nameLabel')} value={stream.title} />
           <Row
             label={t('youtube.stream.ingestLabel')}
@@ -755,7 +754,7 @@ function StreamPanel({ status }: { status: YouTubeStatus }): React.JSX.Element {
 
       {/* Stated, rather than silently omitted: an operator hunting for the credential needs to
           know it is intentionally absent, or they will assume the screen is broken. */}
-      <p className="flex max-w-3xl items-start gap-1.5 text-xs text-text-muted">
+      <p className="flex max-w-3xl items-start gap-1.5 text-meta text-text-muted">
         <KeyRound aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>{t('youtube.stream.keyNote')}</span>
       </p>

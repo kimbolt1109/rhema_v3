@@ -114,19 +114,19 @@ export function HotPhraseEditor(): React.JSX.Element {
       className="flex flex-col gap-4 rounded-glass border border-border bg-surface p-4"
     >
       <div>
-        <h2 className="text-base font-semibold text-text">{t('cue.hotPhrases.title')}</h2>
-        <p className="mt-1 max-w-2xl text-sm text-text-muted">{t('cue.hotPhrases.subtitle')}</p>
+        <h2 className="text-title font-semibold text-text">{t('cue.hotPhrases.title')}</h2>
+        <p className="mt-1 max-w-2xl text-body text-text-muted">{t('cue.hotPhrases.subtitle')}</p>
       </div>
 
       {hasCues ? null : (
-        <p role="note" className="text-sm text-text-muted">
+        <p role="note" className="text-body text-text-muted">
           {t('cue.hotPhrases.noCues')}
         </p>
       )}
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <label htmlFor="hot-phrase-new" className="text-xs font-medium text-text-muted">
+          <label htmlFor="hot-phrase-new" className="text-meta font-medium text-text-muted">
             {t('cue.hotPhrases.phraseLabel')}
           </label>
           <input
@@ -138,12 +138,12 @@ export function HotPhraseEditor(): React.JSX.Element {
               setDraft(event.target.value)
               setRejection(null)
             }}
-            className="min-h-touch w-64 rounded-glass border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-h-touch w-64 rounded-glass border border-border bg-surface-2 px-3 text-label text-text"
           />
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor="hot-phrase-new-cue" className="text-xs font-medium text-text-muted">
+          <label htmlFor="hot-phrase-new-cue" className="text-meta font-medium text-text-muted">
             {t('cue.hotPhrases.cueLabel')}
           </label>
           <select
@@ -153,7 +153,7 @@ export function HotPhraseEditor(): React.JSX.Element {
             onChange={(event) => {
               setDraftCueId(event.target.value)
             }}
-            className="min-h-touch rounded-glass border border-border bg-surface-2 px-3 text-sm text-text disabled:opacity-60"
+            className="min-h-touch rounded-glass border border-border bg-surface-2 px-3 text-label font-normal text-text disabled:opacity-60"
           >
             {cues.map((cue) => (
               <option key={cue.id} value={cue.id}>
@@ -168,7 +168,7 @@ export function HotPhraseEditor(): React.JSX.Element {
           data-testid="hot-phrase-add"
           disabled={busy || !hasCues}
           onClick={add}
-          className="inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-4 text-sm font-medium text-text hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex min-h-touch items-center gap-2 rounded-glass border border-border bg-surface-2 px-4 text-label font-medium text-text hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Plus aria-hidden="true" className="h-4 w-4 shrink-0" />
           {t('cue.hotPhrases.add')}
@@ -176,7 +176,7 @@ export function HotPhraseEditor(): React.JSX.Element {
       </div>
 
       {rejection === null ? null : (
-        <p role="alert" data-testid="hot-phrase-rejection" className="text-sm text-panic">
+        <p role="alert" data-testid="hot-phrase-rejection" className="text-body text-panic">
           {rejection === 'too-short'
             ? t('cue.hotPhrases.tooShort', { min: MIN_HOT_PHRASE_LENGTH })
             : rejection === 'duplicate'
@@ -188,7 +188,7 @@ export function HotPhraseEditor(): React.JSX.Element {
       {/* The draft is warned about before it is ever saved: telling the operator afterwards is
           telling them once the accident is already configured. */}
       {isRiskilyShort(draft) ? (
-        <p data-testid="hot-phrase-draft-warning" className="flex items-start gap-2 text-sm text-panic">
+        <p data-testid="hot-phrase-draft-warning" className="flex items-start gap-2 text-body text-panic">
           <TriangleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
           {t('cue.hotPhrases.shortWarning', { min: MIN_SAFE_HOT_PHRASE_LENGTH })}
         </p>
@@ -196,8 +196,8 @@ export function HotPhraseEditor(): React.JSX.Element {
 
       {phrases.length === 0 ? (
         <div>
-          <p className="text-sm text-text-muted">{t('cue.hotPhrases.empty')}</p>
-          <p className="text-xs text-text-muted">{t('cue.hotPhrases.emptyHint')}</p>
+          <p className="text-body text-text-muted">{t('cue.hotPhrases.empty')}</p>
+          <p className="text-meta text-text-muted">{t('cue.hotPhrases.emptyHint')}</p>
         </div>
       ) : (
         <ul aria-label={t('cue.hotPhrases.listLabel')} className="flex flex-col gap-2">
@@ -229,7 +229,7 @@ export function HotPhraseEditor(): React.JSX.Element {
                 />
                 <label
                   htmlFor={`hot-phrase-enabled-${entry.id}`}
-                  className="text-sm font-medium text-text"
+                  className="text-label font-medium text-text"
                 >
                   {t('cue.hotPhrases.enableLabel', { phrase: entry.phrase })}
                 </label>
@@ -250,7 +250,7 @@ export function HotPhraseEditor(): React.JSX.Element {
                       ),
                     )
                   }}
-                  className="min-h-touch rounded-glass border border-border bg-surface px-3 text-sm text-text disabled:opacity-60"
+                  className="min-h-touch rounded-glass border border-border bg-surface px-3 text-label font-normal text-text disabled:opacity-60"
                 >
                   {cues.some((cue) => cue.id === entry.cueId) ? null : (
                     <option value={entry.cueId}>{entry.cueId}</option>
@@ -268,14 +268,14 @@ export function HotPhraseEditor(): React.JSX.Element {
                   onClick={() => {
                     save(phrases.filter((candidate) => candidate.id !== entry.id))
                   }}
-                  className="ms-auto inline-flex min-h-touch items-center gap-2 rounded-glass border border-border px-3 text-sm text-text hover:border-panic/60 hover:text-panic focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
+                  className="ms-auto inline-flex min-h-touch items-center gap-2 rounded-glass border border-border px-3 text-label text-text hover:border-panic/60 hover:text-panic disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Trash2 aria-hidden="true" className="h-4 w-4 shrink-0" />
                   {t('cue.hotPhrases.remove', { phrase: entry.phrase })}
                 </button>
 
                 {short ? (
-                  <p className="flex w-full items-start gap-2 text-xs text-panic">
+                  <p className="flex w-full items-start gap-2 text-meta text-panic">
                     <TriangleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
                     {t('cue.hotPhrases.shortWarning', { min: MIN_SAFE_HOT_PHRASE_LENGTH })}
                   </p>
@@ -287,7 +287,7 @@ export function HotPhraseEditor(): React.JSX.Element {
       )}
 
       {lastError === null ? null : (
-        <p className="text-xs text-panic">
+        <p className="text-meta text-panic">
           {t('cue.hotPhrases.saveFailed')} {lastError.message}
         </p>
       )}

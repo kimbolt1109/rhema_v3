@@ -66,21 +66,21 @@ function ErrorFallback({ error, onReload }: { error: Error; onReload: () => void
         <div className="flex items-start gap-3">
           <TriangleAlert aria-hidden="true" className="mt-1 h-7 w-7 shrink-0 text-panic" />
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold">{t('errors.boundary.title')}</h1>
-            <p className="mt-2 text-sm text-text-muted">{t('errors.boundary.body')}</p>
+            <h1 className="text-title font-semibold">{t('errors.boundary.title')}</h1>
+            <p className="mt-2 text-body text-text-muted">{t('errors.boundary.body')}</p>
           </div>
         </div>
 
         <div className="mt-5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
             {t('errors.boundary.detailsLabel')}
           </h2>
-          <pre className="mt-2 max-h-48 select-text overflow-auto rounded-glass bg-surface-2 p-3 font-mono text-xs text-text">
+          <pre className="mt-2 max-h-48 select-text overflow-auto rounded-glass bg-surface-2 p-3 font-mono text-meta text-text">
             {error.message}
           </pre>
         </div>
 
-        <p className="mt-5 text-xs text-text-muted">{t('errors.boundary.reloadHint')}</p>
+        <p className="mt-5 text-meta text-text-muted">{t('errors.boundary.reloadHint')}</p>
 
         <div className="mt-4">
           <Button variant="primary" size="lg" icon={RotateCcw} onClick={onReload}>

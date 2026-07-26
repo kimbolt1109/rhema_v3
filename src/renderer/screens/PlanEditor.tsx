@@ -210,8 +210,8 @@ export function PlanEditor(): React.JSX.Element {
   return (
     <div className="mx-auto flex h-full w-full max-w-6xl flex-col gap-5 overflow-y-auto p-6">
       <header>
-        <h1 className="text-2xl font-semibold text-text">{t('plan.title')}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-text-muted">{t('plan.subtitle')}</p>
+        <h1 className="text-readout font-semibold text-text">{t('plan.title')}</h1>
+        <p className="mt-1 max-w-3xl text-body text-text-muted">{t('plan.subtitle')}</p>
       </header>
 
       {/* ------------------------------- file + toolbar ------------------------------- */}
@@ -221,10 +221,10 @@ export function PlanEditor(): React.JSX.Element {
         className="flex flex-wrap items-center gap-3 rounded-glass-lg border border-border bg-surface p-4"
       >
         <div className="flex min-w-0 flex-1 flex-col">
-          <span data-testid="plan-service" className="truncate text-sm font-medium text-text">
+          <span data-testid="plan-service" className="truncate text-body font-medium text-text">
             {plan.service.length > 0 ? plan.service : t('plan.file.untitled')}
           </span>
-          <span data-testid="plan-path" className="truncate font-mono text-xs text-text-muted">
+          <span data-testid="plan-path" className="truncate font-mono text-meta text-text-muted">
             {path ?? t('plan.file.neverSaved')}
           </span>
         </div>
@@ -236,8 +236,8 @@ export function PlanEditor(): React.JSX.Element {
           data-dirty={dirty ? 'true' : 'false'}
           className={
             dirty
-              ? 'rounded-glass border border-accent px-3 py-1 text-xs font-medium text-accent'
-              : 'rounded-glass border border-border px-3 py-1 text-xs text-text-muted'
+              ? 'rounded-glass border border-accent px-3 py-1 text-meta font-medium text-accent'
+              : 'rounded-glass border border-border px-3 py-1 text-meta text-text-muted'
           }
         >
           {dirty ? t('plan.unsaved') : t('plan.saved')}
@@ -278,7 +278,7 @@ export function PlanEditor(): React.JSX.Element {
         className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-4"
       >
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="flex-1 text-sm font-semibold uppercase tracking-wide text-text">
+          <h2 className="flex-1 text-micro font-semibold uppercase tracking-wide text-text">
             {t('plan.importer.title')}
           </h2>
           <Button
@@ -322,14 +322,14 @@ export function PlanEditor(): React.JSX.Element {
             data-testid="asset-import-refused"
             className="flex flex-col gap-1 rounded-glass border border-panic/60 bg-surface-2 p-3"
           >
-            <p className="text-sm font-semibold text-panic">
+            <p className="text-body font-semibold text-panic">
               {t('plan.assets.refused', { count: refusedAssets.length })}
             </p>
             <ul className="flex flex-col gap-1">
               {refusedAssets.map((failure) => (
                 <li
                   key={failure.sourcePath}
-                  className="select-text break-all font-mono text-xs text-text-muted"
+                  className="select-text break-all font-mono text-meta text-text-muted"
                 >
                   {failure.sourcePath} — {failure.reason}
                 </li>
@@ -339,7 +339,7 @@ export function PlanEditor(): React.JSX.Element {
         )}
 
         {importer.available ? (
-          <p className="font-mono text-xs text-text-muted">
+          <p className="font-mono text-meta text-text-muted">
             {t('plan.importer.backend', {
               backend: importer.backend ?? '—',
               path: importer.executablePath ?? '—',
@@ -351,16 +351,16 @@ export function PlanEditor(): React.JSX.Element {
             data-testid="importer-unavailable"
             className="flex flex-col gap-2 rounded-glass border border-accent-2/50 bg-surface-2 p-3"
           >
-            <p className="text-sm font-semibold text-text">
+            <p className="text-body font-semibold text-text">
               {t('plan.importer.unavailable.title')}
             </p>
             {/* The backend's own words, printed verbatim. A generic "unavailable" would send the
                 operator hunting for a setting that does not exist. */}
-            <p className="select-text text-sm text-text-muted">
+            <p className="select-text text-body text-text-muted">
               {importer.detail ?? t('plan.importer.unavailable.noDetail')}
             </p>
-            <p className="text-sm text-text-muted">{t('plan.importer.unavailable.install')}</p>
-            <p className="text-sm text-text-muted">{t('plan.importer.unavailable.meanwhile')}</p>
+            <p className="text-body text-text-muted">{t('plan.importer.unavailable.install')}</p>
+            <p className="text-body text-text-muted">{t('plan.importer.unavailable.meanwhile')}</p>
           </div>
         )}
 
@@ -372,8 +372,8 @@ export function PlanEditor(): React.JSX.Element {
             data-stage={importProgress.stage}
             className="flex flex-col gap-1 rounded-glass border border-border bg-surface-2 p-3"
           >
-            <p className="text-sm text-text">{t(progressStage)}</p>
-            <p data-testid="import-progress-count" className="font-mono text-xs text-text-muted">
+            <p className="text-body text-text">{t(progressStage)}</p>
+            <p data-testid="import-progress-count" className="font-mono text-meta text-text-muted">
               {importProgress.slidesTotal === null
                 ? t('plan.importer.progress.countedUnknown', { done: importProgress.slidesDone })
                 : t('plan.importer.progress.counted', {
@@ -390,7 +390,7 @@ export function PlanEditor(): React.JSX.Element {
               />
             )}
             {importProgress.message === null ? null : (
-              <p className="select-text text-xs text-text-muted">{importProgress.message}</p>
+              <p className="select-text text-meta text-text-muted">{importProgress.message}</p>
             )}
           </div>
         )}
@@ -403,13 +403,13 @@ export function PlanEditor(): React.JSX.Element {
         className="flex flex-wrap items-center gap-3 rounded-glass-lg border border-border bg-surface p-4"
       >
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span data-testid="driver-current" className="truncate text-sm text-text">
+          <span data-testid="driver-current" className="truncate text-body text-text">
             {t('plan.driver.nowShowing')}:{' '}
             <strong className="font-semibold">
               {(lastFired ?? current)?.label ?? t('plan.driver.nothingFired')}
             </strong>
           </span>
-          <span data-testid="driver-next" className="truncate text-xs text-text-muted">
+          <span data-testid="driver-next" className="truncate text-meta text-text-muted">
             {t('plan.driver.upNext')}: {upcoming?.label ?? t('plan.driver.endOfPlan')}
           </span>
         </div>
@@ -439,7 +439,7 @@ export function PlanEditor(): React.JSX.Element {
       </section>
 
       {bridgeAvailable ? null : (
-        <p role="alert" className="rounded-glass-lg border border-panic/60 bg-surface p-4 text-sm text-panic">
+        <p role="alert" className="rounded-glass-lg border border-panic/60 bg-surface p-4 text-body text-panic">
           {t('plan.bridgeUnavailable.body')}
         </p>
       )}
@@ -448,7 +448,7 @@ export function PlanEditor(): React.JSX.Element {
         <p
           role="alert"
           data-testid="plan-error"
-          className="rounded-glass-lg border border-panic/60 bg-surface p-4 text-sm text-panic"
+          className="rounded-glass-lg border border-panic/60 bg-surface p-4 text-body text-panic"
         >
           {t('plan.error.title')}: <span className="select-text">{lastError.message}</span>
         </p>
@@ -462,7 +462,7 @@ export function PlanEditor(): React.JSX.Element {
           className="flex flex-col gap-3 rounded-glass-lg border border-border bg-surface p-4"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="flex-1 text-sm font-semibold uppercase tracking-wide text-text">
+            <h2 className="flex-1 text-micro font-semibold uppercase tracking-wide text-text">
               {t('plan.list.heading', { total: cues.length })}
             </h2>
             <label htmlFor="new-cue-type" className="sr-only">
@@ -474,7 +474,7 @@ export function PlanEditor(): React.JSX.Element {
               onChange={(event) => {
                 setNewCueType(event.target.value as CueType)
               }}
-              className="min-h-touch rounded-glass border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="min-h-touch rounded-glass border border-border bg-surface-2 px-3 text-label font-normal text-text"
             >
               {CUE_TYPES.map((type) => (
                 <option key={type} value={type}>
@@ -498,7 +498,7 @@ export function PlanEditor(): React.JSX.Element {
             </Button>
           </div>
 
-          <p className="text-xs text-text-muted">{t('plan.list.reorderHint')}</p>
+          <p className="text-meta text-text-muted">{t('plan.list.reorderHint')}</p>
 
           <DndContext
             sensors={sensors}
@@ -530,7 +530,7 @@ export function PlanEditor(): React.JSX.Element {
           </DndContext>
 
           {cues.length > 0 || !hydrated ? null : (
-            <p data-testid="plan-empty" className="text-sm text-text-muted">
+            <p data-testid="plan-empty" className="text-body text-text-muted">
               {t('plan.list.empty')}
             </p>
           )}
@@ -539,7 +539,7 @@ export function PlanEditor(): React.JSX.Element {
         {draft === null ? (
           <section
             aria-label={t('plan.editor.title')}
-            className="rounded-glass-lg border border-border bg-surface p-5 text-sm text-text-muted"
+            className="rounded-glass-lg border border-border bg-surface p-5 text-body text-text-muted"
           >
             {t('plan.editor.none')}
           </section>

@@ -1077,3 +1077,116 @@ clean both projects, `npm run build` clean, i18n audit PASS, all 9 e2e green. Ch
 1366×768 against the real 102-slide deck, which is how the one genuine defect in the first pass was
 caught and fixed: the recessed clock well containing only an em-dash read as broken hardware, so the
 well now appears only when there is a time to show.
+
+## Cycle 15 — The drawer sweep: one type scale, one focus ring, and four invisible buttons
+
+Cycle 14 left the thirteen drawer screens on their original markup. They inherited every new colour
+token and looked consistent, so the remaining gap was described as "~40 uppercase `tracking-widest`
+headings and ad-hoc `text-[Npx]` sizes". **Measuring it first showed that description was wrong on
+both counts**, which is the reason this entry leads with numbers:
+
+- `tracking-widest` appeared in **zero** live drawer screens. The six hits were in `SlideGrid`,
+  `BottomBar` and `HoldButton` — all already swept, all using `tracking-[0.08em]` deliberately —
+  plus the never-mounted `PlanRunner`.
+- Ad-hoc `text-[Npx]` was **15 sites**, not the bulk.
+- The actual work was **418 default-Tailwind font-size utilities**, 52 `uppercase`, and **37
+  per-component focus-ring runs**.
+
+That gap matters because the default sizes were not merely off-scale. `fontSize` in
+`tailwind.config.js` **replaces** Tailwind's scale wholesale, so `text-sm` emitted no font-size rule
+at all — every one of those 418 elements was silently falling back to inherited size.
+
+### The mapping, and the one thing that could have silently broken it
+
+The new steps bake a `font-weight` into each `fontSize`. Before rewriting anything, the emitted
+stylesheet was checked for rule order: weight utilities land at byte offsets 240–243 and `uppercase`
+/ `tracking-*` at 244/254, **after** every `fontSize` rule (226–239). So an explicit `font-*` always
+beats a baked weight, and no site that already declared one could be restyled by accident. Sites
+with **no** weight class do pick up the scale's weight, which is intended — Inter is not bundled, so
+a stock Windows church PC resolves to Segoe UI, where 500 at 12–13px is materially more legible in a
+dark booth than 400.
+
+Where a step that bakes ≥600 landed on a value or a paragraph — an `<input>`, a `<select>`, a
+`<p>` — `font-normal` was pinned explicitly, because a form field's value rendered semibold reads as
+a label. That is why the transcript paragraph and every text input carry an explicit weight now.
+
+`text-sm` resolved by the element's role rather than by a blanket rule: `text-label` (15px/600) on a
+`<label>`, `<button>`, heading, `<legend>`, `<th>` or `<dt>`; `text-body` (13px/500) on prose. An
+uppercase eyebrow at any small size became `text-micro`, which already bakes 600 weight and 0.08em
+tracking — exactly what an eyebrow wants, and the only step the scale permits to take `uppercase`.
+
+### Four invisible buttons — a real defect, found on the way
+
+Cycle 14 repointed `--color-accent` from indigo to CHALK `#c9c7c0`. `Button.tsx` was corrected for
+this and its docstring even records why. **Four hand-rolled buttons were not**, and they kept
+`bg-accent` with `text-text`:
+
+| Control | Where |
+|---|---|
+| **GO LIVE** — the biggest control in the app | `GoLivePanel.tsx` |
+| **Accept cue** — tapped mid-service, on screen during the service | `SuggestionPanel.tsx` |
+| Retry after a partial go-live | `GoLivePanel.tsx` |
+| Resume from panic | `TrustDial.tsx` |
+
+Chalk `#c9c7c0` against text `#e8e7e2` measures **1.37:1**. Those labels were not low-contrast, they
+were *invisible*, and `CueRow`'s fire button had the same fault on hover. The fix is not to recolour
+the label: ERGO-1 forbids a light filled surface in a dark booth outright, so all five adopt the
+outlined cap `Button.tsx` already documents — `border-accent bg-surface-2 shadow-edge
+hover:bg-surface-3`, where the brightest border in the row is all "primary" has to mean. The correct
+pairing measures 11.49:1.
+
+`shadow-glow` went with them: it aliases to a page-black keyline, which is a *tile* treatment and
+does nothing useful on a control.
+
+### One focus ring, made load-bearing rather than merely stated
+
+37 controls each re-declared `focus-visible:outline-none` plus a box-shadow ring. That pattern is
+self-defeating: the `outline-none` half is precisely what suppressed the global outline, so every
+control had to opt back in by hand and any that forgot shipped with **no ring at all** — the exact
+defect v2 logged as focus-visible "not yet standardized" (`SHORTCUTS_AND_A11Y.md` §9.5). All 37 are
+gone; the single `:focus-visible` rule in `index.css` now applies because nothing overrides it.
+
+Two deliberate calls inside that: `HoldButton`'s ring was panic-tinted, and is now the same chalk as
+everything else — a focus ring answers "where is my keyboard", not "this is dangerous", and the hold
+button is already marked by its panic border and tint. `TranscriptPanel`'s scroll container keeps an
+inset ring, expressed as `focus-visible:[outline-offset:-2px]`, because it sits flush inside a
+bordered panel where an outset outline clips.
+
+### Guards, so this cannot rot
+
+`src/renderer/styles/typography.test.ts` asserts, over every non-test renderer source: no default
+Tailwind size, no ad-hoc px/rem size, and no per-component focus ring. It reads source through
+Vite's `?raw` glob rather than `node:fs` on purpose — the renderer tsconfig is DOM-only because "the
+renderer never touches Node" is an architecture invariant, and a guard that forced `@types/node`
+into `tsconfig.web.json` would erode the boundary it exists to protect. It strips comments before
+matching, so a note explaining *why* a class is banned does not read as a violation, and it asserts
+its own file list is non-empty so a bad glob cannot turn it into a vacuous pass.
+
+The guard earned itself immediately by catching `text-[0.65rem]` (10.4px) in `ShortcutSettings` — a
+"Hold only" badge under the 11px floor, which the initial `text-[Npx]` scan had missed because it
+only looked for `px`.
+
+e2e test 9 asserts the other half against the packaged app: Tab to a control, then measure that the
+outline really is 2px solid `rgb(201, 199, 192)` at 2px offset. Between the two, a control cannot
+ship ringless — it can no longer suppress the outline locally, and deleting the global rule goes red.
+
+`tailwind.config.js` now excludes `*.test.{ts,tsx}` from `content`. A test that merely **names** a
+class was emitting a real rule into production CSS: the new guard names every size it forbids, and
+without that exclusion all of them shipped. The stylesheet went 46.94 kB → 45.96 kB and now contains
+the seven scale steps and none of the eight defaults.
+
+`PlanRunner` and `TuningSettings` were swept too, despite being dead code (defined, exported,
+imported nowhere). Tailwind scans the whole renderer, so leaving them off-scale kept the old size
+utilities in the shipped CSS and made the guard impossible to state as "zero".
+
+### Known deviations, recorded rather than silently changed
+
+`StatusDashboard`, `GoLivePanel` and `TrustDial` use saturated colour as a **text** colour for status
+words, which THE ONE COLOUR RULE reserves for fields and borders. It is left alone: every instance
+is paired with an icon shape (⊘ / ⚠ / ✓) so colour is never the only channel, and each clears
+contrast on its surface. Worth a later pass; not worth a silent redesign inside a typography sweep.
+
+Verification: **2149 unit tests across 76 files** green, `tsc` clean both projects, `npm run build`
+clean, i18n audit PASS, **10/10 e2e** against the real packaged app. Checked by eye at 1366×768
+across seven drawer sections — the legends now sit in the fieldset borders like panel labelling, and
+GO LIVE has a readable label for the first time since Cycle 14.

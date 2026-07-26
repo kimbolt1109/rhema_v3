@@ -77,7 +77,7 @@ function ServiceAnswer({ goingOut, compact }: { goingOut: boolean; compact: bool
       <p
         className={clsx(
           'text-text-muted',
-          compact ? 'text-xs' : 'text-sm font-medium uppercase tracking-wide',
+          compact ? 'text-micro' : 'text-micro font-medium uppercase tracking-wide',
         )}
       >
         {t('health.serviceQuestion')}
@@ -86,13 +86,13 @@ function ServiceAnswer({ goingOut, compact }: { goingOut: boolean; compact: bool
         className={clsx(
           'font-bold leading-tight',
           goingOut ? 'text-live' : 'text-panic',
-          compact ? 'text-sm' : 'mt-1 text-3xl',
+          compact ? 'text-body' : 'mt-1 text-metric',
         )}
       >
         {goingOut ? t('health.serviceYes') : t('health.serviceNo')}
       </p>
       {compact ? null : (
-        <p className="mt-2 max-w-prose text-sm text-text-muted">
+        <p className="mt-2 max-w-prose text-body text-text-muted">
           {goingOut ? t('health.serviceYesDetail') : t('health.serviceNoDetail')}
         </p>
       )}
@@ -149,7 +149,7 @@ function ProblemCard({
       {subsystem.stillWorks === null ? null : (
         <p
           data-testid={`health-still-works-${subsystem.id}`}
-          className="max-w-prose rounded-glass border border-live/50 bg-surface-2 px-3 py-2 text-sm text-text"
+          className="max-w-prose rounded-glass border border-live/50 bg-surface-2 px-3 py-2 text-body text-text"
         >
           {t('health.stillWorks', { text: subsystem.stillWorks })}
         </p>
@@ -190,8 +190,8 @@ function CheckpointChoice({
         className="h-5 w-5 shrink-0 accent-[rgb(var(--color-accent))]"
       />
       <span className="min-w-0">
-        <span className="block truncate text-sm text-text">{checkpoint.label}</span>
-        <span className="block text-xs text-text-muted">
+        <span className="block truncate text-body text-text">{checkpoint.label}</span>
+        <span className="block text-meta text-text-muted">
           {t('health.checkpoint.position', { position: checkpoint.planPosition + 1 })}
         </span>
       </span>
@@ -241,12 +241,12 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
-      <h1 className="text-2xl font-semibold text-text">{t('health.title')}</h1>
+      <h1 className="text-readout font-semibold text-text">{t('health.title')}</h1>
 
       <ServiceAnswer goingOut={goingOut} compact={false} />
 
       <section aria-label={t('health.lightsLabel')} data-health-worst={snapshot.worst}>
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
+        <h2 className="mb-2 text-micro font-semibold uppercase tracking-wide text-text-muted">
           {t('health.lightsLabel')}
         </h2>
         <ul className="flex flex-wrap gap-2">
@@ -259,11 +259,11 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
       </section>
 
       <section aria-label={t('health.attentionLabel')} data-testid="health-attention">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-text-muted">
+        <h2 className="mb-2 text-micro font-semibold uppercase tracking-wide text-text-muted">
           {t('health.attentionLabel')}
         </h2>
         {attention.length === 0 ? (
-          <p className="text-sm text-text-muted">{t('health.attentionNone')}</p>
+          <p className="text-body text-text-muted">{t('health.attentionNone')}</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {attention.map((subsystem) => (
@@ -274,7 +274,7 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
       </section>
 
       <section aria-label={t('health.recovery.label')} className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-text-muted">
           {t('health.recovery.label')}
         </h2>
 
@@ -282,7 +282,7 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
             interrupt the broadcast, and an operator who does not know that will not touch it. */}
         <p
           data-testid="recovery-no-broadcast-impact"
-          className="max-w-prose rounded-glass border border-live/50 bg-surface-2 px-3 py-2 text-sm text-text"
+          className="max-w-prose rounded-glass border border-live/50 bg-surface-2 px-3 py-2 text-body text-text"
         >
           {t('health.recovery.noBroadcastImpact')}
         </p>
@@ -298,19 +298,19 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
           >
             {t('health.recovery.reloadOverlays')}
           </Button>
-          <p className="max-w-prose text-xs text-text-muted">
+          <p className="max-w-prose text-meta text-text-muted">
             {t('health.recovery.reloadOverlaysDetail')}
           </p>
         </div>
 
         <fieldset className="flex flex-col gap-2 rounded-glass border border-border p-3">
-          <legend className="px-1 text-sm font-semibold text-text">
+          <legend className="px-1 text-label font-semibold text-text">
             {t('health.checkpoint.legend')}
           </legend>
-          <p className="max-w-prose text-xs text-text-muted">{t('health.checkpoint.detail')}</p>
+          <p className="max-w-prose text-meta text-text-muted">{t('health.checkpoint.detail')}</p>
 
           {checkpoints.length === 0 ? (
-            <p data-testid="checkpoints-empty" className="text-sm text-text-muted">
+            <p data-testid="checkpoints-empty" className="text-body text-text-muted">
               {t('health.checkpoint.none')}
             </p>
           ) : (
@@ -337,19 +337,19 @@ export function StatusDashboard({ now }: StatusViewProps): React.JSX.Element {
           />
           <p
             data-testid="checkpoint-non-effects"
-            className="max-w-prose text-xs text-text-muted"
+            className="max-w-prose text-meta text-text-muted"
           >
             {t('health.checkpoint.nonEffects')}
           </p>
         </fieldset>
 
         {bridgeAvailable ? null : (
-          <p data-testid="health-bridge-unavailable" className="text-sm text-text-muted">
+          <p data-testid="health-bridge-unavailable" className="text-body text-text-muted">
             {t('health.bridgeUnavailable')}
           </p>
         )}
         {lastError === null ? null : (
-          <p data-testid="health-error" className="select-text text-sm text-panic">
+          <p data-testid="health-error" className="select-text text-body text-panic">
             {lastError.message}
           </p>
         )}

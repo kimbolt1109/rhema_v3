@@ -273,10 +273,10 @@ export function PlanRunner({
         className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center"
       >
         <ListOrdered aria-hidden="true" className="h-10 w-10 text-text-muted" />
-        <h2 className="text-xl font-semibold text-text">
+        <h2 className="text-title font-semibold text-text">
           {t('plan.empty.title', { defaultValue: 'No cues in this service plan yet.' })}
         </h2>
-        <p className="max-w-prose text-sm text-text-muted">
+        <p className="max-w-prose text-body text-text-muted">
           {active.bridgeAvailable
             ? t('plan.empty.body', {
                 defaultValue:
@@ -291,13 +291,13 @@ export function PlanRunner({
           type="button"
           onClick={onOpenEditor}
           disabled={onOpenEditor === undefined}
-          className="inline-flex min-h-touch items-center justify-center gap-2 rounded-glass border border-accent bg-surface-2 px-6 font-medium text-text transition-colors hover:bg-accent hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:border-border disabled:text-text-muted"
+          className="inline-flex min-h-touch items-center justify-center gap-2 rounded-glass border border-accent bg-surface-2 px-6 font-medium text-text transition-colors hover:bg-accent hover:text-text disabled:cursor-not-allowed disabled:border-border disabled:text-text-muted"
         >
           <Pencil aria-hidden="true" className="h-4 w-4 shrink-0" />
           <span>{t('plan.empty.openEditor', { defaultValue: 'Open the plan editor' })}</span>
         </button>
         {errorMessage === null ? null : (
-          <p role="alert" className="max-w-prose text-sm text-panic">
+          <p role="alert" className="max-w-prose text-body text-panic">
             {errorMessage}
           </p>
         )}
@@ -311,19 +311,19 @@ export function PlanRunner({
       className="flex h-full min-h-0 flex-col gap-4 p-4"
     >
       <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-lg font-semibold text-text">
+        <h2 className="text-title font-semibold text-text">
           {plan.service.length === 0
             ? t('plan.untitledService', { defaultValue: 'Untitled service' })
             : plan.service}
         </h2>
         <div className="flex items-center gap-4">
-          <p data-testid="plan-position" className="font-mono text-sm text-text-muted">
+          <p data-testid="plan-position" className="font-mono text-body text-text-muted">
             {position.index < 0 ? '—' : String(position.index + 1)} / {String(total)}
           </p>
           {/* Read-only in Phase 6. The trust dial that changes this lands in Phase 8. */}
           <p
             data-testid="plan-mode"
-            className={clsx('text-xs uppercase tracking-wide', SERVICE_MODE_TONES[plan.defaultMode])}
+            className={clsx('text-micro uppercase tracking-wide', SERVICE_MODE_TONES[plan.defaultMode])}
           >
             <span className="text-text-muted">
               {t('plan.modeLabel', { defaultValue: 'Mode' })}
@@ -339,7 +339,7 @@ export function PlanRunner({
       {errorMessage === null ? null : (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-glass border border-panic/60 bg-surface-2 p-3 text-sm text-panic"
+          className="flex items-start gap-2 rounded-glass border border-panic/60 bg-surface-2 p-3 text-body text-panic"
         >
           <CircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{errorMessage}</span>
@@ -352,7 +352,7 @@ export function PlanRunner({
           data-testid="plan-now"
           className="flex flex-col gap-3 rounded-glass border border-border bg-surface p-4"
         >
-          <h3 id="plan-now-heading" className="text-sm font-bold uppercase tracking-widest text-text-muted">
+          <h3 id="plan-now-heading" className="text-micro font-bold uppercase tracking-widest text-text-muted">
             {t('plan.now', { defaultValue: 'Now' })}
           </h3>
           <CuePreview
@@ -370,7 +370,7 @@ export function PlanRunner({
           data-testid="plan-next"
           className="flex flex-col gap-3 rounded-glass border border-accent/60 bg-surface p-4"
         >
-          <h3 id="plan-next-heading" className="text-sm font-bold uppercase tracking-widest text-accent">
+          <h3 id="plan-next-heading" className="text-micro font-bold uppercase tracking-widest text-accent">
             {t('plan.next', { defaultValue: 'Next' })}
           </h3>
           <CuePreview
@@ -388,7 +388,7 @@ export function PlanRunner({
           data-testid="plan-advance"
           onClick={active.advance}
           disabled={upNext === null || active.busy}
-          className="inline-flex min-h-touch-xl flex-1 items-center justify-center gap-3 rounded-glass border border-accent-hover bg-accent px-8 text-lg font-bold text-text transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted"
+          className="inline-flex min-h-touch-xl flex-1 items-center justify-center gap-3 rounded-glass border border-accent-hover bg-accent px-8 text-title font-bold text-text transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-muted"
         >
           <ChevronRight aria-hidden="true" className="h-6 w-6 shrink-0" />
           <span>{t('plan.advance', { defaultValue: 'Advance (SPACE)' })}</span>
@@ -398,7 +398,7 @@ export function PlanRunner({
           data-testid="plan-back"
           onClick={active.back}
           disabled={position.index < 0 || active.busy}
-          className="inline-flex min-h-touch-lg items-center justify-center gap-2 rounded-glass border border-border bg-surface-2 px-6 font-medium text-text transition-colors hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:text-text-muted"
+          className="inline-flex min-h-touch-lg items-center justify-center gap-2 rounded-glass border border-border bg-surface-2 px-6 font-medium text-text transition-colors hover:border-accent/60 disabled:cursor-not-allowed disabled:text-text-muted"
         >
           <ChevronLeft aria-hidden="true" className="h-5 w-5 shrink-0" />
           <span>{t('plan.back', { defaultValue: 'Back' })}</span>
@@ -406,7 +406,7 @@ export function PlanRunner({
       </div>
 
       {lastFired === null ? null : (
-        <p className="text-xs text-text-muted">
+        <p className="text-meta text-text-muted">
           {t('plan.lastFired', { defaultValue: 'Last fired' })}
           {': '}
           <span className="text-text">{lastFired.label}</span>
@@ -439,7 +439,6 @@ export function PlanRunner({
                 disabled={active.busy}
                 className={clsx(
                   'flex min-h-touch w-full items-center gap-3 rounded-glass border px-3 text-left transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   'disabled:cursor-not-allowed',
                   isCurrent
                     ? 'border-accent bg-surface-2 text-text'
@@ -449,11 +448,11 @@ export function PlanRunner({
                   !isCurrent && fired ? 'text-text-muted' : 'text-text',
                 )}
               >
-                <span className="w-8 shrink-0 font-mono text-xs text-text-muted">
+                <span className="w-8 shrink-0 font-mono text-meta text-text-muted">
                   {String(index + 1)}
                 </span>
                 <span className="truncate">{cue.label}</span>
-                <span className="ml-auto shrink-0 text-xs uppercase tracking-wide text-text-muted">
+                <span className="ml-auto shrink-0 text-micro uppercase tracking-wide text-text-muted">
                   {fired
                     ? t('plan.fired', { defaultValue: 'Fired' })
                     : t(`plan.cueType.${cue.type}`, { defaultValue: cue.type })}

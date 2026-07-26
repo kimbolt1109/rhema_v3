@@ -148,7 +148,7 @@ export interface CuePreviewProps {
 function Field({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
     <p className="flex flex-wrap items-baseline gap-2">
-      <span className="text-xs uppercase tracking-wide text-text-muted">{label}</span>
+      <span className="text-micro uppercase tracking-wide text-text-muted">{label}</span>
       <span className="select-text break-words font-medium text-text">{value}</span>
     </p>
   )
@@ -157,7 +157,7 @@ function Field({ label, value }: { label: string; value: string }): React.JSX.El
 /** Shown when a payload does not match its cue type — an authoring fault, not a crash. */
 function Malformed({ message }: { message: string }): React.JSX.Element {
   return (
-    <p className="flex items-start gap-2 text-sm text-panic">
+    <p className="flex items-start gap-2 text-body text-panic">
       <CircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
     </p>
@@ -196,7 +196,7 @@ export function CuePreview({
     return (
       <p
         data-cue-preview="empty"
-        className={clsx('text-text-muted', size === 'lg' ? 'text-lg' : 'text-sm', className)}
+        className={clsx('text-text-muted', size === 'lg' ? 'text-title font-normal' : 'text-body', className)}
       >
         {emptyLabel ?? t('plan.preview.empty', { defaultValue: 'Nothing here.' })}
       </p>
@@ -220,7 +220,7 @@ export function CuePreview({
             {url === null ? (
               <div
                 data-cue-preview="slide-missing"
-                className="flex min-h-[6rem] items-center justify-center rounded-glass border border-dashed border-border bg-surface-2 px-3 py-4 text-center text-sm text-text-muted"
+                className="flex min-h-[6rem] items-center justify-center rounded-glass border border-dashed border-border bg-surface-2 px-3 py-4 text-center text-body text-text-muted"
               >
                 {t('plan.preview.slideUnavailable', {
                   defaultValue: 'Slide image unavailable.',
@@ -250,7 +250,7 @@ export function CuePreview({
                 )}
               />
             )}
-            <p className="truncate font-mono text-xs text-text-muted">
+            <p className="truncate font-mono text-meta text-text-muted">
               {parsed.data.sourceSlide === undefined
                 ? parsed.data.asset
                 : `#${String(parsed.data.sourceSlide)} · ${parsed.data.asset}`}
@@ -266,7 +266,7 @@ export function CuePreview({
           <div className="flex flex-col gap-1">
             <p
               data-cue-preview="lowerthird-line1"
-              className={clsx('font-semibold text-text', size === 'lg' ? 'text-xl' : 'text-base')}
+              className={clsx('font-semibold text-text', size === 'lg' ? 'text-title' : 'text-label')}
             >
               {parsed.data.line1}
             </p>
@@ -292,7 +292,7 @@ export function CuePreview({
           <div className="flex flex-col gap-1">
             <p
               data-cue-preview="scripture-reference"
-              className={clsx('font-semibold text-text', size === 'lg' ? 'text-xl' : 'text-base')}
+              className={clsx('font-semibold text-text', size === 'lg' ? 'text-title' : 'text-label')}
             >
               {parsed.data.reference}
               {parsed.data.translation === undefined ? null : (
@@ -301,7 +301,7 @@ export function CuePreview({
             </p>
             {/* Verger stores references, never verse text. Saying so here stops an operator
                 reading a reference-only preview as a cue that failed to load. */}
-            <p className="text-xs text-text-muted">
+            <p className="text-meta text-text-muted">
               {t('plan.preview.scriptureResolved', {
                 defaultValue: 'Verse text is fetched when the cue fires.',
               })}
@@ -359,13 +359,13 @@ export function CuePreview({
     >
       <p className="flex items-center gap-2">
         <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted" />
-        <span className="text-xs uppercase tracking-wide text-text-muted">
+        <span className="text-micro uppercase tracking-wide text-text-muted">
           {t(`plan.cueType.${cue.type}`, { defaultValue: CUE_TYPE_LABELS[cue.type] })}
         </span>
       </p>
       <p
         data-cue-preview="label"
-        className={clsx('break-words font-semibold text-text', size === 'lg' ? 'text-2xl' : 'text-sm')}
+        className={clsx('break-words font-semibold text-text', size === 'lg' ? 'text-readout' : 'text-body')}
       >
         {cue.label}
       </p>
@@ -373,7 +373,7 @@ export function CuePreview({
       {cue.note === undefined || cue.note.length === 0 ? null : (
         // Operator notes never reach the congregation screen (`src/shared/plan.ts`), so showing
         // them here is safe and is the whole reason they exist.
-        <p data-cue-preview="note" className="text-sm italic text-text-muted">
+        <p data-cue-preview="note" className="text-body italic text-text-muted">
           {cue.note}
         </p>
       )}
