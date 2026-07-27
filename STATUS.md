@@ -1190,3 +1190,275 @@ Verification: **2149 unit tests across 76 files** green, `tsc` clean both projec
 clean, i18n audit PASS, **10/10 e2e** against the real packaged app. Checked by eye at 1366×768
 across seven drawer sections — the legends now sit in the fieldset borders like panel labelling, and
 GO LIVE has a readable label for the first time since Cycle 14.
+
+---
+
+## Cycle 16 — Live captions: the recogniser on the congregation screen, and its kill switch
+
+Asked for as "since we already have to do STT real time maybe add a feature of showing the STTed
+results". The ASR already ran and its text already reached the cue engine; nothing rendered it. Two
+commits, deliberately split — `fa9ce9b` builds the engine with **no way to switch it on**, `136c3bd`
+makes it reachable — so the layer could not activate on a half-finished path.
+
+### A fourth layer, not the lower third
+
+Layers are independent by the shape of the data, not by discipline. A caption changes several times
+a second; sharing the lower third's layer would mean **speech could blank a speaker's name**.
+`OVERLAY_LAYERS` gains `caption`, and the reducer test iterates `OVERLAY_COMMANDS` × `OVERLAY_LAYERS`
+generically, so the new layer had to prove independence rather than be asserted to have it —
+including under 50 successive `caption.show` commands at ASR partial-result rate. `clearAll` now
+loops the layer list instead of naming three, so future layers auto-enrol.
+
+### Why the safety lives in the driver, not the protocol
+
+Every other layer carries text a human approved: a lower third is typed by the operator, scripture
+comes from a licensed API, a slide was prepared during the week. **A caption is whatever the
+recogniser thought it heard, on the congregation screen before anyone could veto it.** Standing Rule
+1 says design for veto, not trust, so `CaptionService`:
+
+- is **OFF by default and after every launch**, never persisted on;
+- on `setEnabled(false)` sends `caption.hide` **unconditionally**, not "if we believe something is
+  visible" — the moment the operator reaches for the kill switch is exactly when the service's
+  belief about the screen is least worth trusting;
+- treats **drafts** (in-flight partials, which visibly rewrite themselves) as opt-in;
+- hides the layer after **6s of silence**, so the last sentence before a prayer is gone by the time
+  heads are bowed.
+
+The overlay page renders caption text through `setText`, never `innerHTML` — a sharper reason than
+for the other layers: an ASR transcript is an untrusted string nobody approved, arriving several
+times a second, reaching the congregation faster than any human could stop it. Drafts are dimmed so
+a partial reads as a partial at projection distance without being read.
+
+Standing Rule 4 is not in tension: this transcribes speech in the room. No verse text, lyric or
+sermon content is authored into the repo — fixtures are invented placeholders throughout.
+
+### Windowing is load-bearing
+
+`caption.show` caps text at 400 characters and **rejects** anything longer rather than truncating —
+so an un-windowed caption does not clip, it **stops appearing partway through a sermon, silently**,
+because the schema refused it. `windowCaptionText` keeps the most recent 400 characters and prefers
+to open at a word boundary, but only a **nearby** one (`CAPTION_WORD_BOUNDARY_SLACK = 40`): Korean
+is written with far fewer spaces than English, so honouring a boundary 200 characters in would
+discard half the caption to gain a tidy first word. A test asserts the function's cap and the
+schema's cap agree, because drift between them is invisible to every other test and fatal in a
+service.
+
+### Fixed on the way — captions would never have rendered at all
+
+`src/overlay/protocol.js` is a hand-kept mirror of `shared/overlay.ts` (the page is framework-free
+and cannot import from `src/`), and its normaliser builds an explicit object literal: it **dropped
+`caption` entirely**, so `renderCaption` always received `undefined`. `README.md` line 41 states the
+rule that was missed. The mirror now carries the layer, and it **coerces** a missing caption rather
+than rejecting the snapshot — the one layer exempt from missing-layer-is-fatal, and the exemption
+follows that rule's own logic: rejecting is right when inventing "hidden" would blank something on
+air, but a layer that is off by default cannot be in that position, whereas treating it as fatal
+would freeze the whole overlay on stale content.
+
+`CaptionRuntimeState`, the cap, the idle delay and `windowCaptionText` live in `shared/caption.ts`,
+not beside the service. That is a constraint, not tidiness: the type crosses IPC to the booth UI and
+the renderer must never import main-process code (`tsconfig.web.json` leaves `@main/*` unmapped so
+the preload bridge stays the only channel). The barrel deliberately does **not** re-export it —
+offering a second import path for a boundary-crossing type is how one side ends up on a stale copy.
+
+### Three ways to switch, because "easy to turn off" was the requirement
+
+| Control | Where | Note |
+|---|---|---|
+| **`C`** | anywhere, drawer open or shut | one **tap**, not a hold |
+| **CC button** | bottom bar, beside L3 | program **red** when on |
+| Full controls | Setup → Overlay | includes the draft setting |
+
+`C` is a tap, deliberately inverting this repo's rule that consequential actions are holds. A hold
+exists to stop a reflex doing something irreversible — but here **the dangerous state is captions
+being ON**, so the operator must kill them as fast as they can move. Turning them back on is the
+cheap, reversible direction.
+
+The bar's ON state uses **program red** rather than the chalk the L3 toggle uses, and the departure
+is the point: an overlay the operator authored is a *control* state, but unreviewed machine text
+going out is an **output** state and belongs in the same visual language as the tally lamp. Rail
+plus the letters `CC` means it reads without colour too.
+
+**The switch is never optimistic.** `captionStore` does not touch local state before the main
+process answers, and settles on the pushed `caption:state` event rather than the call's return
+value. That is the opposite of what feels responsive, and it is the point: a UI that flipped to Off
+the instant it was clicked would tell the operator the congregation screen is clear at the moment we
+do not yet know that. **The lag is the honesty.** Tested by observing state synchronously mid-flight
+— which only means something because the mock now pushes on a later tick; it used to notify
+synchronously inside the invoke, which real IPC cannot do, and that synchronous double hid exactly
+the behaviour worth testing.
+
+### Found and fixed, and it predates this feature
+
+**`/12` is not in Tailwind's opacity scale**, so `bg-panic/12` and `bg-tally/12` generated **no rule
+at all**. Five sites, four of them shipped in Cycle 14 — including the **`NO REC` pill**, the
+Standing Rule 3 indicator that is supposed to be a red-tinted warning and had no tint, plus
+`Button`'s danger variant and `HoldButton`. All five now use the arbitrary form `/[0.12]` this
+codebase already used elsewhere (`bg-tally/[0.18]`). Verified against the built stylesheet and then
+on the live DOM: computed background went from `rgba(0,0,0,0)` to `rgba(239,74,62,0.12)`. Found only
+because a screenshot probe reported a transparent background where a tint was expected — **no test
+would have caught it**, and none of the existing ones did.
+
+### Proof on a real socket
+
+e2e test 10 drives a real browser source: switches captions on through the UI, puts a caption on the
+layer, asserts the text in the page's DOM, asserts the other three layers are untouched, then
+switches **off** and asserts the layer is hidden with text visibly on it a moment earlier. That last
+assertion is the whole feature's safety property, checked rather than argued for in a comment — and
+it is also the test that would have caught the `protocol.js` mirror bug above.
+
+`RUNBOOK.md` gains a captions section written to be read **before** switching them on: that nobody
+proofreads the text, that off is instant, and that "nothing appears" is normal without a recogniser
+configured. It also corrects two passages that had described the pre-restyle UI since Cycle 14.
+
+Verification: **2229 tests across 79 files**, `tsc` clean both projects, build clean, i18n audit
+PASS, **11/11 e2e** against the packaged app, checked by eye at 1366×768.
+
+---
+
+## Cycle 17 — Read OBS's own WebSocket settings, and connect at launch
+
+Prompted by the operator's real objection: *"the setup steps are really complicated and may not
+deliver the outcome we want."* They were. `OBS-SETUP.md` asked for the **same secret three times** —
+read it out of OBS's Connect Info dialog, paste it into `config.json`, then paste it **again** into
+the Connection screen, which does not read `config.json`. Three chances to typo one string on a
+Sunday morning, and the failure presents as "Password rejected" rather than as a typo.
+
+OBS already stores its port and password in a plain JSON file. Verger now reads it. Setup is: switch
+the WebSocket server on in OBS, launch Verger. Steps 2 and 3 of `OBS-SETUP.md` are demoted to the
+unusual cases — OBS on another machine, a deliberately changed port, or a connection that did not
+come up on its own.
+
+### Read, never write
+
+Standing Rule 2: OBS is the resilient engine and this app imposes nothing. Verger will not enable
+the WebSocket server, will not set a password, and will not edit OBS's file. An operator who finds
+their OBS settings changed by a program they ran once has been given a reason never to trust it
+again — so switching the server on stays a human step, which is why step 1 survives.
+
+**Precedence:** whatever the operator set explicitly wins; discovery only fills gaps. An empty
+password means "not configured" under Standing Rule 5, which is exactly the case worth filling. It
+trusts OBS's `auth_required` over the mere presence of a password, because **OBS keeps the last
+password in the file after authentication is switched off** — writing a stale password into a
+no-auth setup would turn a working configuration into a rejected handshake. A discovered port is
+handed over as a bare port number so it travels through `normalizeObsUrl`, the same forgiving path a
+hand-pasted OBS "Port" box takes.
+
+**The secret stays in memory.** Never logged, not even truncated; never written into Verger's own
+`config.json`; never reachable through `summarize()`. The log line names the source path and an
+outcome, and nothing else.
+
+### A probe before the dial
+
+`ObsClient.connect` arms a reconnect backoff on failure — correct mid-service, wrong as an opening
+move. Without a probe, a machine with OBS **installed but not running** got a permanent amber tally
+and a panel escalating through "Reconnecting… Attempt 5… OBS went away", about an OBS that was never
+there. *"Went away"* is only true after a connection existed. So the launch path asks a bare TCP
+connect first (`OBS_PROBE_TIMEOUT_MS = 400`) and stays quiet when nothing is listening; pressing
+**Connect** by hand still takes the full retrying path, because by then the operator has said they
+expect OBS to be there. **Found by running the e2e suite, which went red on exactly that state.**
+
+Auto-connecting is safe by construction: `ObsClient.connect` writes **nothing** to OBS — no `Set*`,
+no `Start*`, no `Stop*` — it asks the version and the scene list and observes. It cannot impose
+state on an OBS already mid-service; it only starts watching one. That is also why it belongs in
+main rather than the renderer: observing OBS should not depend on a window being open, and on
+relaunch after a crash this is what re-attaches to a live stream.
+
+### Two stale machine-specific assertions removed
+
+The e2e startup assertion was pinned to `data-tally="offline"`, which encoded *"OBS is absent from
+this developer's laptop"* — not a fact about the product. It now asserts **coherence**: the tally may
+be offline or transitioning depending on the machine, but the dot and the words beside it must
+agree, and it is never "live" at launch. The wiring guard's skip reason for `obsConnect` said "OBS
+Studio is not installed", which is false on any machine that has it; reworded to the
+machine-independent reason.
+
+18 tests for the reader, including one that parses **the file OBS actually wrote on this machine**
+rather than a fixture I authored — a fixture only proves the parser matches my belief about the
+format, and my belief is the thing that could be wrong. It asserts key names and types, never the
+password's value. The probe is tested against a real listener on an ephemeral port, then against the
+same port after closing it.
+
+Verification: **2247 tests across 80 files**, `tsc` clean both projects, build clean, i18n audit
+PASS, **11/11 e2e** against the packaged app.
+
+---
+
+## Cycle 18 — A press state, a 32px hit area, and the USB rebuild
+
+An interface-polish pass applied *against* the rules Cycle 14 established rather than on top of
+them: several of the conventional defaults are wrong for this surface and were deliberately left
+out.
+
+### The 32px hit area is a real defect, not a nicety
+
+`CueRow`'s drag handle was `min-h-touch` plus `w-8`: **44px tall and 32px wide**, so it met the touch
+floor on one axis and missed it on the other — the easy half to overlook, because the row still looks
+right. `docs/v2-notes/SHORTCUTS_AND_A11Y.md` §9.4 records v2 shipping 28px hold buttons as a logged
+defect (PROBLEMS.md #87), and this is the smallest target in the plan editor and the one most often
+grabbed in a hurry. Now 44px in both axes.
+
+### A press state, and why it is not `scale(0.96)`
+
+There was none at all. In a dark booth the question *"did that register?"* has to be answerable
+without looking away from the stage. It is a **shadow swap**: `shadow-edge` (a 1px machined top
+highlight, what makes a cap look raised) trades for `shadow-recess` (an inset that sinks the face
+into the panel), so the cap reads as physically going down.
+
+Deliberately **not** the conventional 0.96 scale. Cycle 14 removed transform-based motion from this
+surface on purpose: a control that changes **size** draws the eye in peripheral vision, and beside a
+live stage anything that twitches reads as something firing. A shadow swap is invisible until you
+are looking at the button you just pressed.
+
+**Transition scope:** the bar's six controls used `transition-colors`, which does not include
+`box-shadow` — the press shadow would have snapped while the background eased, reading as two
+controls reacting at once. All seven sites now enumerate
+`background-color, border-color, box-shadow`.
+
+### Found while verifying, and it is its own lesson
+
+A blanket `transition-property` was present in the shipped stylesheet. The only occurrence of that
+class name anywhere in the source was **inside a comment I had just written warning against it**.
+Tailwind scans comments as plain text, so the warning emitted the very rule it warned about — the
+same failure mode as Cycle 15's type-scale guard, which named the sizes it forbade and shipped every
+one of them. The comment is reworded and the rule is gone, verified against the built CSS.
+
+### Checked and deliberately not changed
+
+| Suggested | Why not |
+|---|---|
+| scale/translate press and enter animations | Cycle 14's no-transform rule, above |
+| image outlines via hard-coded `rgba` | already done by `shadow-keyline`, which is tokenised and load-bearing — program red on a mid-grey slide is 1.02:1, so that gutter is the only reason a NOW frame reads over a real deck |
+| font smoothing | already in `index.css`, and the target is a Windows church PC |
+| tabular numerals | Cycle 14 applied them to every number in the app |
+| concentric radii | the drawer's sections have 20px padding against a 6px outer radius — the "treat as separate surfaces" case, not a maths error |
+
+### The USB deliverable, rebuilt
+
+`release/0.1.0/win-unpacked` rebuilt from `b237c7e` (429 MB) and verified with **23/23 checks**. Both
+decks re-baked through the app's own importer with PowerPoint as the backend — **102/102 slides, 75
+auto-anchored** and **48/48 slides, 43 auto-anchored** — and `config.json` → `plans/11am/plan.json`
+confirmed present in the packaged tree. The order is mandatory and now recorded in the runbook:
+`npm run portable` **then** the deck bake, because the build wipes `win-unpacked/plans` and the bake
+restores it.
+
+### Open, and owed to the first real service
+
+Recorded here rather than left in a conversation, because none of it is provable from this desk:
+
+- **Verger has never connected to a *running* OBS.** OBS is installed on this machine and its config
+  file is parsed by a real test, and the port probe is tested against a real socket — but the
+  end-to-end "launch Verger, find it already Connected" **has not happened**. Cycle 17's reasoning is
+  sound and its parts are tested; the whole is unverified.
+- **Real speech → captions has never run.** Needs `SETUP-ASR.bat` on the church PC. Latency unknown.
+- **No real go-live**, so Standing Rule 3's always-on recording is asserted by tests only.
+- **No real video file** has been decoded on the target machine.
+- The build is **unsigned** — SmartScreen will warn on first launch.
+- One **axe accessibility check in `SettingsDrawer.test.tsx` failed once** under full-suite load and
+  passed on both re-runs. The violation text was not captured, so it is **unreproduced, not fixed**.
+- `PreflightScreen.tsx` still ships **3 hardcoded English strings** outside i18n.
+- Cycle 15's known deviation stands: `StatusDashboard`, `GoLivePanel` and `TrustDial` use saturated
+  colour as a text colour, each paired with an icon shape.
+
+Verification: **2247 tests across 80 files**, `tsc` clean both projects, `npm run build` clean, i18n
+audit PASS, **11/11 e2e** against the packaged app. Branch `portable-and-ui` at `b237c7e`, pushed;
+`main` is not yet caught up.
