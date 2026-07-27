@@ -184,9 +184,58 @@ EN/KO booth UI. What you lose is speech recognition, deck import and a YouTube l
 | `npm run test:coverage` | Vitest once with v8 coverage |
 | `npm run test:e2e` | Playwright end-to-end |
 | `npm run package` | Build, then `electron-builder --win` → an **unsigned** NSIS installer in `release/<version>/` |
+| `npm run portable` | `package:portable`, then copy `portable/**` over `win-unpacked/` — the USB folder |
+| `npm run obs:assemble` | Wire a **portable OBS** into the USB folder. See below |
+| `npm run obs:verify` | Start an assembled OBS and prove Verger's discovery finds and authenticates to it |
+| `npm run obs:derive-template` | Regenerate `obs-template/` by driving a real OBS. Only when OBS changes format |
 
 Run a single Vitest project with `npx vitest run --project node` or `--project renderer`.
 No test in this repository may require a running OBS, a network, a GPU or an Electron runtime.
+`obs:verify` is the deliberate exception and is **not** a test — it is a pre-flight for a built
+stick, run by hand, and it needs a real OBS by definition.
+
+---
+
+## Bundling a portable OBS onto the stick
+
+Optional, and it removes most of `portable/obs/OBS-SETUP.md`. Without it the operator must switch
+OBS's WebSocket server on, add a browser source, set its URL, clear its CSS, untick two checkboxes
+and tick a third. Two of those fail *invisibly* — the wrong checkbox looks identical to the right one
+until the graphic vanishes mid-service or the video plays silent. All of it is state in files, so it
+ships as files.
+
+```bash
+npm run portable                                     # build the USB folder first
+npm run obs:assemble -- "C:\path\to\OBS-Studio.zip"  # a .zip or an unpacked folder
+npm run obs:verify -- "release/0.1.0/win-unpacked/obs"
+```
+
+**You supply OBS.** Nothing here downloads it: OBS is GPL, and whether to redistribute it on a stick
+you hand to someone is the decision of whoever ships the stick, not of this build script. Point
+`obs:assemble` at a folder or a `.zip` from [obsproject.com](https://obsproject.com/download); it
+copies it, never modifies it, and refuses outright to touch an OBS under `Program Files`.
+
+What assembly writes into the copy:
+
+- `portable_mode.txt`, so OBS keeps its settings **inside the folder** rather than in `%APPDATA%`.
+  This is why the stick is self-contained, and it is also why `readObsWebsocketConfig` has to look
+  in two places — a portable OBS's settings are not where an installed OBS's are.
+- The scene collection and profile from `obs-template/`: one scene, `Cam 1`, holding an `Overlays`
+  browser source already pointed at Verger's overlay port with the five settings correct, and
+  recording set to `.mkv` (an `.mp4` whose OBS crashed mid-write is unplayable — the recording of
+  the service is simply gone).
+- An obs-websocket config with the server enabled and a **freshly generated random password**, one
+  per assembly. Never a fixed one: a shared secret in a public repo is not a secret, and
+  obs-websocket listens on every interface, so on a church wifi a known password means anyone
+  present can drive the stream. The operator never sees or types it — Verger reads it from OBS's own
+  file at launch.
+
+`obs-template/` is generated, not hand-written, by `npm run obs:derive-template`, which drives a real
+OBS over obs-websocket and harvests the files it writes. OBS's config formats are undocumented and
+guessing them fails silently: `global.ini` is empty on current OBS and the selection actually lives
+in `user.ini`, so a template written from the widely-documented older layout is not rejected — it is
+ignored, and OBS quietly starts on its own default collection. The generator strips machine-specific
+values through an allowlist, and `src/main/obs/obsTemplate.test.ts` fails if any come back.
 
 ---
 

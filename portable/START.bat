@@ -19,6 +19,28 @@ if not exist "%~dp0Verger.exe" (
   exit /b 1
 )
 
+REM ============================================================
+REM  If a portable OBS was assembled into this folder, start it
+REM  FIRST — Verger reads OBS's settings at launch, so OBS has to
+REM  be up before Verger is, or the operator has to press Connect.
+REM
+REM  Only when nothing is already serving on 4455. Two OBS
+REM  instances fight over the camera and the encoder, so an OBS
+REM  the operator already opened must always win over this one.
+REM ============================================================
+if exist "%~dp0obs\bin\64bit\obs64.exe" (
+  netstat -an | findstr /C:":4455 " | findstr /C:"LISTENING" >nul 2>&1
+  if errorlevel 1 (
+    echo Starting OBS from this folder . . .
+    start "OBS" /D "%~dp0obs\bin\64bit" "%~dp0obs\bin\64bit\obs64.exe"
+    REM Give OBS time to open its WebSocket port before Verger looks for it.
+    REM Verger still works if this is too short - the operator presses Connect.
+    timeout /t 8 /nobreak >nul
+  ) else (
+    echo OBS is already running - leaving it alone.
+  )
+)
+
 echo Starting Verger . . .
 echo (You can minimize this window once Verger's own window opens.)
 echo.

@@ -59,6 +59,37 @@ export function obsWebsocketConfigPath(appDataDir: string): string {
   return join(appDataDir, ...OBS_WEBSOCKET_CONFIG_SEGMENTS)
 }
 
+/**
+ * Where a PORTABLE OBS keeps the same file, relative to the OBS folder itself.
+ *
+ * A portable OBS — one with a `portable_mode.txt` beside its `bin/` — does not use `%APPDATA%` at
+ * all. It stores everything under `<obs>/config/obs-studio/`, so the `%APPDATA%` lookup above finds
+ * nothing and discovery silently reports "OBS is not installed" on a machine where OBS is sitting
+ * right next to Verger.
+ *
+ * This was verified by running one: a copy of OBS with the marker file created
+ * `<obs>/config/obs-studio/plugin_config/obs-websocket/config.json` and never touched `%APPDATA%`.
+ * Without this path, shipping a portable OBS would have made setup WORSE than the installed case —
+ * the auto-connect added in Cycle 17 would have missed it every time.
+ */
+export const OBS_PORTABLE_CONFIG_SEGMENTS = [
+  'config',
+  ...OBS_WEBSOCKET_CONFIG_SEGMENTS,
+] as const
+
+/**
+ * The folder a bundled portable OBS is expected to occupy, beside `Verger.exe`.
+ *
+ * Matches the layout `scripts/assemble-portable-obs.mts` produces and `portable/obs/OBS-SETUP.md`
+ * documents. Nothing breaks if it is absent — that is simply the "no bundled OBS" case.
+ */
+export const OBS_PORTABLE_DIR_NAME = 'obs'
+
+/** Absolute path to a portable OBS's obs-websocket settings, given the OBS folder. */
+export function obsPortableWebsocketConfigPath(obsRootDir: string): string {
+  return join(obsRootDir, ...OBS_PORTABLE_CONFIG_SEGMENTS)
+}
+
 /** What OBS itself says about its WebSocket server. */
 export interface ObsLocalConfig {
   /**
@@ -81,6 +112,15 @@ export interface ObsLocalConfig {
 export interface ReadObsWebsocketConfigOptions {
   /** Defaults to `process.env.APPDATA`. */
   readonly appDataDir?: string | undefined
+  /**
+   * The folder holding a PORTABLE OBS bundled beside Verger, if there is one.
+   *
+   * Checked BEFORE `%APPDATA%`, and the order is deliberate: an operator who put a portable OBS in
+   * the Verger folder chose the OBS for this deployment, and it is the one `START.bat` launches. An
+   * OBS installed on the machine years ago is the fallback, not the intent. Absent or unreadable
+   * simply falls through, so a machine with only an installed OBS behaves exactly as before.
+   */
+  readonly portableObsDir?: string | undefined
   /** Injected in tests. Defaults to `node:fs`'s reader. */
   readonly readFile?: (path: string) => string
 }
@@ -100,20 +140,37 @@ export function readObsWebsocketConfig(
   options: ReadObsWebsocketConfigOptions = {},
 ): Result<ObsLocalConfig> {
   const appDataDir = options.appDataDir ?? process.env['APPDATA']
-  if (appDataDir === undefined || appDataDir.length === 0) {
+  const read = options.readFile ?? ((path: string) => readFileSync(path, 'utf8'))
+
+  // Portable first — see `portableObsDir` for why that order. The first candidate that READS wins.
+  const candidates: string[] = []
+  if (options.portableObsDir !== undefined && options.portableObsDir.length > 0) {
+    candidates.push(obsPortableWebsocketConfigPath(options.portableObsDir))
+  }
+  if (appDataDir !== undefined && appDataDir.length > 0) {
+    candidates.push(obsWebsocketConfigPath(appDataDir))
+  }
+
+  if (candidates.length === 0) {
     return err(
       ErrorCode.NOT_CONFIGURED,
-      'APPDATA is not set, so OBS-s own settings cannot be located.',
+      'APPDATA is not set and no portable OBS folder was given, so OBS-s own settings cannot be located.',
     )
   }
 
-  const sourcePath = obsWebsocketConfigPath(appDataDir)
-  const read = options.readFile ?? ((path: string) => readFileSync(path, 'utf8'))
+  let raw: string | undefined
+  let sourcePath = ''
+  for (const candidate of candidates) {
+    try {
+      raw = read(candidate)
+      sourcePath = candidate
+      break
+    } catch {
+      continue
+    }
+  }
 
-  let raw: string
-  try {
-    raw = read(sourcePath)
-  } catch {
+  if (raw === undefined) {
     // Deliberately not carrying the cause: an ENOENT here is the ordinary "OBS is not installed on
     // this machine" case, and a stack trace would make a non-event look like a fault in the log.
     return err(

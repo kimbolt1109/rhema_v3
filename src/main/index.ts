@@ -34,7 +34,11 @@ import { getGoLiveService } from '@main/golive'
 import { getCheckpointStore, getHealthService, resetHealthService } from '@main/health'
 import { OverlayWatchdog } from '@main/health/overlayWatchdog'
 import { getObsClient } from '@main/obs'
-import { isObsPortListening, readObsWebsocketConfig } from '@main/obs/localConfig'
+import {
+  OBS_PORTABLE_DIR_NAME,
+  isObsPortListening,
+  readObsWebsocketConfig,
+} from '@main/obs/localConfig'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
 import { getYouTubeService } from '@main/youtube'
@@ -165,7 +169,7 @@ interface DiscoveredObs {
  * Exported nowhere and deliberately small: it decides precedence and nothing else, so the rule
  * "the operator's explicit value always wins" is readable in one screen.
  */
-function applyDiscoveredObsSettings(env: NodeJS.ProcessEnv): DiscoveredObs {
+function applyDiscoveredObsSettings(env: NodeJS.ProcessEnv, portableObsDir: string): DiscoveredObs {
   const url = env['OBS_WEBSOCKET_URL']
   const password = env['OBS_WEBSOCKET_PASSWORD']
   // A URL AND a non-empty password is a complete hand-configuration; leave it entirely alone.
@@ -182,7 +186,10 @@ function applyDiscoveredObsSettings(env: NodeJS.ProcessEnv): DiscoveredObs {
     }
   }
 
-  const found = readObsWebsocketConfig()
+  // A portable OBS shipped beside Verger.exe keeps its settings inside its own folder, never in
+  // %APPDATA%. Without this the bundled-OBS case would find nothing and report "OBS may not be
+  // installed" while OBS sat in the next folder along.
+  const found = readObsWebsocketConfig({ portableObsDir })
   if (!found.ok) {
     return { outcome: 'unavailable', detail: found.error.message, reachable: false, port: null }
   }
@@ -242,7 +249,10 @@ function onReady(): void {
   // Precedence is deliberate: whatever the operator set explicitly WINS, and discovery only supplies
   // what is missing. An empty password means "not configured" under Standing Rule 5, which is exactly
   // the case worth filling. A wrong guess here would be worse than the friction it removes.
-  const discovered = applyDiscoveredObsSettings(process.env)
+  const discovered = applyDiscoveredObsSettings(
+    process.env,
+    join(dirname(app.getPath('exe')), OBS_PORTABLE_DIR_NAME),
+  )
 
   const config: AppConfig =
     portable.envFilePath !== null

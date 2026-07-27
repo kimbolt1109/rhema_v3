@@ -12,14 +12,18 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
 import { ErrorCode } from '@shared/result'
 
 import {
+  OBS_PORTABLE_CONFIG_SEGMENTS,
+  OBS_PORTABLE_DIR_NAME,
   OBS_WEBSOCKET_CONFIG_SEGMENTS,
   isObsPortListening,
+  obsPortableWebsocketConfigPath,
   obsWebsocketConfigPath,
   readObsWebsocketConfig,
 } from './localConfig'
@@ -226,4 +230,124 @@ describe('against the OBS installed on this machine', () => {
       expect(Object.keys(raw)).toContain('server_enabled')
     },
   )
+})
+
+/**
+ * A portable OBS — one shipped beside Verger.exe on the USB stick — does not use `%APPDATA%`.
+ *
+ * This was not a guess. A real OBS was copied, given a `portable_mode.txt`, and launched: it created
+ * `<obs>/config/obs-studio/plugin_config/obs-websocket/config.json` and never wrote to `%APPDATA%`
+ * at all. Before this path existed, the launch-time discovery added in Cycle 17 would have reported
+ * "OBS may not be installed" on a stick that had OBS sitting in the next folder along — making the
+ * bundled build WORSE than the installed one.
+ */
+describe('portable OBS discovery', () => {
+  it('looks inside the OBS folder, not %APPDATA%', () => {
+    expect(obsPortableWebsocketConfigPath(join('D:', 'verger', 'obs'))).toBe(
+      join('D:', 'verger', 'obs', 'config', 'obs-studio', 'plugin_config', 'obs-websocket', 'config.json'),
+    )
+  })
+
+  it('nests the %APPDATA% segments under config/, which is the only difference', () => {
+    // Stated as a relationship rather than a second literal: if OBS moves the plugin_config folder,
+    // one edit to OBS_WEBSOCKET_CONFIG_SEGMENTS must move both paths or neither.
+    expect(OBS_PORTABLE_CONFIG_SEGMENTS).toEqual(['config', ...OBS_WEBSOCKET_CONFIG_SEGMENTS])
+  })
+
+  it('agrees with the folder name the assembly script writes', () => {
+    expect(OBS_PORTABLE_DIR_NAME).toBe('obs')
+  })
+
+  it('reads the portable file when one is there', () => {
+    const portableDir = join('D:', 'verger', 'obs')
+    const wanted = obsPortableWebsocketConfigPath(portableDir)
+
+    const result = readObsWebsocketConfig({
+      portableObsDir: portableDir,
+      appDataDir: join('C:', 'Users', 'someone', 'AppData', 'Roaming'),
+      readFile: (path) => {
+        if (path !== wanted) throw new Error('ENOENT')
+        return JSON.stringify(REAL_SHAPE)
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.sourcePath).toBe(wanted)
+    expect(result.value.port).toBe(4455)
+  })
+
+  it('prefers the portable OBS over an installed one', () => {
+    // The operator who put an OBS in the Verger folder chose the OBS for this deployment, and it is
+    // the one START.bat launches. An OBS installed years ago is the fallback, not the intent.
+    const portableDir = join('D:', 'verger', 'obs')
+    const appDataDir = join('C:', 'Users', 'someone', 'AppData', 'Roaming')
+
+    const result = readObsWebsocketConfig({
+      portableObsDir: portableDir,
+      appDataDir,
+      // BOTH exist, and they disagree about the port.
+      readFile: (path) =>
+        JSON.stringify(
+          path === obsPortableWebsocketConfigPath(portableDir)
+            ? { ...REAL_SHAPE, server_port: 4455 }
+            : { ...REAL_SHAPE, server_port: 4499 },
+        ),
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.port).toBe(4455)
+    expect(result.value.sourcePath).toBe(obsPortableWebsocketConfigPath(portableDir))
+  })
+
+  it('falls back to the installed OBS when no portable one is bundled', () => {
+    // The overwhelmingly common case, and the one that must not regress: a normal machine with OBS
+    // installed and no bundled copy behaves exactly as it did before portable support existed.
+    const appDataDir = join('C:', 'Users', 'someone', 'AppData', 'Roaming')
+    const portableDir = join('D:', 'verger', 'obs')
+
+    const result = readObsWebsocketConfig({
+      portableObsDir: portableDir,
+      appDataDir,
+      readFile: (path) => {
+        if (path !== obsWebsocketConfigPath(appDataDir)) throw new Error('ENOENT')
+        return JSON.stringify(REAL_SHAPE)
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.sourcePath).toBe(obsWebsocketConfigPath(appDataDir))
+  })
+
+  it('still reports NOT_FOUND when neither location has a file', () => {
+    const result = readObsWebsocketConfig({
+      portableObsDir: join('D:', 'verger', 'obs'),
+      appDataDir: join('C:', 'Users', 'someone', 'AppData', 'Roaming'),
+      readFile: () => {
+        throw new Error('ENOENT')
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe(ErrorCode.NOT_FOUND)
+  })
+
+  it('works with a portable OBS and no APPDATA at all', () => {
+    // Not hypothetical: APPDATA is absent under some service accounts and login shells, and the
+    // whole point of a portable stick is not depending on the host's user profile.
+    const portableDir = join('D:', 'verger', 'obs')
+
+    const result = readObsWebsocketConfig({
+      portableObsDir: portableDir,
+      appDataDir: '',
+      readFile: () => JSON.stringify(REAL_SHAPE),
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.sourcePath).toBe(obsPortableWebsocketConfigPath(portableDir))
+  })
 })

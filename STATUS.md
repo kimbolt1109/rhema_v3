@@ -1462,3 +1462,109 @@ Recorded here rather than left in a conversation, because none of it is provable
 Verification: **2247 tests across 80 files**, `tsc` clean both projects, `npm run build` clean, i18n
 audit PASS, **11/11 e2e** against the packaged app. Branch `portable-and-ui` at `b237c7e`, pushed;
 `main` is not yet caught up.
+
+---
+
+## Cycle 19 — Ship OBS on the stick, pre-wired
+
+The remaining setup friction was never Verger's. `OBS-SETUP.md` ran to seven steps and five belonged
+to OBS: switch the WebSocket server on, add a browser source, set its URL, clear the CSS OBS
+pre-fills, untick two checkboxes, tick a third. **Two of those fail invisibly** — a wrong checkbox
+looks identical to a right one until the graphic vanishes mid-service or the video plays silent.
+
+All of it is state in files. So it ships as files.
+
+### The finding that reshaped the job
+
+Cycle 17 reads OBS's settings from `%APPDATA%\obs-studio\…`. **A portable OBS does not use `%APPDATA%`
+at all** — it keeps everything under `<obs>\config\obs-studio\`. So the auto-connect shipped one
+cycle earlier would have found *nothing* on a stick with OBS sitting in the next folder along, and
+reported "OBS may not be installed". Bundling OBS would have made setup **worse** than not bundling
+it.
+
+This was established by running one, not by reading about it: a copy of OBS plus a `portable_mode.txt`
+created `<obs>\config\obs-studio\plugin_config\obs-websocket\config.json` and never touched
+`%APPDATA%`. `readObsWebsocketConfig` now takes an optional `portableObsDir` and tries it **first** —
+an operator who put an OBS in the Verger folder chose the OBS for this deployment, and it is the one
+`START.bat` launches; an OBS installed years ago is the fallback, not the intent.
+
+### The template is generated, because guessing OBS's formats fails silently
+
+`obs-template/` holds a scene collection and a profile that a fresh OBS adopts as its own. Both are
+undocumented OBS-internal formats, and both were nearly hand-written. A real OBS was driven over
+obs-websocket instead — `scripts/derive-obs-scene-template.mts` builds the scene, then closes OBS so
+it serialises its own state, and harvests the result. It disagreed with what would have been written
+from memory, twice:
+
+- **`global.ini` is empty** on OBS 32. Profile and scene-collection selection moved to `user.ini`
+  under `[Basic]`. A template using the older, widely-documented layout is not rejected — it is
+  **ignored**, and OBS quietly starts on its own default collection.
+- The scene JSON carries a `canvas_uuid` and a `version` field a hand-written file would have omitted.
+
+The generator is locale-independent too: a new collection's default scene is named in OBS's own
+language (`장면` here), so it is deleted **by difference from the scene we made**, never by name.
+
+### Eight lines that would have shipped this laptop to a church
+
+The first derivation harvested OBS's profile verbatim. It contained:
+
+| Line | Why it is harmful on the church PC |
+|---|---|
+| `FilePath=C:\Users\user\Videos` ×3 | a recording path that does not exist — Standing Rule 3's always-on recording fails, and nobody finds out until after the service |
+| `StreamEncoder=nvenc`, `RecEncoder=nvenc`, `NVENCPreset2=p5` | **this machine has an NVIDIA GPU.** A machine without one cannot start the output at all |
+| `MonitoringDeviceName=기본값` | this machine's locale |
+| `CookieId=BE56F2D3855B44C8` | this machine's browser panel |
+
+The profile is now rebuilt from an **allowlist** rather than copied — 107 lines in, 21 out. An
+allowlist and not a denylist because the failure directions are not symmetric: a key we forget to
+allow costs an OBS default, a key we forget to deny ships someone else's hardware. `RecFormat2=mkv`
+is the one line worth keeping deliberately: an `.mp4` whose OBS crashed mid-write is unplayable, and
+the recording of the service is simply gone.
+
+`src/main/obs/obsTemplate.test.ts` is the other half. It was checked against the **unsanitised**
+file to prove it is not asleep: all six guards fire on the real thing and pass the shipped one.
+
+### The password
+
+Generated fresh per assembly, never committed, never shown. Not a fixed one — a shared secret in a
+public repo is not a secret, and obs-websocket listens on **every interface**, so on a church wifi a
+known password means anyone present can drive the stream. Not blank, for the same reason. The
+operator never types it: it goes into OBS's own file and Verger reads it there, which is exactly the
+Cycle 17 mechanism doing what it was built for. Standing Rule 5 holds — it never enters Verger's
+`config.json`.
+
+Standing Rule 2 holds too: `assemble-portable-obs.mts` works on a **copy** and refuses outright to
+touch anything under `Program Files`. It does not download OBS either — OBS is GPL, and whether to
+redistribute it on a stick handed to someone else is the shipper's decision, not a build script's.
+
+### The gap Cycle 18 recorded is now closed
+
+Cycle 18's open list led with *"Verger has never connected to a running OBS."* It has now.
+
+`scripts/verify-portable-obs.mts` assembles nothing and asserts everything: it drives the **real**
+`readObsWebsocketConfig` and `isObsPortListening` — imported from `@main/obs/localConfig`, not
+reimplemented — against a genuinely running OBS. It blanks `APPDATA` deliberately, because this
+machine also has an installed OBS and reading that would be a false pass.
+
+**16/16 checks passed**, including the two that no offline test can reach: *the generated password
+authenticates*, and OBS itself reports the `Cam 1` scene with an `Overlays` source whose `shutdown`,
+`restart_when_active` and `reroute_audio` are the values a mis-click would have got wrong. This is
+deliberately **not** a vitest test — the repo forbids tests that need a running OBS — it is a
+pre-flight for a built stick, run by hand.
+
+### What the operator now does
+
+If the folder has an `obs` sub-folder: start `START.bat`, add the room's camera to `Cam 1`. That is
+the whole procedure. `START.bat` starts the bundled OBS first — but only when nothing is already
+listening on 4455, because two OBS instances fight over the camera and the encoder, and an OBS the
+operator opened themselves must always win.
+
+Steps 4 and 7 of `OBS-SETUP.md` are marked skippable outright in that case, and step 6 shrinks to
+"add this room's camera".
+
+Verification: **2274 tests across 81 files**, `tsc` clean both projects, `npm run build` clean, i18n
+audit PASS, and the 16/16 portable-OBS pre-flight against OBS 32.1.2 / obs-websocket 5.7.3.
+
+**Still open:** no OBS is bundled into the shipped stick yet — that needs an OBS download the
+repository owner supplies. Real speech → captions, a real go-live, and decoding a real video file
+remain unverified, and the build is still unsigned.

@@ -3,17 +3,41 @@
 Do this once on a machine before its first service. After that, you should not need to touch OBS
 settings again. For the Sunday checklist once setup is done, see **RUNBOOK.md** next to START.bat.
 
-You need: OBS Studio already installed on this PC, and the Verger folder copied whole onto this
-machine or a USB stick (Verger.exe, START.bat, config.json, `resources\`, `plans\` all together —
-not just one file out of it).
+You need: the Verger folder copied whole onto this machine or a USB stick (Verger.exe, START.bat,
+config.json, `resources\`, `plans\` all together — not just one file out of it), and OBS — either
+bundled in that folder or already installed on this PC.
 
 ---
 
-> ### You no longer have to copy the password anywhere
+## First: does this folder have an `obs` sub-folder?
+
+Look inside the Verger folder, next to `Verger.exe`.
+
+> ### If there IS an `obs` folder — you are already done. Skip to step 5.
+>
+> That is a **portable OBS, pre-wired for this church**. `START.bat` starts it for you, then starts
+> Verger, and Verger finds it by itself. Everything the rest of this document asks you to click has
+> already been set in files:
+>
+> | Already done | Which step it replaces |
+> |---|---|
+> | WebSocket server switched on, with its own unique password | 1, 2, 3 |
+> | An `Overlays` browser source, correct URL, CSS cleared, both refresh boxes off | 4 |
+> | A scene called `Cam 1` for you to drop the room's camera into | 6 |
+> | "Control audio via OBS" ticked, so video cues are audible | 7 |
+> | Recording set to `.mkv`, which survives a crash — an `.mp4` would not | — |
+>
+> **Do not also open an OBS installed on this PC.** Two OBS instances fight over the camera and the
+> encoder. `START.bat` checks, and will not start the bundled one if another OBS is already running.
+>
+> One thing is still yours to do: **add the room's camera** to the `Cam 1` scene (step 6.1), because
+> only you know what this room's camera is.
+
+> ### If there is NO `obs` folder — use the OBS installed on this PC, and do step 1
 >
 > Verger reads OBS's own WebSocket settings — the port and the password — straight out of OBS's
 > config file, and connects by itself at launch. So **step 1 is all you normally have to do.** Steps
-> 2 and 3 are now only for the unusual cases: OBS running on a different PC, a port you deliberately
+> 2 and 3 are only for the unusual cases: OBS running on a different PC, a port you deliberately
 > changed, or a connection that did not come up on its own.
 >
 > Verger never *writes* to OBS's settings. It will not switch the WebSocket server on for you — that
@@ -118,6 +142,9 @@ from the other tabs.
 
 ## 4. Add the overlay Browser Source in OBS
 
+**Skip this entirely if the folder has an `obs` sub-folder** — the `Overlays` source is already in
+the `Cam 1` scene, with all five settings below already correct.
+
 The overlay (lower-thirds, scripture, slides) is a separate browser layer that sits on top of every
 camera scene.
 
@@ -189,6 +216,10 @@ A church PC's OBS install starts with whatever scenes happen to be there — may
 scene names, maybe none at all. **That's fine: Verger never requires specific scene names.** It
 reads whatever scenes OBS currently reports and lets you map to them.
 
+**If the folder has an `obs` sub-folder**, the scene already exists and is called `Cam 1` with the
+`Overlays` source already on it — so 6.1 is only "add this room's camera to it", and 6.2 is done.
+Go straight to 6.3 to map the button.
+
 1. In OBS, create **at least one scene** with a camera source in it (Sources → + → Video Capture
    Device, or whatever this room's camera needs).
 2. Add the shared **Overlays** browser source from step 4 to that scene too (top of the source
@@ -209,6 +240,9 @@ reflect whatever OBS has right now.
 ---
 
 ## 7. Video sound — let the overlay's audio into the OBS mixer
+
+**Skip this entirely if the folder has an `obs` sub-folder** — "Control audio via OBS" is already
+ticked. Do still do 7.4: test with the real clip before the service.
 
 Skip this if you never play video. If you do, do it now: a silent video in front of a congregation
 cannot be fixed while it is playing.
