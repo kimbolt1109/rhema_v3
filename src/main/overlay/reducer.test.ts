@@ -6,14 +6,19 @@
  * place overlay state changes, and it is pure, so that claim is not a matter of discipline. It
  * is checkable here, once, for every command.
  *
- * For each of the seven commands this file asserts that the two layers the command does not
- * target come out **referentially identical** (`toBe`, not `toEqual`). Referential identity is
- * the strong form: it proves the reducer did not even rebuild the untargeted layer objects, so
- * there is no path by which a lower-third could perturb the scripture panel.
+ * For every command this file asserts that the layers the command does not target come out
+ * **referentially identical** (`toBe`, not `toEqual`). Referential identity is the strong form:
+ * it proves the reducer did not even rebuild the untargeted layer objects, so there is no path
+ * by which a lower-third could perturb the scripture panel.
+ *
+ * The fixture maps below are keyed by `OverlayCommandName` and cross-checked against
+ * `OVERLAY_COMMANDS` in the first test, so adding a command to the protocol without extending
+ * this coverage fails rather than silently going untested.
  *
  * Standing Rule 4: no Bible verse text is authored anywhere in this repo, including fixtures.
  * `text` below is an obvious placeholder, exactly as it would be at runtime before a licensed
- * API or a verified public-domain translation supplies the real value.
+ * API or a verified public-domain translation supplies the real value. Caption fixtures are
+ * likewise invented strings, never transcribed speech.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -44,6 +49,7 @@ function populatedState(): OverlayState {
       attribution: 'ATTRIBUTION PLACEHOLDER'
     },
     slide: { visible: true, src: 'slides/placeholder.png' },
+    caption: { visible: true, text: 'PLACEHOLDER SPEECH ONE', draft: true },
     revision: 7
   }
 }
@@ -69,17 +75,27 @@ const COMMANDS: { readonly [N in OverlayCommandName]: OverlayCommand } = {
   'scripture.hide': { channel: 'command', name: 'scripture.hide', payload: {} },
   'slide.show': { channel: 'command', name: 'slide.show', payload: { src: 'slides/next.png' } },
   'slide.hide': { channel: 'command', name: 'slide.hide', payload: {} },
+  'caption.show': {
+    channel: 'command',
+    name: 'caption.show',
+    payload: { text: 'PLACEHOLDER SPEECH TWO', draft: false }
+  },
+  'caption.hide': { channel: 'command', name: 'caption.hide', payload: {} },
   clearAll: { channel: 'command', name: 'clearAll', payload: {} }
 }
 
 /** Which layer each command owns. `clearAll` owns all of them, by design. */
-const TARGET_LAYER: { readonly [N in OverlayCommandName]: 'lowerThird' | 'scripture' | 'slide' | 'all' } = {
+const TARGET_LAYER: {
+  readonly [N in OverlayCommandName]: 'lowerThird' | 'scripture' | 'slide' | 'caption' | 'all'
+} = {
   'lowerThird.show': 'lowerThird',
   'lowerThird.hide': 'lowerThird',
   'scripture.show': 'scripture',
   'scripture.hide': 'scripture',
   'slide.show': 'slide',
   'slide.hide': 'slide',
+  'caption.show': 'caption',
+  'caption.hide': 'caption',
   clearAll: 'all'
 }
 
@@ -155,6 +171,30 @@ describe('applyOverlayCommand — layer independence', () => {
       expect(state.lowerThird).toBe(start.lowerThird)
       expect(state.slide).toBe(start.slide)
     }
+  })
+
+  it('a rapid caption stream never perturbs the other three layers', () => {
+    // ASR drives this layer at partial-result rate, so it is the one layer that can issue
+    // hundreds of commands during a single sermon. If a leak between layers existed anywhere,
+    // this is the traffic that would find it.
+    let state = populatedState()
+    const start = state
+
+    for (let i = 0; i < 50; i += 1) {
+      state = applyOverlayCommand(state, {
+        channel: 'command',
+        name: 'caption.show',
+        payload: { text: `PLACEHOLDER SPEECH ${i}`, draft: i % 2 === 0 }
+      })
+      expect(state.lowerThird).toBe(start.lowerThird)
+      expect(state.scripture).toBe(start.scripture)
+      expect(state.slide).toBe(start.slide)
+    }
+
+    const hidden = applyOverlayCommand(state, COMMANDS['caption.hide'])
+    expect(hidden.lowerThird).toBe(start.lowerThird)
+    expect(hidden.scripture).toBe(start.scripture)
+    expect(hidden.slide).toBe(start.slide)
   })
 })
 
@@ -284,24 +324,96 @@ describe('applyOverlayCommand — slide', () => {
   })
 })
 
+describe('applyOverlayCommand — caption', () => {
+  it('show sets visibility, text and draft from the payload', () => {
+    const state = applyOverlayCommand(emptyOverlayState(), COMMANDS['caption.show'])
+    expect(state.caption).toEqual({
+      visible: true,
+      text: 'PLACEHOLDER SPEECH TWO',
+      draft: false
+    })
+  })
+
+  it('show carries draft: true through, so the overlay can style a partial differently', () => {
+    const state = applyOverlayCommand(emptyOverlayState(), {
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: 'PLACEHOLDER SPEECH THREE', draft: true }
+    })
+    expect(state.caption).toEqual({
+      visible: true,
+      text: 'PLACEHOLDER SPEECH THREE',
+      draft: true
+    })
+  })
+
+  it('a final replaces the draft it supersedes rather than accumulating', () => {
+    const draft = applyOverlayCommand(emptyOverlayState(), {
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: 'PLACEHOLDER SPEECH PARTIAL', draft: true }
+    })
+    const final = applyOverlayCommand(draft, {
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: 'PLACEHOLDER SPEECH FINAL', draft: false }
+    })
+    expect(final.caption).toEqual({ visible: true, text: 'PLACEHOLDER SPEECH FINAL', draft: false })
+  })
+
+  it('hide clears visibility immediately while retaining the last text', () => {
+    // Standing Rule 1: the operator's off switch HIDES the layer, it does not merely stop new
+    // text. Retention is deliberate (see the reducer's `caption.hide` case) — the driver only
+    // shows again once it has something new, so nothing stale can flash back on.
+    const shown = applyOverlayCommand(emptyOverlayState(), COMMANDS['caption.show'])
+    const hidden = applyOverlayCommand(shown, COMMANDS['caption.hide'])
+    expect(hidden.caption.visible).toBe(false)
+    expect(hidden.caption.text).toBe('PLACEHOLDER SPEECH TWO')
+  })
+
+  it('hide preserves the draft flag alongside the text', () => {
+    const shown = applyOverlayCommand(emptyOverlayState(), {
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: 'PLACEHOLDER SPEECH FOUR', draft: true }
+    })
+    const hidden = applyOverlayCommand(shown, COMMANDS['caption.hide'])
+    expect(hidden.caption).toEqual({
+      visible: false,
+      text: 'PLACEHOLDER SPEECH FOUR',
+      draft: true
+    })
+  })
+
+  it('hide on an already-hidden layer keeps it hidden', () => {
+    // The off switch is spammable: a worried operator hitting it twice must not resurrect
+    // anything.
+    const once = applyOverlayCommand(populatedState(), COMMANDS['caption.hide'])
+    const twice = applyOverlayCommand(once, COMMANDS['caption.hide'])
+    expect(once.caption.visible).toBe(false)
+    expect(twice.caption.visible).toBe(false)
+    expect(twice.caption.text).toBe(once.caption.text)
+  })
+})
+
 describe('applyOverlayCommand — clearAll', () => {
-  it('resets all three layers to the empty state but still bumps revision', () => {
+  it('resets every layer to the empty state but still bumps revision', () => {
     const before = populatedState()
     const after = applyOverlayCommand(before, COMMANDS.clearAll)
     const blank = emptyOverlayState()
 
-    expect(after.lowerThird).toEqual(blank.lowerThird)
-    expect(after.scripture).toEqual(blank.scripture)
-    expect(after.slide).toEqual(blank.slide)
+    for (const layer of OVERLAY_LAYERS) {
+      expect(after[layer]).toEqual(blank[layer])
+    }
     expect(after.revision).toBe(before.revision + 1)
   })
 
   it('is idempotent in substance and never resets the revision counter', () => {
     const once = applyOverlayCommand(populatedState(), COMMANDS.clearAll)
     const twice = applyOverlayCommand(once, COMMANDS.clearAll)
-    expect(twice.lowerThird).toEqual(once.lowerThird)
-    expect(twice.scripture).toEqual(once.scripture)
-    expect(twice.slide).toEqual(once.slide)
+    for (const layer of OVERLAY_LAYERS) {
+      expect(twice[layer]).toEqual(once[layer])
+    }
     expect(twice.revision).toBe(once.revision + 1)
   })
 })
@@ -342,6 +454,48 @@ describe('overlayCommandSchema defaults, as seen by the reducer', () => {
       channel: 'command',
       name: 'lowerThird.show',
       payload: { line1: 'NAME', template: 'neon-explosion' }
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('defaults caption draft to false, so an unmarked caption is treated as final', () => {
+    const parsed = overlayCommandSchema.parse({
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: 'PLACEHOLDER SPEECH FIVE' }
+    })
+    const state = applyOverlayCommand(emptyOverlayState(), parsed)
+    expect(state.caption.draft).toBe(false)
+  })
+
+  it('accepts a caption of exactly 400 characters', () => {
+    const atCap = 'X'.repeat(400)
+    const parsed = overlayCommandSchema.safeParse({
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: atCap }
+    })
+    expect(parsed.success).toBe(true)
+  })
+
+  it('rejects a caption of 401 characters rather than truncating it', () => {
+    // The cap is a hard ceiling because an overflowing caption covers the person speaking. The
+    // ASR driver windows long utterances down; the protocol refuses to carry a paragraph, and
+    // refusing is safer than silently truncating mid-word on screen.
+    const overCap = 'X'.repeat(401)
+    const parsed = overlayCommandSchema.safeParse({
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: overCap }
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('rejects an empty caption, so the layer is never shown with nothing in it', () => {
+    const parsed = overlayCommandSchema.safeParse({
+      channel: 'command',
+      name: 'caption.show',
+      payload: { text: '' }
     })
     expect(parsed.success).toBe(false)
   })

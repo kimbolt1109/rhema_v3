@@ -90,7 +90,7 @@ body {
 /* ---------------------------------------------------------------------------------------------
    Layers
    ---------------------------------------------------------------------------------------------
-   Three absolutely-positioned siblings, each its own stacking context. They never overlap in the
+   Four absolutely-positioned siblings, each its own stacking context. They never overlap in the
    DOM and never share a transform, so animating one cannot move another — the independence
    guarantee of BLUEPRINT.md §6, expressed in CSS.
 
@@ -130,16 +130,21 @@ body {
     visibility 0s linear 0s;
 }
 
-/* Paint order: slide is background art, scripture sits over it, the lower-third is always on
-   top because it is the layer most likely to be shown while something else already is. */
+/* Paint order: slide is background art, scripture sits over it, the caption sits over that, and
+   the lower-third is always on top because it is the layer most likely to be shown while
+   something else already is. Captions and the lower-third occupy disjoint bands (see below), so
+   this ordering settles a case that should never arise rather than one the design relies on. */
 .layer--slide {
   z-index: 1;
 }
 .layer--scripture {
   z-index: 2;
 }
-.layer--lower-third {
+.layer--caption {
   z-index: 3;
+}
+.layer--lower-third {
+  z-index: 4;
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -257,6 +262,99 @@ body {
   font-weight: 400;
   color: var(--ink-muted);
   letter-spacing: 0.02em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Layer: caption — live speech, bottom-centred above the lower-third
+   ---------------------------------------------------------------------------------------------
+   A broadcast caption: centred, boxed, and sitting in the band BETWEEN the lower-third and the
+   scripture's centre block. The bands are disjoint by construction rather than by luck, because
+   all three of these layers are independent and are routinely on air at once — a reader's name
+   captioned while their words are transcribed over a verse is a normal Sunday, not an edge case.
+   --------------------------------------------------------------------------------------------- */
+.layer--caption {
+  /* Faster in and out than every other layer, and deliberately so. This layer is driven by a
+     recogniser rather than by an operator: it comes and goes on the rhythm of speech, and the
+     460ms settle that makes a lower-third feel composed makes a caption feel a beat behind the
+     speaker. Overriding the tokens rather than the transition keeps it on the same machinery,
+     including the visibility delay — which has to stay equal to the out duration. */
+  --dur-in: 180ms;
+  --dur-out: 140ms;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* 21vh is measured, not chosen: at 1920x1080 the tallest lower-third — the `bar` template with a
+     second line, plus the 5vh safe area — reaches 19.06vh up the frame, so this clears it by
+     1.94vh. The box grows UPWARD from this fixed edge, away from the lower-third, into the gap
+     left by the scripture block (see the line clamp below for the other end of that budget). */
+  padding: 0 var(--safe-x) 21vh;
+  transform: translateY(1.6vh);
+}
+
+.layer--caption.is-visible {
+  transform: translateY(0);
+}
+
+/* A contained box rather than a full-bleed band: the `bar` lower-third is already a full-width
+   band, and two stacked bands read as one broken graphic rather than as two layers. */
+.caption__box {
+  max-width: 62%;
+  padding: 1.4vh 2.2vw;
+  background: var(--scrim-strong);
+  border-radius: 0.8vh;
+  text-shadow: var(--text-shadow);
+  /* Draft and confirmed differ only in dimness (below). A recogniser flips between the two several
+     times a sentence, so the change is crossfaded — snapping it would strobe the box on air. */
+  transition: opacity 120ms linear;
+}
+
+.caption__text {
+  margin: 0;
+  font-size: min(4vh, 4.4vw);
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+
+  /* A hard TWO-line ceiling, and the two decisions here are one decision.
+
+     The protocol caps `text` at 400 characters, which is ~7 lines, and a caption that grows upward
+     until it runs out of words ends up covering the person speaking — the thing a caption must
+     never do. So there is a ceiling; the only question is where. Two lines rather than three,
+     because this is the least trustworthy layer on the page (nobody read it before it went to air)
+     and it should therefore occupy the least frame: measured at 1920x1080, two lines keep the box
+     clear of the tallest lower-third by 1.94vh below and of a full three-line scripture block —
+     verse, reference and licence attribution — by 3.6vh above. Three lines closed the gap above to
+     nothing and put the caption on top of the attribution line.
+
+     Spending the room saved on TYPE instead of on a third line is the better trade for a
+     congregation reading at distance: 4vh here against the lower-third's 4.8vh and scripture's 5vh.
+     `src/shared/overlay.ts` already puts windowing a long utterance on the caller; the clamp is the
+     backstop for when it does not, and the ellipsis makes a truncated line read as truncated rather
+     than as a sentence that stops for no reason. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* ── Draft: the in-flight partial ───────────────────────────────────────────────────────────
+   A draft is what the recogniser currently thinks it heard and will very likely rewrite within
+   the second. It must never be mistaken for a confirmed line, so the WHOLE box is dimmed, scrim
+   included: at projection distance a colour shift is arguable and a brightness shift is not.
+
+   Deliberately not italic. This overlay is Korean-first and nothing in the font stack ships a
+   Hangul italic, so the browser would synthesise an oblique — which looks like a rendering fault
+   on air and, on a mixed Hangul/Latin line, slants only half the words. Brightness and weight
+   read the same in both scripts. */
+.layer--caption.is-draft .caption__box {
+  opacity: 0.68;
+}
+
+.layer--caption.is-draft .caption__text {
+  font-weight: 500;
+  color: var(--ink-muted);
 }
 
 /* ---------------------------------------------------------------------------------------------

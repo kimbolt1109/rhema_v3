@@ -7,8 +7,8 @@ video using its alpha channel.
 
 | File | Role |
 | --- | --- |
-| `overlay.html` | The page. Three sibling layer containers + the CSP. |
-| `overlay.css` | Broadcast styling, layer animations, the three lower-third templates. |
+| `overlay.html` | The page. Four sibling layer containers + the CSP. |
+| `overlay.css` | Broadcast styling, layer animations, the three lower-third templates, the caption band. |
 | `overlay.js` | WebSocket client, declarative renderer, slide image/video playback, reconnect loop. |
 | `protocol.js` | Hand-kept JS mirror of `src/shared/overlay.ts`. |
 
@@ -125,8 +125,8 @@ Things to know while testing in a browser tab:
   there. Judging contrast in a browser tab is misleading — check legibility in OBS, over a real
   camera image with the stage lights on.
 - **Drive it from Verger's Overlay panel**, which fires real commands (`lowerThird.show`,
-  `scripture.show`, `slide.show`, `clearAll`) at the server. The page has no controls of its own
-  and cannot send commands; it only ever renders what the server tells it.
+  `scripture.show`, `slide.show`, `caption.show`, `clearAll`) at the server. The page has no
+  controls of its own and cannot send commands; it only ever renders what the server tells it.
 - **Verify the resync behaviour**, because it is the property that matters most: show a
   lower-third, then hard-reload the page (Ctrl+F5, or *Refresh* on the Browser Source). It must
   come back with the lower-third still up, animating in from the snapshot. Then quit Verger with
@@ -177,6 +177,35 @@ What to expect:
 - **Letterbox bars are transparent, not black.** Everything on this layer is `object-fit: contain`,
   so a clip that is not 16:9 shows the camera around it rather than black bars.
 
+## The caption layer (live speech)
+
+`CaptionState` is `{ visible, text, draft }`. It renders as a centred, boxed caption in the band
+**between the lower-third and the scripture block** — the layers are independent and are routinely
+on air together, so they are given disjoint bands rather than trusted not to collide. The box grows
+*upward* from a fixed bottom edge at 21 vh, which clears the tallest lower-third (the `bar`
+template's two-line band plus the safe area, ~19 vh) by a comfortable margin.
+
+- **Captions are OFF by default and the off switch is a real hide.** `caption.hide` clears
+  `visible`, and `overlay.js` takes the whole section off screen within ~140 ms. It does not merely
+  stop new text arriving — nothing stale can be left up when the operator has said no (Standing
+  Rule 1). The last text is kept in state, which is why re-enabling does not flash a blank box.
+- **Drafts look different, on purpose.** `draft: true` marks an in-flight partial that a better
+  final will overwrite. The whole box — text and scrim together — dims to 68 %, and the text drops a
+  weight. It is *not* italicised: the overlay is Korean-first, no font in the stack has a Hangul
+  italic, and a synthesised oblique looks like a rendering fault on air while slanting only the
+  Latin half of a mixed line. The dim/undim is crossfaded over 120 ms, because a recogniser flips
+  partial→final several times a sentence and snapping would strobe the box.
+- **Three lines, hard.** The protocol caps `text` at 400 characters, which is still ~7 lines at this
+  size, and a caption that grows upward ends up covering the person speaking. The text is clamped to
+  three lines with an ellipsis, so an over-long utterance reads as truncated rather than as a
+  sentence that stops for no reason. **Windowing a long utterance down to what fits is the caller's
+  job**; the clamp is the backstop.
+- **It moves faster than the other layers.** 180 ms in / 140 ms out instead of 460/300. A caption
+  tracks the rhythm of speech, and the settle that makes a lower-third feel composed makes a caption
+  feel a beat behind the speaker.
+- **Nothing about it is authored here.** Every character on screen arrives at runtime from the
+  recogniser. No sample caption text exists in these files.
+
 ## The three lower-third templates
 
 Selected by `lowerThird.template` on the state snapshot, applied as `data-template` on
@@ -195,8 +224,9 @@ Adding a fourth means adding it to `LOWER_THIRD_TEMPLATES` in **both** `src/shar
 ## House rules for editing these files
 
 1. `html, body { background: transparent }` is non-negotiable. See above.
-2. Render with `textContent`, **never** `innerHTML`. Scripture text and speaker names come from an
-   API and an operator's keyboard; markup in either must land on screen as literal characters.
+2. Render with `textContent`, **never** `innerHTML`. Scripture text comes from an API, speaker names
+   from an operator's keyboard, and caption text from a speech recogniser several times a second;
+   markup in any of them must land on screen as literal characters.
 3. Animate `transform` and `opacity` only, never `display` — `display` cannot be transitioned, so a
    layer toggled that way pops instead of animating.
 4. No external asset of any kind: no webfont, no CDN, no remote image. The CSP in `overlay.html`

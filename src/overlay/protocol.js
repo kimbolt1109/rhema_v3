@@ -19,6 +19,7 @@
  *     scripture  { visible: boolean, reference: string, text: string, translation: string,
  *                  attribution: string | null }
  *     slide      { visible: boolean, src: string }
+ *     caption    { visible: boolean, text: string, draft: boolean }
  *     revision   : number
  *   }
  *
@@ -38,7 +39,7 @@
  */
 
 /** Mirror of `OVERLAY_LAYERS`. */
-export const OVERLAY_LAYERS = Object.freeze(['lowerThird', 'scripture', 'slide'])
+export const OVERLAY_LAYERS = Object.freeze(['lowerThird', 'scripture', 'slide', 'caption'])
 
 /** Mirror of `LOWER_THIRD_TEMPLATES`. The CSS for each lives in `overlay.css`. */
 export const LOWER_THIRD_TEMPLATES = Object.freeze(['bar', 'boxed', 'minimal'])
@@ -49,6 +50,7 @@ export function emptyOverlayState() {
     lowerThird: { visible: false, line1: '', line2: '', template: 'bar' },
     scripture: { visible: false, reference: '', text: '', translation: '', attribution: null },
     slide: { visible: false, src: '' },
+    caption: { visible: false, text: '', draft: false },
     revision: 0,
   }
 }
@@ -113,6 +115,26 @@ function normaliseState(raw) {
       visible: asBoolean(slide.visible),
       src: asString(slide.src),
     },
+    /*
+     * Coerced, NOT required — the one layer that is deliberately exempt from the
+     * missing-layer-is-fatal rule above, and the exemption follows that rule's own reasoning
+     * rather than bending it.
+     *
+     * A missing layer is normally fatal because rendering the snapshot would mean inventing
+     * "hidden" for a layer the server never mentioned, and inventing "hidden" blanks something
+     * that may be on air. Captions cannot be in that position: they are off by default, off after
+     * every launch, and only ever on because an operator switched them on for this service. So
+     * absent genuinely does mean hidden here, and treating it as fatal would instead freeze the
+     * whole overlay — lower third, scripture and slide included — on stale content the moment a
+     * server sent a snapshot without this field.
+     */
+    caption: isObject(raw.caption)
+      ? {
+          visible: asBoolean(raw.caption.visible),
+          text: asString(raw.caption.text),
+          draft: asBoolean(raw.caption.draft),
+        }
+      : base.caption,
     revision: Math.floor(raw.revision),
   }
 }

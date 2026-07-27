@@ -99,6 +99,9 @@ const el = {
   slideFrames: Array.from(document.querySelectorAll('.slide__frame')),
   slideVideo: document.querySelector('.slide__video'),
 
+  caption: document.getElementById('caption'),
+  captionText: document.getElementById('caption-text'),
+
   debug: document.getElementById('debug'),
   debugSocket: document.getElementById('debug-socket'),
   debugStatus: document.getElementById('debug-status'),
@@ -214,6 +217,37 @@ function renderScripture(scripture) {
     setOptionalText(el.scriptureAttribution, scripture.attribution ?? '')
   }
   setLayerVisible(el.scripture, scripture.visible)
+}
+
+/**
+ * Live speech from the recogniser.
+ *
+ * Text goes through `setText` like every other layer's, and for a sharper reason than theirs: an
+ * ASR transcript is an untrusted string that nobody approved, arriving several times a second, and
+ * it reaches the congregation faster than any human could veto it. Whatever it contains has to land
+ * as characters.
+ *
+ * `caption` is optional in the signature because `protocol.js` is a hand-kept mirror with nothing
+ * enforcing it (see its header): a page served from a tree that predates this layer would hand this
+ * `undefined`. Degrading to "no caption" keeps the rest of the snapshot rendering — including the
+ * `applied` echo the control app uses to notice a stalled overlay — instead of throwing on the way
+ * to it. Captions are opt-in anyway, so silently not having them is the safe direction to fail.
+ *
+ * @param {{visible: boolean, text: string, draft: boolean}|undefined} caption
+ */
+function renderCaption(caption) {
+  if (!caption) {
+    setLayerVisible(el.caption, false)
+    return
+  }
+
+  if (caption.visible) {
+    setText(el.captionText, caption.text)
+    // A draft is dimmed, never marked up (overlay.css) — the operator has to be able to tell an
+    // in-flight partial from a confirmed line at projection distance, without reading it.
+    el.caption?.classList.toggle('is-draft', caption.draft)
+  }
+  setLayerVisible(el.caption, caption.visible)
 }
 
 /**
@@ -543,6 +577,7 @@ function render(state) {
   renderLowerThird(state.lowerThird)
   renderScripture(state.scripture)
   renderSlide(state.slide)
+  renderCaption(state.caption)
 }
 
 // ---------------------------------------------------------------------------------------------

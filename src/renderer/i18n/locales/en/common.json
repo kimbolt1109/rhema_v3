@@ -183,6 +183,7 @@
       "lowerThird": "Lower third",
       "scripture": "Scripture",
       "slide": "Slide",
+      "caption": "Caption",
       "visible": "Visible",
       "hidden": "Hidden"
     },
@@ -223,7 +224,7 @@
     },
     "clear": {
       "title": "Clear everything",
-      "description": "Blanks all three layers at once. It sits away from the SHOW buttons on purpose, and it only fires after a deliberate hold — a slip of the hand must never blank the congregation's screen.",
+      "description": "Blanks every layer at once, captions included. It sits away from the SHOW buttons on purpose, and it only fires after a deliberate hold — a slip of the hand must never blank the congregation's screen.",
       "label": "Clear all overlays"
     }
   },
@@ -845,6 +846,32 @@
         "humanTasks": "Adding the key is a human-only task: see HUMAN_TASKS.md in the project folder. Local recognition can be used instead by choosing Local or Auto above."
       }
     }
+  },
+  "caption": {
+    "title": "Live captions",
+    "subtitle": "Puts what the pulpit microphone is hearing onto the congregation screen, as an overlay layer of its own. Turning it on or off touches nothing else.",
+    "toggle": {
+      "label": "Live captions",
+      "on": "On",
+      "off": "Off"
+    },
+    "status": {
+      "off": "Captions are off. Nothing from speech recognition is on the congregation screen.",
+      "live": "Captions are live. Every line recognised is on the congregation screen."
+    },
+    "unreviewed": {
+      "title": "Caption text reaches the congregation without anyone reading it first",
+      "body": "A caption is whatever speech recognition thought it heard, sent straight out. Nobody proofreads it, and there is no moment in which you could veto a line before it appears — a misheard word is on the screen before you have finished reading it. Know that before you switch this on."
+    },
+    "drafts": {
+      "label": "Show partial text while it is still being recognised",
+      "hint": "Draft text is unconfirmed. It rewrites itself in place, word by word, until recognition settles. Leave this off and only settled lines are shown, a beat later.",
+      "badge": "Draft"
+    },
+    "asrRequired": "Captions carry whatever speech recognition produces, so a provider has to be set up under Speech settings and listening. Until then, switching captions on puts nothing on screen.",
+    "show": "Show captions",
+    "hide": "Hide captions",
+    "hideNote": "Switching captions off hides the layer at once. It does not merely stop new text arriving — whatever is on screen goes with it, in the same moment."
   },
   "cue": {
     "subsystem": {

@@ -68,14 +68,14 @@
 
   <body>
     <!--
-      The three layers are SIBLINGS, never nested. Independence is the product requirement
+      The four layers are SIBLINGS, never nested. Independence is the product requirement
       (BLUEPRINT.md §6), so it is expressed in the document structure: no layer is inside
       another, no layer's styles cascade into another, and each is positioned and animated on
       its own. Showing a lower-third cannot move the scripture, and hiding the slide cannot
       touch either.
 
-      Paint order is bottom-to-top in source order: slide (full-frame background art) is behind
-      scripture, which is behind the lower-third.
+      Paint order is bottom-to-top in source order: slide (full-frame background art), then
+      scripture, then the caption, with the lower-third on top.
     -->
 
     <!-- ── Layer: slide ──────────────────────────────────────────────────────────────── -->
@@ -118,6 +118,21 @@
           whenever the server supplies one, and there is no way to switch it off.
         -->
         <p class="scripture__attribution" id="scripture-attribution" hidden></p>
+      </div>
+    </section>
+
+    <!-- ── Layer: caption ────────────────────────────────────────────────────────────── -->
+    <!--
+      Live speech, transcribed. Structurally the simplest layer here — one box, one string — and
+      the only one whose text nobody read before it went to air: a lower-third is typed, scripture
+      comes from an API, a slide was prepared during the week, and this is whatever the recogniser
+      thought it heard. That is why the operator's off switch hides this whole SECTION rather than
+      merely stopping new text arriving (Standing Rule 1), and why a draft is rendered visibly
+      differently from a confirmed line rather than being trusted to be right.
+    -->
+    <section id="caption" class="layer layer--caption" aria-hidden="true">
+      <div class="caption__box">
+        <p class="caption__text" id="caption-text"></p>
       </div>
     </section>
 

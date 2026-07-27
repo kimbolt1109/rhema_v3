@@ -46,7 +46,7 @@ import { z } from 'zod'
  * lets one layer's command alter another layer's state — that independence is the product
  * requirement, so it is enforced by the shape of the data, not by discipline.
  */
-export const OVERLAY_LAYERS = ['lowerThird', 'scripture', 'slide'] as const
+export const OVERLAY_LAYERS = ['lowerThird', 'scripture', 'slide', 'caption'] as const
 
 /** Union of the layer names. */
 export type OverlayLayerId = (typeof OVERLAY_LAYERS)[number]
@@ -87,6 +87,31 @@ export interface SlideState {
 }
 
 /**
+ * A live speech caption, driven by ASR.
+ *
+ * This layer is unlike the other three in one important way: **nothing human authored its text.**
+ * A lower third is typed by the operator, scripture comes from a licensed API, a slide was
+ * prepared during the week — but a caption is whatever the recogniser thought it heard, rendered
+ * in front of the congregation with no chance to veto it first. Standing Rule 1 says design for
+ * veto, not trust, so the safety lives in the layer that drives this one: captions are OFF by
+ * default, the operator's off switch hides this layer immediately rather than merely stopping new
+ * text, and drafts are opt-in.
+ *
+ * Standing Rule 4 is not in tension here: this is a live transcription of speech in the room, not
+ * bundled copyrighted text. Nothing is authored into the repo, and nothing is fetched.
+ *
+ * `text` is capped at 400 characters by the schema — a caption is a line or two that must fit the
+ * frame, not a transcript. The caller is responsible for windowing; the protocol just refuses to
+ * carry a paragraph.
+ */
+export interface CaptionState {
+  readonly visible: boolean
+  readonly text: string
+  /** True while this is an in-flight partial that a better final will replace. */
+  readonly draft: boolean
+}
+
+/**
  * The complete overlay state — everything needed to render the overlay from scratch.
  *
  * `revision` increments on every mutation. The overlay echoes the revision it has applied,
@@ -97,6 +122,7 @@ export interface OverlayState {
   readonly lowerThird: LowerThirdState
   readonly scripture: ScriptureState
   readonly slide: SlideState
+  readonly caption: CaptionState
   readonly revision: number
 }
 
@@ -106,6 +132,7 @@ export function emptyOverlayState(): OverlayState {
     lowerThird: { visible: false, line1: '', line2: '', template: 'bar' },
     scripture: { visible: false, reference: '', text: '', translation: '', attribution: null },
     slide: { visible: false, src: '' },
+    caption: { visible: false, text: '', draft: false },
     revision: 0,
   }
 }
@@ -129,6 +156,8 @@ export const OVERLAY_COMMANDS = [
   'scripture.hide',
   'slide.show',
   'slide.hide',
+  'caption.show',
+  'caption.hide',
   'clearAll',
 ] as const
 
@@ -152,6 +181,15 @@ const slideShowPayload = z.object({
   src: z.string().min(1).max(2048),
 })
 
+/**
+ * 400 characters is a hard ceiling, not a hint: a caption that overflows the frame covers the
+ * person speaking. Windowing a long utterance down to what fits is the caller's job.
+ */
+const captionShowPayload = z.object({
+  text: z.string().min(1).max(400),
+  draft: z.boolean().default(false),
+})
+
 const emptyPayload = z.object({})
 
 /**
@@ -165,6 +203,8 @@ export const overlayCommandPayloadSchemas = {
   'scripture.hide': emptyPayload,
   'slide.show': slideShowPayload,
   'slide.hide': emptyPayload,
+  'caption.show': captionShowPayload,
+  'caption.hide': emptyPayload,
   clearAll: emptyPayload,
 } as const
 
@@ -212,6 +252,16 @@ export const overlayCommandSchema = z.discriminatedUnion('name', [
   z.object({
     channel: z.literal('command'),
     name: z.literal('slide.hide'),
+    payload: emptyPayload,
+  }),
+  z.object({
+    channel: z.literal('command'),
+    name: z.literal('caption.show'),
+    payload: captionShowPayload,
+  }),
+  z.object({
+    channel: z.literal('command'),
+    name: z.literal('caption.hide'),
     payload: emptyPayload,
   }),
   z.object({
@@ -310,6 +360,15 @@ export function applyOverlayCommand(state: OverlayState, command: OverlayCommand
       return bump({ slide: { visible: true, src: command.payload.src } })
     case 'slide.hide':
       return bump({ slide: { ...state.slide, visible: false } })
+    case 'caption.show':
+      return bump({
+        caption: { visible: true, text: command.payload.text, draft: command.payload.draft },
+      })
+    case 'caption.hide':
+      // Keeps the last text, like every other layer's hide — so the operator's off switch is a
+      // clean hide rather than a state wipe, and re-enabling does not flash stale text because
+      // the driver only shows again when it has something new to say.
+      return bump({ caption: { ...state.caption, visible: false } })
     case 'clearAll':
       return { ...emptyOverlayState(), revision: state.revision + 1 }
     default: {
