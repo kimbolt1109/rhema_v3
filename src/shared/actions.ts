@@ -47,6 +47,15 @@ export const ActionId = {
 
   /** Hide the lower-third only. Touches no other layer. */
   lowerThirdDismiss: 'overlay.lowerThird.dismiss',
+  /**
+   * Turn live captions on or off.
+   *
+   * A TAP, not a hold, and that is the deliberate inverse of this file's usual rule. Holds exist to
+   * stop a reflex from doing something irreversible — but here the dangerous state is captions being
+   * ON (unreviewed machine text in front of the congregation), so the operator must be able to kill
+   * them as fast as they can move. Turning them back on is the cheap, reversible direction.
+   */
+  captionToggle: 'caption.toggle',
   /** Clear every overlay layer. DESTRUCTIVE — hold only. */
   clearAll: 'overlay.clearAll',
 
@@ -131,6 +140,8 @@ export const DEFAULT_KEY_BINDINGS: readonly KeyBinding[] = [
   { action: ActionId.black, key: 'b', gesture: 'hold', holdMs: MIN_DESTRUCTIVE_HOLD_MS },
   { action: ActionId.logo, key: 'l', gesture: 'tap' },
   { action: ActionId.freeze, key: 'f', gesture: 'tap' },
+
+  { action: ActionId.captionToggle, key: 'c', gesture: 'tap' },
 
   { action: ActionId.confirm, key: 'y', gesture: 'tap' },
   { action: ActionId.dismiss, key: 'n', gesture: 'tap' },

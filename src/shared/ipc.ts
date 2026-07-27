@@ -19,6 +19,7 @@ import type { ConfigSummary, ObsConfig } from './config'
 import type { LogRecord } from './log'
 import type { ObsConnectionConfig, ObsSceneList, ObsStatus } from './obs'
 import type { CameraConfig, CameraSlot, CameraState } from './camera'
+import type { CaptionRuntimeState } from './caption'
 import type { OverlayCommand, OverlayState } from './overlay'
 import type { GoLiveState } from './golive'
 import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from './asr'
@@ -158,6 +159,9 @@ export const IpcChannel = {
   healthListCheckpoints: 'verger:health:list-checkpoints',
   healthRestoreCheckpoint: 'verger:health:restore-checkpoint',
   healthReloadOverlays: 'verger:health:reload-overlays',
+  captionGetState: 'verger:caption:get-state',
+  captionSetEnabled: 'verger:caption:set-enabled',
+  captionSetShowDrafts: 'verger:caption:set-show-drafts',
 } as const
 
 /** Union of every request channel string. */
@@ -184,6 +188,7 @@ export const IpcEvent = {
   cueState: 'verger:cue:state',
   cueSuggestion: 'verger:cue:suggestion',
   healthSnapshot: 'verger:health:snapshot',
+  captionState: 'verger:caption:state',
 } as const
 
 /** Union of every event channel string. */
@@ -265,6 +270,9 @@ export interface IpcRequest {
   [IpcChannel.healthListCheckpoints]: void
   [IpcChannel.healthRestoreCheckpoint]: { checkpointId: string }
   [IpcChannel.healthReloadOverlays]: void
+  [IpcChannel.captionGetState]: void
+  [IpcChannel.captionSetEnabled]: boolean
+  [IpcChannel.captionSetShowDrafts]: boolean
 }
 
 /** The resolved type for each request channel. Always wrapped in {@link Result}. */
@@ -323,6 +331,9 @@ export interface IpcResponse {
   [IpcChannel.healthListCheckpoints]: Result<readonly Checkpoint[]>
   [IpcChannel.healthRestoreCheckpoint]: Result<HealthSnapshot>
   [IpcChannel.healthReloadOverlays]: Result<HealthSnapshot>
+  [IpcChannel.captionGetState]: Result<CaptionRuntimeState>
+  [IpcChannel.captionSetEnabled]: Result<CaptionRuntimeState>
+  [IpcChannel.captionSetShowDrafts]: Result<CaptionRuntimeState>
 }
 
 /** The payload pushed on each event channel. */
@@ -342,6 +353,7 @@ export interface IpcEventPayload {
   [IpcEvent.cueState]: CueEngineState
   [IpcEvent.cueSuggestion]: CueSuggestion
   [IpcEvent.healthSnapshot]: HealthSnapshot
+  [IpcEvent.captionState]: CaptionRuntimeState
 }
 
 /** Removes a previously registered listener. Always call it on teardown — leaks are real. */
@@ -477,6 +489,17 @@ export interface VergerApi {
     /** Force every attached overlay browser source to reload and re-sync. */
     reloadOverlays(): Promise<Result<HealthSnapshot>>
     onSnapshot(callback: (snapshot: HealthSnapshot) => void): Unsubscribe
+  }
+  readonly caption: {
+    getState(): Promise<Result<CaptionRuntimeState>>
+    /**
+     * The operator's switch. `false` HIDES the layer immediately rather than merely stopping new
+     * text — the one behaviour this whole feature's safety rests on.
+     */
+    setEnabled(enabled: boolean): Promise<Result<CaptionRuntimeState>>
+    /** Show in-flight partials as well as confirmed finals. Off by default; they rewrite in place. */
+    setShowDrafts(showDrafts: boolean): Promise<Result<CaptionRuntimeState>>
+    onState(callback: (state: CaptionRuntimeState) => void): Unsubscribe
   }
   readonly config: {
     /** The renderer-safe projection only — never the values. */

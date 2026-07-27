@@ -22,6 +22,8 @@ import type {
 import { defaultAsrSettings, idleAsrStatus } from '@shared/asr'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
 import { defaultCameraConfig, findBinding, slotForScene } from '@shared/camera'
+import type { CaptionRuntimeState } from '@shared/caption'
+import { idleCaptionState } from '@shared/caption'
 import type { ConfigSummary } from '@shared/config'
 import { emptyConfiguredMap } from '@shared/config'
 import type {
@@ -327,6 +329,9 @@ export interface MockCalls {
   readonly disconnect: number[]
   readonly setConfig: ObsConnectionConfig[]
   readonly configGet: number[]
+  /** Each `caption.setEnabled` argument, in order — so a test can prove OFF was actually sent. */
+  readonly captionSetEnabled: boolean[]
+  readonly captionSetShowDrafts: boolean[]
   readonly logWrite: LogRecord[]
   readonly getVersions: number[]
   readonly overlayGetState: number[]
@@ -1441,6 +1446,8 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     disconnect: [],
     setConfig: [],
     configGet: [],
+    captionSetEnabled: [],
+    captionSetShowDrafts: [],
     logWrite: [],
     getVersions: [],
     overlayGetState: [],
@@ -1561,6 +1568,9 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     ? responses.healthListCheckpoints.value
     : []
 
+  /** Off, finals-only — the same resting state the real driver launches in. */
+  let captionState: CaptionRuntimeState = idleCaptionState()
+
   const listeners = new Map<IpcEventValue, Set<Listener>>()
 
   function on<K extends IpcEventValue>(
@@ -1574,6 +1584,31 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     return () => {
       set.delete(listener)
     }
+  }
+
+  /** Push to every subscriber. Shared by the exposed `emit` and by the doubles that self-notify. */
+  function notify<K extends IpcEventValue>(event: K, payload: IpcEventPayload[K]): void {
+    const set = listeners.get(event)
+    if (set === undefined) return
+    for (const listener of [...set]) {
+      ;(listener as (value: IpcEventPayload[K]) => void)(payload)
+    }
+  }
+
+  /**
+   * Broadcast the caption state the way the main process really does — on a LATER tick.
+   *
+   * Deliberately deferred. `ipcRenderer.invoke` resolves asynchronously and the `caption:state`
+   * broadcast travels on a separate channel, so a push can never land synchronously inside the
+   * invoke that caused it. A synchronous double hides exactly the behaviour worth testing here: that
+   * the caption switch stays visibly unsettled until the driver has answered, rather than flipping
+   * optimistically and claiming the congregation screen is clear before we know it.
+   */
+  function pushCaptionState(): void {
+    const snapshot = captionState
+    queueMicrotask(() => {
+      notify(IpcEvent.captionState, snapshot)
+    })
   }
 
   const api: VergerApi = {
@@ -2186,6 +2221,23 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
       },
       onSnapshot: (callback) => on(IpcEvent.healthSnapshot, callback),
     },
+    caption: {
+      getState: () => Promise.resolve(ok(captionState)),
+      setEnabled: (enabled) => {
+        calls.captionSetEnabled.push(enabled)
+        captionState = { ...captionState, enabled }
+        pushCaptionState()
+        return Promise.resolve(ok(captionState))
+      },
+      setShowDrafts: (showDrafts) => {
+        calls.captionSetShowDrafts.push(showDrafts)
+        captionState = { ...captionState, showDrafts }
+        pushCaptionState()
+        return Promise.resolve(ok(captionState))
+      },
+      onState: (callback) => on(IpcEvent.captionState, callback),
+    },
+
     config: {
       get: () => {
         calls.configGet.push(calls.configGet.length)
@@ -2216,11 +2268,7 @@ export function createMockVergerApi(overrides: Partial<MockResponses> = {}): Moc
     },
     calls,
     emit<K extends IpcEventValue>(event: K, payload: IpcEventPayload[K]): void {
-      const set = listeners.get(event)
-      if (set === undefined) return
-      for (const listener of [...set]) {
-        ;(listener as (value: IpcEventPayload[K]) => void)(payload)
-      }
+      notify(event, payload)
     },
     listenerCount(event: IpcEventValue): number {
       return listeners.get(event)?.size ?? 0

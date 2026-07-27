@@ -232,7 +232,7 @@ export function HoldButton({
           // Outline plus a tint, never a filled field — a destructive control may not look like a
           // lit state lamp. The label stays bone rather than red: saturated colour is not a text
           // colour in this theme, and bone measures 12.77:1 on the tint where red measured 4.1:1.
-          'overflow-hidden rounded-panel border-2 border-panic bg-panic/12 px-6',
+          'overflow-hidden rounded-panel border-2 border-panic bg-panic/[0.12] px-6',
           'text-label uppercase tracking-[0.08em] text-text',
           'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim',
           className,

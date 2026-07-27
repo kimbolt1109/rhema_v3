@@ -39,7 +39,7 @@
  */
 
 import clsx from 'clsx'
-import { Settings, Type } from 'lucide-react'
+import { Captions, Settings, Type } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -50,6 +50,7 @@ import type { ObsConnectionState } from '@shared/obs'
 
 import type { CameraButtonModel } from '../store/cameraStore'
 import { cameraButtons, useCameraStore } from '../store/cameraStore'
+import { useCaptionStore } from '../store/captionStore'
 import { useCueStore } from '../store/cueStore'
 import { elapsedMs, formatElapsed, isRecordingMissing, useGoLiveStore } from '../store/goLiveStore'
 import { useObsStore } from '../store/obsStore'
@@ -137,6 +138,10 @@ export interface BottomBarModel {
   readonly lowerThirdVisible: boolean
   /** False when no lower-third text has been authored yet, so the toggle has nothing to show. */
   readonly lowerThirdReady: boolean
+  /** Whether live captions are switched on. Unreviewed ASR text on the congregation screen. */
+  readonly captionsOn: boolean
+  /** False when the caption driver is unreachable, which disables the control rather than lying. */
+  readonly captionsReady: boolean
   readonly canGoLive: boolean
   readonly isLive: boolean
   readonly endNeedsHold: boolean
@@ -147,6 +152,7 @@ export interface BottomBarModel {
 export interface BottomBarActions {
   readonly selectCamera: (slot: CameraSlot) => void
   readonly toggleLowerThird: () => void
+  readonly toggleCaptions: () => void
   readonly goLive: () => void
   readonly end: () => void
   readonly openSettings: () => void
@@ -167,6 +173,8 @@ export function useBottomBarModel(now?: number): BottomBarModel {
   const cameraConfig = useCameraStore((store) => store.config)
   const cameraState = useCameraStore((store) => store.state)
   const lowerThird = useOverlayStore((store) => store.state.lowerThird)
+  const captions = useCaptionStore((store) => store.state)
+  const captionsBridge = useCaptionStore((store) => store.bridgeAvailable)
 
   const planState = useMemo(
     () => ({ plan, position, path: null, dirty: false, lastFired: null }),
@@ -197,6 +205,11 @@ export function useBottomBarModel(now?: number): BottomBarModel {
     })),
     lowerThirdVisible: lowerThird.visible,
     lowerThirdReady: lowerThird.line1.trim().length > 0,
+    captionsOn: captions.enabled,
+    // Deliberately NOT gated on speech recognition being set up. Captions with no recogniser simply
+    // produce nothing, which is harmless — whereas disabling the control would take away the OFF
+    // switch, and the switch has to stay reachable whenever captions could conceivably be on.
+    captionsReady: captionsBridge,
     // Deliberately coarse. The full "why can't I go live" explanation lives in the GO LIVE screen
     // in the drawer; the bar only needs to know whether pressing it could possibly work.
     canGoLive: obsState === 'connected' && (goLive.phase === 'idle' || goLive.phase === 'failed'),
@@ -213,6 +226,7 @@ export function useBottomBarActions(openSettings: () => void): BottomBarActions 
   const start = useGoLiveStore((store) => store.start)
   const end = useGoLiveStore((store) => store.end)
   const lowerThird = useOverlayStore((store) => store.state.lowerThird)
+  const toggleCaptionsAction = useCaptionStore((store) => store.toggle)
 
   const selectCamera = useCallback(
     (slot: CameraSlot) => {
@@ -248,9 +262,22 @@ export function useBottomBarActions(openSettings: () => void): BottomBarActions 
     void end()
   }, [end])
 
+  // The store decides which way to flip, not this closure — so a double-tap cannot read a stale
+  // `enabled` and toggle to the value it already had.
+  const toggleCaptions = useCallback(() => {
+    void toggleCaptionsAction()
+  }, [toggleCaptionsAction])
+
   return useMemo(
-    () => ({ selectCamera, toggleLowerThird, goLive, end: endService, openSettings }),
-    [selectCamera, toggleLowerThird, goLive, endService, openSettings],
+    () => ({
+      selectCamera,
+      toggleLowerThird,
+      toggleCaptions,
+      goLive,
+      end: endService,
+      openSettings,
+    }),
+    [selectCamera, toggleLowerThird, toggleCaptions, goLive, endService, openSettings],
   )
 }
 
@@ -374,7 +401,7 @@ export function BottomBar({
             <span
               role="alert"
               data-testid="bottom-bar-no-recording"
-              className="flex h-6 items-center gap-1.5 rounded-chip border border-panic bg-panic/12 px-2 text-micro uppercase text-text"
+              className="flex h-6 items-center gap-1.5 rounded-chip border border-panic bg-panic/[0.12] px-2 text-micro uppercase text-text"
             >
               <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-panic" />
               {t('console.bar.noRecording')}
@@ -530,6 +557,43 @@ export function BottomBar({
           ) : null}
         </button>
 
+        {/*
+          Captions on/off, one tap, with the drawer shut — the only overlay layer whose text nobody
+          approved, so its off switch has to be reachable without opening anything.
+
+          Unlike L3, an ON caption gets the PROGRAM colour rather than chalk. That is a deliberate
+          departure from the note on the L3 button: an overlay the operator authored is a control
+          state, but unreviewed machine text going out to the congregation is an OUTPUT state, and it
+          belongs in the same visual language as the tally lamp. The rail plus the word CC mean a
+          colour-blind operator reads it too.
+        */}
+        <button
+          type="button"
+          data-testid="bottom-bar-caption"
+          aria-pressed={m.captionsOn}
+          disabled={!m.captionsReady}
+          title={m.captionsOn ? t('caption.hide') : t('caption.show')}
+          onClick={a.toggleCaptions}
+          className={clsx(
+            'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
+            'transition-colors duration-[120ms] ease-instrument',
+            'disabled:cursor-not-allowed disabled:text-text-dim disabled:shadow-none',
+            m.captionsOn
+              ? 'border-tally bg-tally/[0.12] text-text'
+              : 'border-border bg-surface-2 text-text-muted hover:border-accent-hover hover:bg-surface-3',
+          )}
+        >
+          <Captions aria-hidden="true" className="h-[18px] w-[18px]" />
+          {/* Never glyph-only. */}
+          <span className="text-micro leading-none">CC</span>
+          <span className="sr-only">
+            {m.captionsOn ? t('caption.status.live') : t('caption.status.off')}
+          </span>
+          {m.captionsOn ? (
+            <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-[3px] bg-tally" />
+          ) : null}
+        </button>
+
         {/* FITTS-3: END is physically separated from the camera cluster it must never be mistaken for. */}
         <span aria-hidden="true" className="h-10 w-px shrink-0 bg-border-strong" />
 
@@ -553,7 +617,7 @@ export function BottomBar({
               onClick={a.end}
               // Outline and tint only, NEVER a filled field — so it can never be confused with a
               // live camera cap or the tally rail.
-              className="min-h-touch-lg w-28 rounded-panel border-2 border-panic bg-panic/12 text-label uppercase tracking-[0.08em] text-text transition-colors duration-[120ms] ease-instrument hover:bg-panic/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim"
+              className="min-h-touch-lg w-28 rounded-panel border-2 border-panic bg-panic/[0.12] text-label uppercase tracking-[0.08em] text-text transition-colors duration-[120ms] ease-instrument hover:bg-panic/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim"
             >
               {t('console.bar.end')}
             </button>

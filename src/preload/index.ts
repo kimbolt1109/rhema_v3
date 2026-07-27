@@ -35,6 +35,7 @@ import type { IpcRendererEvent } from 'electron'
 
 import type { AsrSettings, AsrStatus, AudioInputDevice, TranscriptSegment } from '@shared/asr'
 import type { CameraConfig, CameraSlot, CameraState } from '@shared/camera'
+import type { CaptionRuntimeState } from '@shared/caption'
 import type { ConfigSummary, ObsConfig } from '@shared/config'
 import type { CueEngineSettings, CueEngineState, CueSuggestion } from '@shared/cue'
 import type { GoLiveState } from '@shared/golive'
@@ -418,6 +419,18 @@ const api: VergerApi = {
       ipcRenderer.invoke(IpcChannel.healthReloadOverlays),
     onSnapshot: (callback: (snapshot: HealthSnapshot) => void): Unsubscribe =>
       subscribe<HealthSnapshot>(IpcEvent.healthSnapshot, callback)
+  },
+
+  caption: {
+    getState: (): Promise<Result<CaptionRuntimeState>> =>
+      ipcRenderer.invoke(IpcChannel.captionGetState),
+    /** The operator's kill switch. `false` hides the layer at once, not merely stops new text. */
+    setEnabled: (enabled: boolean): Promise<Result<CaptionRuntimeState>> =>
+      ipcRenderer.invoke(IpcChannel.captionSetEnabled, enabled),
+    setShowDrafts: (showDrafts: boolean): Promise<Result<CaptionRuntimeState>> =>
+      ipcRenderer.invoke(IpcChannel.captionSetShowDrafts, showDrafts),
+    onState: (callback: (state: CaptionRuntimeState) => void): Unsubscribe =>
+      subscribe<CaptionRuntimeState>(IpcEvent.captionState, callback)
   },
 
   config: {

@@ -1155,6 +1155,7 @@
       "output_logo": "로고 화면 표시",
       "output_freeze": "화면 정지",
       "overlay_lowerThird_dismiss": "하단 자막 숨기기",
+      "caption_toggle": "실시간 자막 켜기 / 끄기",
       "overlay_clearAll": "오버레이 전체 지우기",
       "ai_disable": "자동화 끄기 — 직접 진행",
       "ai_panic": "긴급 정지 — 자동화 전체 중단",

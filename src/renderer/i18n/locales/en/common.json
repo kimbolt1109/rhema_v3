@@ -1157,6 +1157,7 @@
       "output_logo": "Show logo slate",
       "output_freeze": "Freeze frame",
       "overlay_lowerThird_dismiss": "Dismiss lower third",
+      "caption_toggle": "Live captions on / off",
       "overlay_clearAll": "Clear all overlays",
       "ai_disable": "Disable AI — take over",
       "ai_panic": "PANIC — stop all automation",

@@ -52,7 +52,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
     'bg-surface-2 text-text border border-border shadow-edge hover:border-accent-hover hover:bg-surface-3 ' +
     'disabled:text-text-dim disabled:shadow-none',
   danger:
-    'bg-panic/12 text-text border border-panic hover:bg-panic/20 ' +
+    'bg-panic/[0.12] text-text border border-panic hover:bg-panic/20 ' +
     'disabled:bg-surface-2 disabled:text-text-dim disabled:border-border',
 }
 

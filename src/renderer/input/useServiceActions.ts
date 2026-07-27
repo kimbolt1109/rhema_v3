@@ -53,6 +53,7 @@ import type { CameraSlot } from '@shared/camera'
 import { CAMERA_SLOTS } from '@shared/camera'
 
 import { useCameraStore } from '../store/cameraStore'
+import { useCaptionStore } from '../store/captionStore'
 import { useCueStore } from '../store/cueStore'
 import { useOverlayStore } from '../store/overlayStore'
 import { usePlanStore } from '../store/planStore'
@@ -75,6 +76,7 @@ export const IMPLEMENTED_ACTIONS: readonly ActionId[] = [
   ActionId.dismiss,
   ActionId.panic,
   ActionId.disableAi,
+  ActionId.captionToggle,
 ]
 
 /** Whether anything will actually happen when this action is dispatched. */
@@ -119,6 +121,7 @@ export function useServiceActions({ dispatcher }: ServiceActionsOptions): void {
   const dismiss = useCueStore((store) => store.dismiss)
   const panic = useCueStore((store) => store.panic)
   const setMode = useCueStore((store) => store.setMode)
+  const toggleCaptions = useCaptionStore((store) => store.toggle)
 
   const latest = useRef({
     advance,
@@ -129,9 +132,20 @@ export function useServiceActions({ dispatcher }: ServiceActionsOptions): void {
     dismiss,
     panic,
     setMode,
+    toggleCaptions,
   })
   useEffect(() => {
-    latest.current = { advance, back, selectCamera, sendOverlay, confirm, dismiss, panic, setMode }
+    latest.current = {
+      advance,
+      back,
+      selectCamera,
+      sendOverlay,
+      confirm,
+      dismiss,
+      panic,
+      setMode,
+      toggleCaptions,
+    }
   })
 
   useEffect(() => {
@@ -184,6 +198,12 @@ export function useServiceActions({ dispatcher }: ServiceActionsOptions): void {
       // Non-destructive hand-back: the dial goes to `manual`, the screen keeps whatever is on it.
       dispatcher.register(ActionId.disableAi, () => {
         void latest.current.setMode('manual')
+      }),
+
+      // Captions on/off. The store owns the decision of which way to flip, so a rapid double-tap
+      // cannot read a stale `enabled` out of this closure and toggle to the value it already had.
+      dispatcher.register(ActionId.captionToggle, () => {
+        void latest.current.toggleCaptions()
       }),
     ]
 

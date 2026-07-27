@@ -623,4 +623,66 @@ test.describe('service day — the real app, end to end', () => {
     // spending a saturated colour on it would put a decorative hue beside a red tally lamp.
     expect(ring?.colour).toBe('rgb(201, 199, 192)')
   })
+
+  test('10 · a caption reaches the browser source, and the OFF switch really clears it', async () => {
+    // The test that would have caught the bug this feature shipped with. `src/overlay/protocol.js`
+    // is a hand-kept mirror of the shared protocol and its normaliser builds an explicit literal —
+    // it dropped `caption` entirely, so the layer could never render. Nothing failed; captions were
+    // simply always blank. Only driving the real page over the real socket shows that.
+    const windowPromise = app.waitForEvent('window')
+    await app.evaluate(async ({ BrowserWindow }, url) => {
+      const win = new BrowserWindow({
+        width: 1280,
+        height: 720,
+        show: true,
+        webPreferences: { backgroundThrottling: false },
+      })
+      await win.loadURL(url)
+      return win.id
+    }, `${OVERLAY_PAGE_URL}?debug=1`)
+
+    overlayPage = await windowPromise
+    await overlayPage.waitForLoadState('domcontentloaded')
+    await expect(overlayPage.locator('#debug-status')).toHaveText('open')
+    await expect(overlayPage.locator('#caption')).toHaveAttribute('aria-hidden', 'true')
+
+    // --- the operator switches captions on, in the UI they would actually use ------------------
+    await gotoSection(page, 'Overlay')
+    const status = page.getByTestId('caption-status')
+    await expect(status).toHaveAttribute('data-caption-enabled', 'false')
+    await page.getByTestId('caption-toggle').click()
+    await expect(status).toHaveAttribute('data-caption-enabled', 'true')
+
+    // --- put a caption on the layer -----------------------------------------------------------
+    // Sent through the overlay bridge rather than spoken: there is no recogniser on this machine, and
+    // the path under test is protocol -> server -> socket -> page, which is the half that was broken.
+    // The text is an invented placeholder — Standing Rule 4.
+    const CAPTION_TEXT = 'PLACEHOLDER SPOKEN LINE'
+    await page.evaluate(async (text) => {
+      await window.verger?.overlay.send({
+        channel: 'command',
+        name: 'caption.show',
+        payload: { text, draft: false },
+      })
+    }, CAPTION_TEXT)
+
+    await expect(overlayPage.locator('#caption-text')).toHaveText(CAPTION_TEXT)
+    await expect(overlayPage.locator('#caption')).toHaveAttribute('aria-hidden', 'false')
+
+    // Layer independence (BLUEPRINT.md §6): a caption touched none of the other three.
+    await expect(overlayPage.locator('#lower-third')).toHaveAttribute('aria-hidden', 'true')
+    await expect(overlayPage.locator('#scripture')).toHaveAttribute('aria-hidden', 'true')
+    await expect(overlayPage.locator('#slide')).toHaveAttribute('aria-hidden', 'true')
+
+    // --- and now the property the whole feature rests on --------------------------------------
+    // Switching captions OFF must clear what is already on the congregation screen, not merely stop
+    // the next line. Standing Rule 1: design for veto, not trust. This asserts the kill switch on
+    // the real DOM of a real browser source, with text visibly on it a moment earlier.
+    await page.getByTestId('caption-toggle').click()
+    await expect(status).toHaveAttribute('data-caption-enabled', 'false')
+    await expect(overlayPage.locator('#caption')).toHaveAttribute('aria-hidden', 'true')
+
+    await overlayPage.close()
+    overlayPage = null
+  })
 })

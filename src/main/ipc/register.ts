@@ -110,6 +110,7 @@ import { getCameraService } from '@main/camera'
 import { summarize } from '@main/config/env'
 import { getCueEngine, getScriptureResolver } from '@main/cue'
 import { getGoLiveService } from '@main/golive'
+import { getCaptionService } from '@main/caption'
 import { getCheckpointStore, getHealthService } from '@main/health'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
@@ -154,7 +155,8 @@ import { overlayCommandSchema } from '@shared/overlay'
 import type { OverlayCommand, OverlayState } from '@shared/overlay'
 import { cuePayloadSchemas, servicePlanSchema } from '@shared/plan'
 import type { Cue, CueOptions, CuePayload, CueTrigger, CueType, ServicePlan } from '@shared/plan'
-import { err, ok, toAppError } from '@shared/result'
+import type { CaptionRuntimeState } from '@shared/caption'
+import { ErrorCode, err, ok, toAppError } from '@shared/result'
 import type { Result } from '@shared/result'
 import { scriptureReferenceSchema } from '@shared/scripture'
 import type { ResolvedScripture, ScriptureReference, TranslationSource } from '@shared/scripture'
@@ -568,6 +570,19 @@ export interface HealthServiceLike {
 }
 
 /**
+ * The minimum this module needs from the caption driver (`src/main/caption`).
+ *
+ * Structurally satisfied by `CaptionService`. Deliberately excludes `start`/`dispose`: the IPC layer
+ * answers the operator's switch, it does not own the service's lifecycle.
+ */
+export interface CaptionServiceLike {
+  getState(): CaptionRuntimeState
+  setEnabled(enabled: boolean): ClientCall<CaptionRuntimeState>
+  setShowDrafts(showDrafts: boolean): ClientCall<CaptionRuntimeState>
+  onState(listener: (state: CaptionRuntimeState) => void): Unsubscribe | void
+}
+
+/**
  * The minimum this module needs from the checkpoint store (`src/main/health/checkpoints`).
  *
  * A *separate* seam from `HealthServiceLike`, and separate for the same reason the scripture
@@ -812,6 +827,19 @@ export interface RegisterIpcDeps {
    */
   readonly health?: HealthServiceLike | null
   /**
+   * The caption driver behind the three `caption:*` channels.
+   *
+   * Optional and defaulting to the `@main/caption` singleton, like `health`. A `null` here costs the
+   * operator live captions and nothing else: the layer simply never activates, which is also its
+   * resting state, so the degraded mode is indistinguishable from "switched off". The channels then
+   * report `NOT_CONFIGURED` rather than answering `enabled: false` — an operator who flips the
+   * switch and is told nothing happened is better off than one shown an Off state that no longer
+   * reflects a service that is not there.
+   *
+   * Pass `null` to say "there is no caption driver" explicitly and skip the default lookup.
+   */
+  readonly caption?: CaptionServiceLike | null
+  /**
    * The checkpoint store behind `healthListCheckpoints` and `healthRestoreCheckpoint`.
    *
    * Optional, defaulting to the process-wide singleton from `@main/health`. Kept separate from
@@ -889,6 +917,15 @@ function zodArg<S extends z.ZodType>(schema: S): ArgValidator<z.output<S>> {
 
 /** Channels that take no argument still validate: anything but `undefined` is a bug. */
 const noArg: ArgValidator<void> = zodArg(z.void())
+
+/**
+ * A bare boolean, validated rather than coerced.
+ *
+ * `z.boolean()` and not `Boolean(raw)`: the caption switch is a kill switch, and a coercion would
+ * turn a renderer bug that sent `undefined` or `"false"` into a confident "captions are off" when
+ * nothing had been switched off. A refusal is the honest answer there.
+ */
+const booleanArg: ArgValidator<boolean> = zodArg(z.boolean())
 
 const obsConfigArg: ArgValidator<ObsConnectionConfig> = zodArg(obsConfigSchema)
 
@@ -2025,6 +2062,7 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
    * seams, so no handler here can end up routed through it.
    */
   const health: HealthServiceLike | null = resolveHealthService()
+  const caption: CaptionServiceLike | null = resolveCaptionService()
 
   function resolveHealthService(): HealthServiceLike | null {
     if (deps.health !== undefined) return deps.health
@@ -2032,6 +2070,18 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
       return getHealthService()
     } catch (cause) {
       log.warn('the health service is unavailable; health IPC will report NOT_CONFIGURED', {
+        cause
+      })
+      return null
+    }
+  }
+
+  function resolveCaptionService(): CaptionServiceLike | null {
+    if (deps.caption !== undefined) return deps.caption
+    try {
+      return getCaptionService({ logger: log })
+    } catch (cause) {
+      log.warn('the caption driver is unavailable; caption IPC will report NOT_CONFIGURED', {
         cause
       })
       return null
@@ -2352,7 +2402,43 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     }
   }
 
+  // The caption feed. Pushed whole, like every other state feed, so a control window that reloads
+  // mid-service is one snapshot away from correct — and so the switch in the UI can never sit at On
+  // while the driver has captions off.
+  if (caption !== null) {
+    try {
+      registerUnsubscribe(
+        caption.onState((state) => {
+          broadcast(IpcEvent.captionState, state)
+        })
+      )
+    } catch (cause) {
+      log.error('failed to subscribe to the caption driver', { cause })
+    }
+  }
+
   // --- handlers ------------------------------------------------------------
+
+  safeHandle(IpcChannel.captionGetState, noArg, async () => {
+    if (caption === null) {
+      return err(ErrorCode.NOT_CONFIGURED, 'There is no caption driver in this process.')
+    }
+    return ok(caption.getState())
+  })
+
+  safeHandle(IpcChannel.captionSetEnabled, booleanArg, async (enabled) => {
+    if (caption === null) {
+      return err(ErrorCode.NOT_CONFIGURED, 'There is no caption driver in this process.')
+    }
+    return resolveCall(caption.setEnabled(enabled))
+  })
+
+  safeHandle(IpcChannel.captionSetShowDrafts, booleanArg, async (showDrafts) => {
+    if (caption === null) {
+      return err(ErrorCode.NOT_CONFIGURED, 'There is no caption driver in this process.')
+    }
+    return resolveCall(caption.setShowDrafts(showDrafts))
+  })
 
   safeHandle(IpcChannel.obsGetStatus, noArg, async () => resolveCall(deps.obs.getStatus()))
 
@@ -3435,7 +3521,8 @@ export function registerIpc(deps: RegisterIpcDeps): () => void {
     scripture: scripture === null ? 'unavailable' : 'attached',
     health: health === null ? 'unavailable' : 'attached',
     checkpoints: checkpoints === null ? 'unavailable' : 'attached',
-    overlayReload: overlayReload === null ? 'unavailable' : 'attached'
+    overlayReload: overlayReload === null ? 'unavailable' : 'attached',
+    caption: caption === null ? 'unavailable' : 'attached'
   })
 
   // --- disposal ------------------------------------------------------------

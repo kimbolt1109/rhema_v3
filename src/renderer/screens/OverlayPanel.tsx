@@ -31,6 +31,7 @@
 import clsx from 'clsx'
 import {
   BookOpen,
+  Captions,
   CircleAlert,
   Copy,
   Eye,
@@ -50,6 +51,7 @@ import { LOWER_THIRD_TEMPLATES } from '@shared/overlay'
 import { Button } from '../components/Button'
 import { HoldButton } from '../components/HoldButton'
 import { TextField } from '../components/TextField'
+import { useCaptionStore } from '../store/captionStore'
 import { anyLayerVisible, useOverlayStore } from '../store/overlayStore'
 
 /** How long CLEAR ALL must be held. Above the 1.5 s KAHNEMAN-2 floor, matching v2's shipped 2 s. */
@@ -66,6 +68,15 @@ export function OverlayPanel(): React.JSX.Element {
   const hydrate = useOverlayStore((store) => store.hydrate)
   const subscribe = useOverlayStore((store) => store.subscribe)
   const send = useOverlayStore((store) => store.send)
+
+  // The caption switch is a different store on purpose: it is an operator intent that outlives any
+  // one line of text, and it changes at a completely different rate from the wire state above.
+  const captions = useCaptionStore((store) => store.state)
+  const captionBridge = useCaptionStore((store) => store.bridgeAvailable)
+  const captionPending = useCaptionStore((store) => store.pending)
+  const captionError = useCaptionStore((store) => store.lastError)
+  const toggleCaptions = useCaptionStore((store) => store.toggle)
+  const setShowDrafts = useCaptionStore((store) => store.setShowDrafts)
 
   const [line1, setLine1] = useState('')
   const [line2, setLine2] = useState('')
@@ -280,6 +291,89 @@ export function OverlayPanel(): React.JSX.Element {
             dispatch({ channel: 'command', name: 'slide.hide', payload: {} })
           }}
         />
+      </LayerSection>
+
+      {/*
+        Captions last, and deliberately unlike the three above it. Those have SHOW / HIDE buttons
+        because the operator authored their content and is choosing when it appears. This one has a
+        switch, because the operator is not choosing the words — they are delegating them to a
+        recogniser and deciding only whether that is allowed on screen at all.
+      */}
+      <LayerSection icon={Captions} title={t('caption.title')}>
+        <p className="text-body text-text-muted">{t('caption.subtitle')}</p>
+
+        <div
+          role="group"
+          aria-label={t('caption.toggle.label')}
+          className="flex flex-wrap items-center gap-3"
+        >
+          <Button
+            variant={captions.enabled ? 'danger' : 'primary'}
+            data-testid="caption-toggle"
+            aria-pressed={captions.enabled}
+            disabled={!captionBridge || captionPending}
+            onClick={() => {
+              void toggleCaptions()
+            }}
+          >
+            {captions.enabled ? t('caption.hide') : t('caption.show')}
+          </Button>
+
+          <span
+            data-testid="caption-status"
+            data-caption-enabled={captions.enabled ? 'true' : 'false'}
+            className="text-label text-text"
+          >
+            {captions.enabled ? t('caption.status.live') : t('caption.status.off')}
+          </span>
+        </div>
+
+        {/*
+          The one warning that has to be read before this is switched on, and it stays visible rather
+          than appearing once: nobody reviews this text before the congregation sees it.
+        */}
+        <p className="flex items-start gap-1.5 rounded-panel border border-warn/60 bg-warn/10 p-3 text-meta text-text">
+          <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
+          {/* Title as its own block, not inline: neither locale's title ends in punctuation, so
+              running them together reads as one broken sentence — "…reading it first A caption is
+              whatever…". Fixing it here rather than adding a full stop keeps both bundles as prose
+              a translator can rewrite freely. */}
+          <span className="flex flex-col gap-1">
+            <strong className="font-semibold">{t('caption.unreviewed.title')}</strong>
+            <span>{t('caption.unreviewed.body')}</span>
+          </span>
+        </p>
+
+        <label className="flex min-h-touch items-start gap-3 text-body text-text">
+          <input
+            type="checkbox"
+            data-testid="caption-drafts"
+            checked={captions.showDrafts}
+            disabled={!captionBridge || captionPending}
+            onChange={(event) => {
+              void setShowDrafts(event.target.checked)
+            }}
+            className="mt-0.5 h-5 w-5 shrink-0 accent-accent"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="font-medium">{t('caption.drafts.label')}</span>
+            <span className="text-meta text-text-muted">{t('caption.drafts.hint')}</span>
+          </span>
+        </label>
+
+        <p className="text-meta text-text-muted">{t('caption.hideNote')}</p>
+        {/* Captions still switch on with no recogniser — they just produce nothing. Saying so here
+            stops "I turned it on and nothing happened" from looking like a fault. */}
+        <p className="text-meta text-text-muted">{t('caption.asrRequired')}</p>
+
+        {captionError !== null ? (
+          <p className="flex items-start gap-1.5 text-meta text-text-muted">
+            <CircleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-panic" />
+            <span className="select-text">
+              {t(`errors.code.${captionError.code}`)} — {captionError.message}
+            </span>
+          </p>
+        ) : null}
       </LayerSection>
 
       {lastError !== null ? (

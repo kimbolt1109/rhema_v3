@@ -74,6 +74,7 @@ const ACTION_LABELS: Record<ActionId, string> = {
   [ActionId.logo]: 'Show logo slate',
   [ActionId.freeze]: 'Freeze frame',
   [ActionId.lowerThirdDismiss]: 'Dismiss lower third',
+  [ActionId.captionToggle]: 'Live captions on / off',
   [ActionId.clearAll]: 'Clear all overlays',
   [ActionId.disableAi]: 'Disable AI — take over',
   [ActionId.panic]: 'PANIC — stop all automation',

@@ -88,6 +88,10 @@ function baseModel(overrides: Partial<BottomBarModel> = {}): BottomBarModel {
     cameras: READY_CAMERAS,
     lowerThirdVisible: false,
     lowerThirdReady: false,
+    // Off, but reachable: the resting state is captions off with a working driver, so a test that
+    // wants the disabled control has to say so.
+    captionsOn: false,
+    captionsReady: true,
     canGoLive: false,
     isLive: false,
     endNeedsHold: false,
@@ -100,6 +104,7 @@ function baseModel(overrides: Partial<BottomBarModel> = {}): BottomBarModel {
 interface BarCalls {
   readonly selectCamera: CameraSlot[]
   readonly toggleLowerThird: number[]
+  readonly toggleCaptions: number[]
   readonly goLive: number[]
   /** Every completed END. A tap on a hold-guarded END must never appear here. */
   readonly end: number[]
@@ -115,6 +120,7 @@ function makeActions(): FakeActions {
   const calls: BarCalls = {
     selectCamera: [],
     toggleLowerThird: [],
+    toggleCaptions: [],
     goLive: [],
     end: [],
     openSettings: [],
@@ -122,6 +128,9 @@ function makeActions(): FakeActions {
   const actions: BottomBarActions = {
     selectCamera: (slot) => {
       calls.selectCamera.push(slot)
+    },
+    toggleCaptions: () => {
+      calls.toggleCaptions.push(calls.toggleCaptions.length)
     },
     toggleLowerThird: () => {
       calls.toggleLowerThird.push(calls.toggleLowerThird.length)

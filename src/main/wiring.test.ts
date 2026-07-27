@@ -277,7 +277,14 @@ const PROBED_CHANNELS: readonly ChannelProbe[] = [
   { channel: IpcChannel.healthGet, arg: undefined },
   { channel: IpcChannel.healthListCheckpoints, arg: undefined },
   { channel: IpcChannel.healthRestoreCheckpoint, arg: { checkpointId: 'no-such-checkpoint' } },
-  { channel: IpcChannel.healthReloadOverlays, arg: undefined }
+  { channel: IpcChannel.healthReloadOverlays, arg: undefined },
+  { channel: IpcChannel.captionGetState, arg: undefined },
+  // `false`, deliberately, on both counts: it is the resting state, so probing cannot leave
+  // captions armed in this process, and it exercises the kill-switch path rather than the arming
+  // one. Nothing destructive either way — the caption driver only ever emits overlay commands, and
+  // this file's overlay server binds port 0 with nothing attached.
+  { channel: IpcChannel.captionSetEnabled, arg: false },
+  { channel: IpcChannel.captionSetShowDrafts, arg: false }
 ]
 
 /**

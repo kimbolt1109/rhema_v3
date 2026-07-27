@@ -70,6 +70,7 @@ import { useAsrStore } from './store/asrStore'
 import { useCameraStore } from './store/cameraStore'
 import { useCueStore } from './store/cueStore'
 import { useGoLiveStore } from './store/goLiveStore'
+import { useCaptionStore } from './store/captionStore'
 import { useHealthStore } from './store/healthStore'
 import { useObsStore } from './store/obsStore'
 import { useOverlayStore } from './store/overlayStore'
@@ -137,6 +138,7 @@ function useSubsystems(): void {
     useAsrStore((store) => store.hydrate),
     useCueStore((store) => store.hydrate),
     useHealthStore((store) => store.hydrate),
+    useCaptionStore((store) => store.hydrate),
   ]
   const subscribers = [
     useObsStore((store) => store.subscribe),
@@ -148,6 +150,7 @@ function useSubsystems(): void {
     useAsrStore((store) => store.subscribe),
     useCueStore((store) => store.subscribe),
     useHealthStore((store) => store.subscribe),
+    useCaptionStore((store) => store.subscribe),
   ]
 
   useEffect(

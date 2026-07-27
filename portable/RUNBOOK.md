@@ -21,14 +21,14 @@ First launch on a new PC opens **Setup** automatically on the **Preflight** page
 
 There are only two things on screen during a service:
 
-- **The slide grid** — your whole deck, laid out like PowerPoint's slide sorter. The slide that's live has a **thick bright ring and a glow**; the one coming next has a thinner, dimmer ring; everything else is dimmed. **Tap any slide to jump straight to it.** The grid follows along on its own, and stops following for a second and a half whenever you scroll by hand, so you can look ahead without it yanking you back.
+- **The slide grid** — your whole deck, laid out like PowerPoint's slide sorter. The slide that's **live** carries a **red** frame, a red bar along its bottom edge and a small **NOW** tag; the one coming **next** has a single thin **green** line and a **NEXT** tag. That is the same red/green a video switcher uses for program and preview. Nothing else is dimmed — every other tile is just a plain tile, and slides you have already fired get a thin line underneath. **Tap any slide to jump straight to it.** The grid follows along on its own, and stops following for a second and a half whenever you scroll by hand, so you can look ahead without it yanking you back.
 - **The bar along the bottom** — the bar itself is the progress meter. See section 2.
 
 Everything else — settings, the plan editor, OBS connection, speech setup, the status lights — is behind the gear button at the bottom right, or **Ctrl+,**. **Esc** closes it. While it's open the service keys are switched off on purpose, so you can type in it without advancing the service.
 
 ## 2. What "good" looks like
 
-**Read the bottom bar first.** Left to right it tells you: a **dot** (red = you are ON AIR, amber = starting/reconnecting, grey = off air), the **elapsed time**, **REC** while OBS is recording, and the **OBS connection state**. In the middle is the big **match percentage** — how confident Verger is that the next cue is the right one — and under it, what's on now and what's next. The **coloured fill sweeping across the whole bar is that percentage.**
+**Read the bottom bar first.** Left to right it tells you: a **dot** (red = you are ON AIR, amber = starting/reconnecting, grey = off air), the **elapsed time**, **REC** while OBS is recording, and the **OBS connection state**. In the middle is the big **match percentage** — how confident Verger is that the next cue is the right one — shown as a **meter with a pale needle and 25 / 50 / 75 tick marks**, and under it, what's on now and what's next. On the right are the camera buttons **1**–**4**, **L3** (lower third), **CC** (live captions) and the gear.
 
 A dash (**—**) instead of a percentage is normal and correct: it means nothing is pending, usually because speech recognition isn't set up (see ASR-SETUP.md). It is **not** an error, and every button still works by hand.
 
@@ -85,6 +85,7 @@ To take over by hand:
 | **Y** | tap | Confirm the pending AI suggestion |
 | **N** | tap | Dismiss the pending AI suggestion |
 | **Shift + Esc** | tap | Dismiss lower third only — touches no other layer |
+| **C** | tap | **Live captions on / off.** Off hides the caption layer instantly — see section 7 |
 | **Esc** | hold 2s | Hand control back from the AI: switches to Manual. Non-destructive — whatever is on screen stays on screen |
 | **Space** | hold 3s | **PANIC** — stops all automation only; never touches the stream, the recording, or the screen |
 | **Ctrl + ,** | tap | Open / close Setup |
@@ -132,6 +133,40 @@ Two things that will stop you, both a minute's work to fix:
 - **The plan has to be saved to disk first**, because the images are written beside its `plan.json`. The plans on this stick are already saved, so this only bites on a brand-new plan you just started — save it, then import. Verger tells you when this is the reason.
 
 **Video plays on the overlay, not through OBS**, so its sound comes out of the `Overlays` browser source and OBS has to be set up once to carry that audio. See **OBS-SETUP.md section 7** — and test it with the real clip before the service, not during it.
+
+## 7. Live captions — read this before you switch them on
+
+Verger can put what the pulpit microphone is hearing onto the congregation screen, as its own
+overlay layer. It is **off every time Verger starts** and it never comes back on by itself.
+
+**The one thing to understand:** every other thing Verger puts on screen was written by a person —
+you typed the lower third, the slides were made during the week, a verse comes from a Bible API.
+A caption is whatever the speech recogniser *thought it heard*, and it goes out with nobody
+checking it first. A misheard word is on the screen before you have finished reading it. That is
+not a bug to be fixed; it is what live captioning is. Decide whether that trade is right for your
+congregation before the service, not during one.
+
+**Three ways to switch them:**
+
+- **`C`** — one tap, any time, drawer open or shut.
+- **`CC` button** on the bottom bar, next to `L3`.
+- **Ctrl+, → Overlay → Live captions**, which also has the draft setting below.
+
+**Off means off, immediately.** Switching captions off does not merely stop the next line — it
+clears whatever is on the screen at that moment. If a caption is saying something wrong in front
+of the congregation, press `C` and it is gone.
+
+**Two things that are normal, not faults:**
+
+- **Nothing appears when you switch them on.** Captions carry what the recogniser produces, so
+  speech recognition has to be set up and listening first (`SETUP-ASR.bat`, then Ctrl+, → Speech
+  settings). Until then, on and off look identical.
+- **Captions clear themselves after a pause.** After about six seconds with nothing said the layer
+  hides, so the last sentence before a prayer isn't left sitting over the congregation.
+
+**"Show partial text while it is still being recognised"** is off by default and should usually stay
+off. With it on, half-recognised words rewrite themselves in place as the recogniser changes its
+mind, which looks like a malfunction from the pews. With it off you get settled lines, a beat later.
 
 ---
 
