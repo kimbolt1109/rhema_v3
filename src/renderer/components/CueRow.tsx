@@ -111,7 +111,12 @@ export function CueRow({
         {...listeners}
         data-testid={`cue-drag-${cue.id}`}
         aria-label={t('plan.row.dragHandle', { label: cue.label })}
-        className="flex min-h-touch w-8 shrink-0 cursor-grab items-center justify-center rounded-glass text-text-muted"
+        // 44px in BOTH axes. This was `w-8` — 44px tall and 32px wide, so it met the touch floor
+        // vertically and missed it horizontally, which is the easy half to overlook because the row
+        // still looks right. `docs/v2-notes/SHORTCUTS_AND_A11Y.md` §9.4 records v2 shipping 28px hold
+        // buttons as a logged defect; a drag handle is the smallest target in the plan editor and the
+        // one most often grabbed in a hurry.
+        className="flex min-h-touch min-w-touch shrink-0 cursor-grab items-center justify-center rounded-glass text-text-muted transition-colors duration-[120ms] ease-instrument hover:text-text active:bg-surface-3"
       >
         <GripVertical aria-hidden="true" className="h-5 w-5" />
       </button>

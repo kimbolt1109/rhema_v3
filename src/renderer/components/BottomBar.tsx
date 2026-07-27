@@ -507,7 +507,7 @@ export function BottomBar({
             }}
             className={clsx(
               'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
-              'transition-colors duration-[120ms] ease-instrument',
+              'transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess',
               'disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:shadow-none',
               camera.live
                 ? 'border-tally bg-tally/[0.18] text-text'
@@ -540,7 +540,7 @@ export function BottomBar({
           onClick={a.toggleLowerThird}
           className={clsx(
             'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
-            'transition-colors duration-[120ms] ease-instrument',
+            'transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess',
             'disabled:cursor-not-allowed disabled:text-text-dim disabled:shadow-none',
             // Chalk, not a state colour: an overlay being up is a CONTROL state, not an output state.
             m.lowerThirdVisible
@@ -576,7 +576,7 @@ export function BottomBar({
           onClick={a.toggleCaptions}
           className={clsx(
             'relative flex min-h-touch-lg min-w-touch-lg flex-col items-center justify-center gap-px overflow-hidden rounded-control border shadow-edge',
-            'transition-colors duration-[120ms] ease-instrument',
+            'transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess',
             'disabled:cursor-not-allowed disabled:text-text-dim disabled:shadow-none',
             m.captionsOn
               ? 'border-tally bg-tally/[0.12] text-text'
@@ -617,7 +617,7 @@ export function BottomBar({
               onClick={a.end}
               // Outline and tint only, NEVER a filled field — so it can never be confused with a
               // live camera cap or the tally rail.
-              className="min-h-touch-lg w-28 rounded-panel border-2 border-panic bg-panic/[0.12] text-label uppercase tracking-[0.08em] text-text transition-colors duration-[120ms] ease-instrument hover:bg-panic/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim"
+              className="min-h-touch-lg w-28 rounded-panel border-2 border-panic bg-panic/[0.12] text-label uppercase tracking-[0.08em] text-text transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess hover:bg-panic/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim"
             >
               {t('console.bar.end')}
             </button>
@@ -631,7 +631,7 @@ export function BottomBar({
             onClick={a.goLive}
             // The WORD is bone; green is the border, the tint and the rail. Colour absent entirely
             // when it is blocked, because "not ready" should not look like a ready control.
-            className="relative min-h-touch-lg w-28 overflow-hidden rounded-panel border border-live bg-live/10 text-label uppercase tracking-[0.08em] text-text shadow-edge transition-colors duration-[120ms] ease-instrument hover:bg-surface-3 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:shadow-none"
+            className="relative min-h-touch-lg w-28 overflow-hidden rounded-panel border border-live bg-live/10 text-label uppercase tracking-[0.08em] text-text shadow-edge transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess hover:bg-surface-3 disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-2 disabled:text-text-dim disabled:shadow-none"
           >
             {t('console.bar.goLive')}
             {m.canGoLive && !m.busy ? (
@@ -647,7 +647,7 @@ export function BottomBar({
           aria-label={t('console.bar.settings')}
           title={t('console.bar.settingsHint')}
           onClick={a.openSettings}
-          className="flex min-h-touch min-w-touch items-center justify-center rounded-control border border-border text-text-muted transition-colors duration-[120ms] ease-instrument hover:border-accent-hover hover:text-text"
+          className="flex min-h-touch min-w-touch items-center justify-center rounded-control border border-border text-text-muted transition-[background-color,border-color,box-shadow] duration-[120ms] ease-instrument active:shadow-recess hover:border-accent-hover hover:text-text"
         >
           <Settings aria-hidden="true" className="h-5 w-5" />
         </button>

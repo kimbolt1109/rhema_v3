@@ -44,15 +44,31 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
  * `danger` keeps a saturated border and a tint but its label goes bone — saturated colour is never a
  * text colour in this theme, and bone measures 12.77:1 on that tint where red measured 4.10:1.
  */
+/*
+ * Each variant also carries a PRESS state, and it is a shadow swap rather than a transform.
+ *
+ * `shadow-edge` is a 1px machined highlight along the top edge — what makes a cap look raised.
+ * `shadow-recess` is its opposite, an inset that sinks the face into the panel. Trading one for the
+ * other on `:active` reads as the cap physically going down, which is the feedback an operator needs
+ * in a dark booth: "did that register?" answered without looking away from the stage.
+ *
+ * Deliberately NOT `scale(0.96)`, the usual choice. Cycle 14 removed transform-based motion from this
+ * surface on purpose — a control that changes SIZE draws the eye in peripheral vision, and on a
+ * console beside a live stage anything that twitches reads as something firing. A shadow swap is
+ * invisible until you are looking at the button you just pressed.
+ */
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
     'bg-surface-2 text-text border border-accent shadow-edge hover:bg-surface-3 ' +
+    'active:shadow-recess active:bg-surface-2 ' +
     'disabled:bg-surface-2 disabled:border-border disabled:text-text-dim disabled:shadow-none',
   secondary:
     'bg-surface-2 text-text border border-border shadow-edge hover:border-accent-hover hover:bg-surface-3 ' +
+    'active:shadow-recess active:bg-surface-2 ' +
     'disabled:text-text-dim disabled:shadow-none',
   danger:
     'bg-panic/[0.12] text-text border border-panic hover:bg-panic/20 ' +
+    'active:shadow-recess active:bg-panic/[0.12] ' +
     'disabled:bg-surface-2 disabled:text-text-dim disabled:border-border',
 }
 
@@ -79,7 +95,12 @@ export function Button({
       disabled={disabled}
       className={clsx(
         'inline-flex items-center justify-center gap-2 rounded-glass font-medium',
-        'transition-colors duration-150 ease-out',
+        // Enumerated, never the blanket keyword — and note the comment says "blanket keyword" rather
+        // than spelling the class out, because Tailwind scans comments as plain text: an earlier
+        // draft of this note named it and thereby emitted that very rule into production CSS.
+        // `transition-colors` alone is also wrong here: it omits box-shadow, so the press state's
+        // shadow would snap while the background eased, reading as two controls reacting at once.
+        'transition-[background-color,border-color,box-shadow] duration-150 ease-instrument',
         'disabled:cursor-not-allowed disabled:opacity-60',
         SIZE_CLASSES[size],
         VARIANT_CLASSES[variant],
