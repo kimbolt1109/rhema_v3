@@ -34,6 +34,7 @@ import { getGoLiveService } from '@main/golive'
 import { getCheckpointStore, getHealthService, resetHealthService } from '@main/health'
 import { OverlayWatchdog } from '@main/health/overlayWatchdog'
 import { getObsClient } from '@main/obs'
+import { isObsPortListening, readObsWebsocketConfig } from '@main/obs/localConfig'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
 import { getYouTubeService } from '@main/youtube'
@@ -148,6 +149,75 @@ if (!hasSingleInstanceLock) {
 // Startup
 // ---------------------------------------------------------------------------
 
+/** What discovery did, for one honest log line and for the connect decision below. */
+interface DiscoveredObs {
+  readonly outcome: 'filled' | 'already-configured' | 'server-disabled' | 'unavailable'
+  readonly detail: string
+  /** Present only when OBS's server is switched on, so a caller knows dialling is worthwhile. */
+  readonly reachable: boolean
+  /** OBS's port when known, so the launch path can probe it before arming a reconnect loop. */
+  readonly port: number | null
+}
+
+/**
+ * Supply missing OBS settings from OBS's own config file. Mutates `env` in place, secrets included.
+ *
+ * Exported nowhere and deliberately small: it decides precedence and nothing else, so the rule
+ * "the operator's explicit value always wins" is readable in one screen.
+ */
+function applyDiscoveredObsSettings(env: NodeJS.ProcessEnv): DiscoveredObs {
+  const url = env['OBS_WEBSOCKET_URL']
+  const password = env['OBS_WEBSOCKET_PASSWORD']
+  // A URL AND a non-empty password is a complete hand-configuration; leave it entirely alone.
+  const alreadyComplete =
+    url !== undefined && url.length > 0 && password !== undefined && password.length > 0
+  if (alreadyComplete) {
+    return {
+      outcome: 'already-configured',
+      detail: 'config.json or .env already names an OBS URL and password; discovery skipped',
+      reachable: true,
+      // Unknown by design: the operator's URL may point at another machine entirely, so there is no
+      // local port to probe. The launch connect is skipped and they press Connect, exactly as before.
+      port: null,
+    }
+  }
+
+  const found = readObsWebsocketConfig()
+  if (!found.ok) {
+    return { outcome: 'unavailable', detail: found.error.message, reachable: false, port: null }
+  }
+
+  const obs = found.value
+  if (url === undefined || url.length === 0) {
+    // Just the port. `normalizeObsUrl` in `env.ts` turns a bare port into `ws://127.0.0.1:<port>` —
+    // reusing that rather than assembling a URL here means discovery and a hand-pasted OBS "Port"
+    // box travel through exactly the same tested path.
+    env['OBS_WEBSOCKET_URL'] = String(obs.port)
+  }
+  // Only when OBS actually wants one. Writing a stale password from OBS's file while OBS has auth
+  // switched off would turn a working no-auth setup into a rejected handshake.
+  if ((password === undefined || password.length === 0) && obs.authRequired) {
+    env['OBS_WEBSOCKET_PASSWORD'] = obs.password
+  }
+
+  if (!obs.serverEnabled) {
+    return {
+      outcome: 'server-disabled',
+      detail:
+        'OBS’s WebSocket server is switched OFF in OBS (Tools → WebSocket Server Settings). Settings were read, but nothing is listening.',
+      reachable: false,
+      port: obs.port,
+    }
+  }
+
+  return {
+    outcome: 'filled',
+    detail: `read from OBS’s own settings at ${obs.sourcePath}`,
+    reachable: true,
+    port: obs.port,
+  }
+}
+
 function onReady(): void {
   // Resolve the operator's external config.json (next to the launcher) FIRST, so its OBS values are
   // in the environment before dotenv runs and before anything reads config. In a dev run this is
@@ -163,6 +233,16 @@ function onReady(): void {
     // variable that is already set.
     process.env[key] = value
   }
+
+  // Fill any GAP in the OBS settings from OBS's own obs-websocket config file, before anything reads
+  // config. This is the step that removes the "type the password twice" procedure: OBS already knows
+  // its port and password, so asking the operator to copy them into config.json and then again into
+  // the Connection screen was three chances to typo one string on a Sunday morning.
+  //
+  // Precedence is deliberate: whatever the operator set explicitly WINS, and discovery only supplies
+  // what is missing. An empty password means "not configured" under Standing Rule 5, which is exactly
+  // the case worth filling. A wrong guess here would be worse than the friction it removes.
+  const discovered = applyDiscoveredObsSettings(process.env)
 
   const config: AppConfig =
     portable.envFilePath !== null
@@ -201,8 +281,55 @@ function onReady(): void {
     log.warn('configuration warning', { key: warning.key, detail: warning.message })
   }
 
+  // Key names and outcomes only. `detail` carries a file path and a reason, never a secret.
+  log.info('obs settings discovery', {
+    outcome: discovered.outcome,
+    detail: discovered.detail,
+    obsConfigured: config.obs !== null
+  })
+
   const services = composeServices(log, portable)
   disposeServices = services.dispose
+
+  // Connect to OBS at launch, rather than waiting for the operator to press a button.
+  //
+  // Safe by construction (Standing Rule 2): `ObsClient.connect` writes NOTHING to OBS — no `Set*`,
+  // no `Start*`, no `Stop*` — it asks the version and the scene list and then observes. So this can
+  // never impose state on an OBS that is already mid-service; it only starts watching one. That is
+  // also why it is right to do here rather than in the renderer: observing OBS should not depend on
+  // a window being open, and on relaunch after a crash this is what re-attaches to a live stream.
+  //
+  // Skipped when OBS says its own server is off, because dialling a closed port produces a timeout
+  // that reads like a network fault instead of "switch the server on in OBS".
+  if (config.obs !== null && discovered.reachable && discovered.port !== null) {
+    const obsConfig = { url: config.obs.url, password: config.obs.password }
+    void isObsPortListening(discovered.port)
+      .then(async (listening) => {
+        if (!listening) {
+          // Quiet on purpose. Dialling here would arm the reconnect backoff and paint a permanent
+          // amber tally reading "OBS went away" about an OBS that was never there. The operator
+          // presses Connect when OBS is up, and that path still retries properly.
+          log.info('OBS is not listening yet; leaving the connection for the operator', {
+            port: discovered.port
+          })
+          return
+        }
+        const result = await services.obs.connect(obsConfig)
+        if (result.ok) {
+          log.info('connected to OBS at launch, using OBS’s own settings', { url: obsConfig.url })
+          return
+        }
+        // Something IS listening and refused us — a wrong password is the likely cause, and that is
+        // worth a warning because the operator has to act on it.
+        log.warn('OBS is listening but refused the connection', {
+          code: result.error.code,
+          detail: result.error.message
+        })
+      })
+      .catch((cause: unknown) => {
+        log.warn('the launch-time OBS connect threw, which it is contracted not to', { cause })
+      })
+  }
 
   disposeIpc = toDisposer(
     registerIpc({

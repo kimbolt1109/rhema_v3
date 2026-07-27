@@ -9,7 +9,17 @@ not just one file out of it).
 
 ---
 
-## 1. Turn on OBS's WebSocket server and note the port + password
+> ### You no longer have to copy the password anywhere
+>
+> Verger reads OBS's own WebSocket settings — the port and the password — straight out of OBS's
+> config file, and connects by itself at launch. So **step 1 is all you normally have to do.** Steps
+> 2 and 3 are now only for the unusual cases: OBS running on a different PC, a port you deliberately
+> changed, or a connection that did not come up on its own.
+>
+> Verger never *writes* to OBS's settings. It will not switch the WebSocket server on for you — that
+> stays your decision, which is why step 1 is still done by hand.
+
+## 1. Turn on OBS's WebSocket server
 
 Verger talks to OBS over a local connection called **obs-websocket**. It ships inside OBS — nothing
 to download — but it starts switched off.
@@ -19,16 +29,26 @@ to download — but it starts switched off.
 3. Tick **Enable WebSocket server**.
 4. Note the **Server Port** box. Leave it on the default, **4455**, unless you have a specific
    reason to change it.
-5. Click **Show Connect Info** and note the **Server Password** shown there. (If you'd rather run
-   with no password, untick "Enable Authentication" instead — Verger accepts that too, see step 2.)
-6. Click **OK** / **Apply**.
+5. Click **OK** / **Apply**.
 
-Leave this dialog closed for the rest of the setup — you do not need to reopen it unless the
-password or port changes.
+That is it. You do **not** need to open "Show Connect Info", and you do not need to write the
+password down — Verger reads it from OBS itself. If you would rather run with no password at all,
+untick **Enable Authentication**; Verger handles that too, and will not send a stale password when
+authentication is off.
+
+Now start Verger (`START.bat`). Open **Ctrl+, → Connection**: it should already say **Connected**,
+with OBS's version and scene list. If it does, **skip to step 4** — steps 2 and 3 are not needed.
+
+If it does not connect, the two likely reasons are both stated on that screen: OBS was not running
+when Verger started (press **Connect**), or the WebSocket server is still switched off in step 1.
 
 ---
 
-## 2. Put the port and password into `config.json`, then restart Verger
+## 2. Only if it did not connect by itself — put the port and password into `config.json`
+
+Skip this if the Connection screen already says **Connected**. Anything you set here **overrides**
+what Verger read from OBS, which is the point: this is the escape hatch for OBS on another machine, a
+non-standard port, or a setup Verger guessed wrong.
 
 `config.json` sits in the same folder as `START.bat` and `Verger.exe`. Open it in Notepad.
 
@@ -64,7 +84,7 @@ nothing until you restart.
 
 ---
 
-## 3. Launch Verger and connect, on the Connection screen
+## 3. Only if it still did not connect — connect by hand
 
 Double-click `START.bat`. Open the **Connection** tab.
 

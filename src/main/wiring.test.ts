@@ -309,7 +309,10 @@ const SKIPPED_CHANNELS: readonly SkippedChannel[] = [
   },
   {
     channel: IpcChannel.obsConnect,
-    why: 'dials a real websocket and arms the reconnect backoff; OBS Studio is not installed'
+    // Machine-independent on purpose: the old reason said "OBS Studio is not installed", which is a
+    // fact about one developer's laptop and is false on any machine that has it — including the one
+    // that now reads OBS's own settings in `obs/localConfig.ts`. Dialling is reason enough.
+    why: 'dials a real websocket and arms the reconnect backoff, which would outlive this test'
   },
   {
     channel: IpcChannel.obsSetConfig,

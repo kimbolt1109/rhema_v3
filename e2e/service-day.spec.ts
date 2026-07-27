@@ -260,8 +260,33 @@ test.describe('service day — the real app, end to end', () => {
     // there is no confidence to report — so an em dash and an empty fill, never a misleading 0%.
     await expect(page.getByTestId('bottom-bar-percent')).toHaveText('—')
     await expect(page.getByTestId('bottom-bar-progress')).toHaveAttribute('data-percent', '')
-    await expect(page.getByTestId('bottom-bar')).toHaveAttribute('data-tally', 'offline')
-    await expect(page.getByTestId('bottom-bar-obs')).toContainText('Not configured')
+
+    /*
+     * The tally is asserted for COHERENCE, not for one value, because it legitimately depends on the
+     * machine now. Verger reads OBS's own WebSocket settings and connects at launch, so:
+     *
+     *  - no OBS installed          -> nothing discovered, nothing dialled  -> offline
+     *  - OBS installed, not running -> dialling and retrying               -> transitioning
+     *  - OBS installed and running  -> connected                          -> offline until streaming
+     *
+     * Pinning `offline` here pinned "OBS is absent from this developer's laptop", which is not a fact
+     * about the product. What must hold on every machine is that the dot and the words agree — a dot
+     * saying one thing while the text beside it says another is the actual defect.
+     */
+    const tally = await page.getByTestId('bottom-bar').getAttribute('data-tally')
+    expect(['offline', 'transitioning']).toContain(tally)
+
+    const obsWords = (await page.getByTestId('bottom-bar-obs').textContent()) ?? ''
+    if (tally === 'offline') {
+      // Nothing in flight: either OBS was never configured, or it answered and is simply not live.
+      expect(obsWords).toMatch(/Not configured|Connected|Idle|Disconnected/i)
+    } else {
+      // Amber means something is genuinely in progress, and the words have to say so too.
+      expect(obsWords).toMatch(/Connecting|Reconnecting/i)
+    }
+
+    // Streaming is never in progress at launch on a test machine, whatever OBS is doing.
+    await expect(page.getByTestId('bottom-bar')).not.toHaveAttribute('data-tally', 'live')
 
     // The main window is the *only* window at this point. Anything else would mean a stray
     // devtools or a second instance, and every later assertion would be ambiguous.

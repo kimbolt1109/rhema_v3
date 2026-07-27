@@ -9,7 +9,10 @@
 1. Open the Verger folder on the USB drive (or church PC).
 2. Double-click **START.bat**. (It works from any drive letter and pauses on a crash so you can read the error — don't close that window if something goes wrong, read it first.)
 3. Verger opens. It does **not** need Node, admin rights, or the internet to launch.
-4. If OBS isn't already running, start it first — Verger connects *to* OBS, it doesn't launch it.
+4. **Start OBS first.** Verger connects *to* OBS, it never launches it — and it now reads OBS's own
+   WebSocket port and password and connects on its own, so if OBS is already up when Verger starts,
+   the Connection screen should say **Connected** without you typing anything. Start OBS second and
+   you just have to press **Connect** once.
 
 Config lives in **config.json**, next to START.bat (OBS host/port/password, overlay port, ASR engine, and which plan to load). Edit it, then **restart Verger** — it's only read at launch.
 
@@ -48,8 +51,14 @@ If all are green, press **Esc** and you're ready.
 
 ## 3. The 5 most likely failures
 
-**OBS not connected / wrong password**
-**Ctrl+,** → Connection. If it says "Password rejected," Verger has deliberately stopped retrying (repeating a wrong password never works). Open OBS → Tools → WebSocket Server Settings, re-copy the password into config.json's `obs.password`, restart Verger.
+**OBS not connected**
+**Ctrl+,** → Connection. Verger reads OBS's own port and password, so the usual cause is simply that
+**OBS wasn't running when Verger started** — press **Connect** and it should come up. If it says
+"Password rejected," Verger has deliberately stopped retrying (repeating a wrong password never
+works); that means OBS's settings and `config.json` disagree, so clear `obs.password` in
+`config.json` back to `""` and let Verger read it from OBS instead, then restart. If OBS's WebSocket
+server is switched off entirely, no password will help — turn it on in OBS → Tools → WebSocket Server
+Settings (see obs/OBS-SETUP.md step 1).
 
 **Overlay browser source is blank in OBS**
 **Ctrl+,** → Overlay will say "No overlay is attached." In OBS, right-click the "Overlays" browser source → **Refresh**. Make sure "Shutdown source when not visible" is turned OFF for it (a hidden/shutdown source is the usual cause). Confirm the URL in the Overlay panel matches what's pasted into OBS.
