@@ -1568,3 +1568,64 @@ audit PASS, and the 16/16 portable-OBS pre-flight against OBS 32.1.2 / obs-webso
 **Still open:** no OBS is bundled into the shipped stick yet — that needs an OBS download the
 repository owner supplies. Real speech → captions, a real go-live, and decoding a real video file
 remain unverified, and the build is still unsigned.
+
+---
+
+## Cycle 20 — OBS is on the stick, and verifying it no longer dirties it
+
+Cycle 19 ended one item short: the assembler was finished but nothing was assembled, because
+redistributing OBS is the shipper's decision. That decision was made and a zip supplied. This cycle
+uses it, and in doing so finds that the pre-flight written last cycle was quietly ruining the thing
+it certified.
+
+**What actually arrived was not OBS.** The supplied `OBS Studio.zip` is 784 bytes and contains one
+file, `OBS Studio.lnk` — the installer's desktop shortcut, zipped. Resolving it gave
+`C:\Program Files\obs-studio`, which `assemble-portable-obs.mts` refuses outright under Standing
+Rule 2. The refusal is not a dead end, though; its own message names the way through, *copy the
+folder elsewhere first*, and that is what was done. The install tree has no `config/` directory at
+all — an installed OBS keeps its settings in `%APPDATA%` — so the copy began with nothing of this
+machine's in it, which is the property that matters.
+
+**The stick now carries OBS.** 885 MB across 2405 files, of which 457 MB and 2165 files are OBS
+32.1.2. The 102-cue and 48-cue plans survived untouched; `obs:assemble` merges into the target and
+does not rebuild it, so the standing warning about `npm run portable` wiping `plans/` does not apply
+here.
+
+**Then the finding: verifying the stick was contaminating the stick.** `obs:verify` starts OBS. One
+launch left roughly **8 MB of this laptop** inside the folder about to be handed to a church —
+Chromium GPU caches compiled for *this* GPU (`GrShaderCache/data_3` alone is 4.2 MB), a cookie
+database, `Visited Links`, a hardware-listing log, `crashes/`, `profiler_data/`, `updates/`, and
+OBS's own rewrite of `user.ini` from 264 bytes to 1063. Cycle 19 built a profile allowlist and a
+test guard precisely to stop machine-specific values reaching a stick, and here the same leakage
+walked in through the front door of the tool meant to prove the stick was clean. A 16/16 PASS was
+being printed *about a folder the run had just altered*.
+
+Worth recording what was **not** contaminated, because the first reading of the evidence was wrong:
+`Verger.json` is 6376 bytes before and after. It looked inflated only because the template is that
+size. The real damage was `user.ini`, `basic.ini` (205 → 208), and the cache tree.
+
+**The fix is snapshot-and-restore, with the restore itself asserted.** `verify-portable-obs.mts` now
+copies `config/` to a temp directory before starting OBS and puts it back after — and critically,
+waits on the child's `exit` event rather than a fixed delay, since restoring while OBS is still
+alive would simply let it write the contamination back afterwards. A 17th check compares a
+`sha256`-per-file fingerprint of the tree before and after, and fails if a single byte moved.
+`portable_mode.txt` confines OBS to that directory, so `config/` is the whole of what it can reach.
+
+Restoring rather than verifying a copy is the deliberate choice: a copy only proves a copy. The
+stick that goes in the envelope should be the artifact that was tested.
+
+**Evidence.** 17/17 against the real `release/0.1.0/win-unpacked/obs`, including the two checks no
+offline test can reach — the generated 24-character password authenticates, and OBS itself reports
+`Cam 1` with an `Overlays` source whose `shutdown`, `restart_when_active` and `reroute_audio` are
+the three values a mis-click gets wrong. The byte-identity claim was then confirmed *from outside
+the script*, by hashing the config tree in PowerShell before and after: 4 files, same hashes, and no
+`logs/`, `crashes/`, `profiler_data/` or `obs-browser/` directory anywhere. Before that fix landed
+the stick had to be assembled twice, the first copy being discarded as dirty.
+
+Verification: **2274 tests across 81 files**, `tsc` clean both projects, `npm run build` clean, i18n
+audit PASS, and the 17/17 pre-flight against OBS 32.1.2 / obs-websocket 5.7.3.
+
+**Still open:** real speech → captions, a real go-live with recording confirmed, and decoding a real
+video file remain unverified on the target machine, and the build is still unsigned. One axe check
+in `SettingsDrawer.test.tsx` failed once under full-suite load and has never reproduced.
+`PreflightScreen.tsx` still ships three hardcoded English strings outside i18n.

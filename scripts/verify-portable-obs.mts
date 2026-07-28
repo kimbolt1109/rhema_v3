@@ -20,15 +20,30 @@
  *   4. the generated password authenticates — this is the step that catches a password written in
  *      the wrong shape, which every offline test would pass;
  *   5. the pre-wired scene and the Overlays browser source are really there, with the two
- *      checkboxes that fail invisibly set the right way.
+ *      checkboxes that fail invisibly set the right way;
+ *   6. the folder is byte-identical afterwards — see below.
+ *
+ * ## Why it restores the config
+ *
+ * Verifying is destructive. Running OBS even once writes logs, crash and profiler directories,
+ * several megabytes of Chromium GPU shader cache compiled for the GPU of whichever machine built
+ * the stick, a cookie database, and its own rewrite of `user.ini`. That is the same machine-specific
+ * leakage the profile allowlist in `derive-obs-scene-template.mts` exists to prevent, arriving
+ * through the back door — and it lands in the folder that is about to be carried to a church.
+ *
+ * So `config/` is snapshotted before OBS starts and restored after it exits, and the restore is
+ * itself a check rather than an assumption. `portable_mode.txt` confines OBS to this directory, so
+ * `config/` is the whole of what it can reach.
  *
  * Usage:
  *   npm run obs:verify -- <path-to-assembled-obs-folder>
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, relative, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import OBSWebSocket from 'obs-websocket-js'
@@ -39,6 +54,20 @@ const checks: Array<{ ok: boolean; label: string }> = []
 function check(ok: boolean, label: string, detail = ''): void {
   checks.push({ ok, label })
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail === '' ? '' : `  — ${detail}`}`)
+}
+
+/** Sorted `<relative-path>:<sha256>` lines for every file under `dir`. Order-stable, content-exact. */
+function fingerprint(dir: string): string {
+  const lines: string[] = []
+  const walk = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else lines.push(`${relative(dir, full)}:${createHash('sha256').update(readFileSync(full)).digest('hex')}`)
+    }
+  }
+  walk(dir)
+  return lines.sort().join('\n')
 }
 
 const arg = process.argv[2]
@@ -87,10 +116,20 @@ check(
   `${String(discovered.value.password.length)} chars`,
 )
 
+const configDir = join(obsDir, 'config')
+const snapshotDir = mkdtempSync(join(tmpdir(), 'verger-obs-config-'))
+cpSync(configDir, snapshotDir, { recursive: true })
+const configBefore = fingerprint(configDir)
+
 console.log('\nStarting OBS…')
 const child = spawn(exe, ['--multi', '--disable-updater'], {
   cwd: join(obsDir, 'bin', '64bit'),
   stdio: 'ignore',
+})
+const childExited = new Promise<void>((resolveExit) => {
+  child.once('exit', () => {
+    resolveExit()
+  })
 })
 
 let listening = false
@@ -137,7 +176,18 @@ if (connected) {
 
 console.log('\nStopping OBS…')
 spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-await delay(2000)
+// Wait for the process to be gone rather than guessing at a delay: restoring while OBS is still
+// alive would let it write the contamination back after the restore.
+await Promise.race([childExited, delay(15_000)])
+await delay(1000)
+
+rmSync(configDir, { recursive: true, force: true })
+cpSync(snapshotDir, configDir, { recursive: true })
+rmSync(snapshotDir, { recursive: true, force: true })
+check(
+  fingerprint(configDir) === configBefore,
+  'the verified folder was left byte-identical (nothing this machine wrote survives)',
+)
 
 const failed = checks.filter((c) => !c.ok)
 console.log(

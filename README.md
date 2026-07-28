@@ -186,7 +186,7 @@ EN/KO booth UI. What you lose is speech recognition, deck import and a YouTube l
 | `npm run package` | Build, then `electron-builder --win` → an **unsigned** NSIS installer in `release/<version>/` |
 | `npm run portable` | `package:portable`, then copy `portable/**` over `win-unpacked/` — the USB folder |
 | `npm run obs:assemble` | Wire a **portable OBS** into the USB folder. See below |
-| `npm run obs:verify` | Start an assembled OBS and prove Verger's discovery finds and authenticates to it |
+| `npm run obs:verify` | Start an assembled OBS, prove Verger's discovery finds and authenticates to it, then restore the folder |
 | `npm run obs:derive-template` | Regenerate `obs-template/` by driving a real OBS. Only when OBS changes format |
 
 Run a single Vitest project with `npx vitest run --project node` or `--project renderer`.
@@ -229,6 +229,14 @@ What assembly writes into the copy:
   obs-websocket listens on every interface, so on a church wifi a known password means anyone
   present can drive the stream. The operator never sees or types it — Verger reads it from OBS's own
   file at launch.
+
+`obs:verify` runs OBS, and **running OBS dirties the folder it runs from**: one launch writes logs, a
+crash and a profiler directory, a cookie database, several megabytes of Chromium GPU shader cache
+compiled for the GPU of the machine that built the stick, and its own rewrite of `user.ini`. That is
+exactly the machine-specific leakage the template allowlist exists to stop, arriving by the back door
+and landing in the folder about to be carried to a church. So `obs:verify` snapshots `config/` before
+it starts OBS, restores it after OBS exits, and makes the restore its last check rather than an
+assumption — verify the stick you are shipping, not a copy of it.
 
 `obs-template/` is generated, not hand-written, by `npm run obs:derive-template`, which drives a real
 OBS over obs-websocket and harvests the files it writes. OBS's config formats are undocumented and
