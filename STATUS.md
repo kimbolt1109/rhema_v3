@@ -1673,3 +1673,54 @@ in `SettingsDrawer.test.tsx` failed once under full-suite load and has never rep
 `PreflightScreen.tsx` still ships three hardcoded English strings outside i18n. Nothing asserts that
 a *rebuilt* stick has been re-assembled and re-baked; `npm run portable` silently discards `obs/`
 and `plans/`, and only this log says so.
+
+---
+
+## Cycle 21 — Verger refreshes the dead browser source itself
+
+Cycle 20 ended by recording a defect and not fixing it: a browser source loads its URL when OBS
+starts, `START.bat` starts OBS eight seconds before Verger, so the page load is refused and — with
+`restart_when_active` deliberately off — never retried. Two green lights, nothing on the
+congregation screen. This closes it.
+
+**Why it could not go in the watchdog.** `overlayWatchdog` looks like the natural home and is the
+wrong one. Its alarm is a *drop*: it needs a client to have attached and then vanished. In this
+failure nothing ever attaches, so `expected` stays 0 and `evaluate` correctly reports
+`not-configured` rather than crying wolf on a machine where OBS was never set up. That is the right
+behaviour for the watchdog and the reason it never fired here. Its seam is also deliberately unable
+to send anything — *"there is no `send`"* — so reaching through it would have dismantled the one
+structural guarantee it offers.
+
+So `src/main/obs/OverlaySourceRecovery.ts` is a separate object holding the two things the watchdog
+must not: an OBS request verb and the overlay's client count.
+
+**The interesting part is when it declines to act,** because this presses a button in OBS on its
+own. It fires only when the overlay server is listening, has **zero** clients, has held that state
+for four seconds, and OBS is reachable — and it only ever refreshes a browser source whose URL
+names our *actually bound* port, read from `getInfo()` rather than config, so a server that fell
+back from 7320 to 7999 still matches the right source. A countdown or chat widget in the same scene
+is not ours to reload. A healthy overlay is never touched, which is what keeps this from
+re-animating a lower-third in front of a congregation — the exact flicker
+`restart_when_active: false` exists to prevent.
+
+**A real flaw the tests caught, not a test artifact.** The cooldown path originally returned before
+the `finally` that re-arms the grace timer. In a steady dark state nothing else would ever wake it,
+so one refresh that did not take would have disabled recovery for the rest of the service. It now
+re-arms on that path explicitly.
+
+12 tests, and the ones that matter are the refusals: never while a client is attached, never while
+the server is not listening, cancelled if a source attaches inside the grace, suppressed by the
+cooldown, and survives an overlay server whose `getInfo` throws.
+
+Verification: **2286 tests across 82 files**, `tsc` clean both projects, `npm run build` clean, i18n
+audit PASS, 11/11 e2e, and 17/17 portable-OBS pre-flight.
+
+**Not yet proven at the time of this commit:** the fix has been verified by unit tests and type
+checking only. The stick still carries the pre-fix `app.asar`, and the behaviour has not been
+observed against a real OBS in `START.bat`'s own ordering. That rebuild and that observation follow
+immediately; until they are done this entry claims logic, not evidence.
+
+**Still open:** real speech → captions, a real go-live with recording confirmed, and decoding a real
+video file remain unverified on the target machine; the build is unsigned; `PreflightScreen.tsx`
+still ships three hardcoded English strings; and `npm run portable` still silently discards `obs/`
+and `plans/` with only this log to say so.
