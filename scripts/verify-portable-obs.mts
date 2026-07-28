@@ -56,6 +56,30 @@ function check(ok: boolean, label: string, detail = ''): void {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail === '' ? '' : `  — ${detail}`}`)
 }
 
+/**
+ * Delete `dir`, retrying while Windows still holds handles open.
+ *
+ * `taskkill /T` ends OBS's browser subprocesses, but Windows releases their file handles
+ * asynchronously — for a second or so afterwards `debug.log` and the leveldb `LOCK` files under
+ * `plugin_config/obs-browser/` are still open, and `rmSync` throws EPERM part-way through. That
+ * failure is worse than not restoring at all: it deletes `basic/` (the scene collection and
+ * profile) before it reaches the locked file, then aborts, leaving a folder that is both
+ * contaminated AND missing the very thing the stick exists to carry. Observed, not theorised.
+ */
+async function removeWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch {
+      await delay(500)
+    }
+  }
+  // Last attempt outside the catch, so a genuine permissions problem still surfaces as an error
+  // rather than being silently swallowed into a mangled restore.
+  rmSync(dir, { recursive: true, force: true })
+}
+
 /** Sorted `<relative-path>:<sha256>` lines for every file under `dir`. Order-stable, content-exact. */
 function fingerprint(dir: string): string {
   const lines: string[] = []
@@ -181,11 +205,21 @@ spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
 await Promise.race([childExited, delay(15_000)])
 await delay(1000)
 
-rmSync(configDir, { recursive: true, force: true })
-cpSync(snapshotDir, configDir, { recursive: true })
-rmSync(snapshotDir, { recursive: true, force: true })
+let restored = false
+try {
+  await removeWithRetry(configDir)
+  cpSync(snapshotDir, configDir, { recursive: true })
+  restored = true
+  rmSync(snapshotDir, { recursive: true, force: true })
+} catch (error) {
+  // Keep the snapshot and say where it is. A half-restored folder is the one outcome that must
+  // never pass quietly, because it looks fine in a directory listing and is not.
+  console.error(`\n  RESTORE FAILED: ${String(error)}`)
+  console.error(`  The untouched config is still at:\n    ${snapshotDir}`)
+  console.error(`  Re-run "npm run obs:assemble" to rebuild this folder before shipping it.\n`)
+}
 check(
-  fingerprint(configDir) === configBefore,
+  restored && fingerprint(configDir) === configBefore,
   'the verified folder was left byte-identical (nothing this machine wrote survives)',
 )
 

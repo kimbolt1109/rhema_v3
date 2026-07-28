@@ -1622,10 +1622,40 @@ the script*, by hashing the config tree in PowerShell before and after: 4 files,
 `logs/`, `crashes/`, `profiler_data/` or `obs-browser/` directory anywhere. Before that fix landed
 the stick had to be assembled twice, the first copy being discarded as dirty.
 
+**The stick itself was stale, and nobody would have noticed.** `app.asar` was built at 23:45 on the
+27th; `src/main/index.ts` and `src/main/obs/localConfig.ts` — *the portable-OBS discovery* — were
+edited at 00:24 the next morning. The USB folder had never been repackaged after Cycle 19's own
+feature landed, so the shipped Verger could not have found a bundled OBS at all. A staleness check
+run earlier had reported the folder current, and it was: the check predated the edits. Rebuilt in
+the mandatory order — `npm run portable`, re-bake the decks, `obs:assemble`, `obs:verify` — back to
+885 MB / 2405 files, 102 and 48 cues, and every `portable/**` file now hash-identical to its source
+(all seven had drifted).
+
+**The packaged app was then made to prove it, because no test does.** The e2e suite launches
+`out/main/index.js` through the Electron binary in `node_modules`, so `app.getPath('exe')` is
+nowhere near the stick and `<exe-dir>/obs` never exists — 11/11 passes without ever exercising the
+bundled-OBS path, and `obs:verify` passes `portableObsDir` explicitly, so it cannot catch a wiring
+error in `index.ts` either. Between them they left the actual seam untested. So the stick's OBS and
+the stick's `Verger.exe` were both launched, and `netstat` showed an ESTABLISHED socket from a
+Verger process to 127.0.0.1:4455 on the bundled OBS's PID. That is discovery, password read and
+authentication, performed by the packaged binary from its own directory.
+
+**The restore added above was wrong on its first version.** `rmSync` threw `EPERM` part-way through:
+`taskkill /T` ends OBS's browser subprocesses, but Windows releases their handles asynchronously,
+and for a second afterwards `debug.log` and the leveldb `LOCK` files stay open. Three runs had
+passed by luck before one failed. The failure mode is the bad one — the delete removes `basic/`
+before it reaches the locked file, then aborts, leaving a folder that is contaminated *and* missing
+the scene collection and profile, which is strictly worse than never restoring. It now retries for
+ten seconds, and a restore that still fails keeps the snapshot, prints its path, and fails the
+check rather than exiting quietly. Three consecutive clean 17/17 runs afterwards.
+
 Verification: **2274 tests across 81 files**, `tsc` clean both projects, `npm run build` clean, i18n
-audit PASS, and the 17/17 pre-flight against OBS 32.1.2 / obs-websocket 5.7.3.
+audit PASS, **11/11 e2e** against the packaged build, and 17/17 pre-flight against OBS 32.1.2 /
+obs-websocket 5.7.3, run three times consecutively with the folder byte-identical after each.
 
 **Still open:** real speech → captions, a real go-live with recording confirmed, and decoding a real
 video file remain unverified on the target machine, and the build is still unsigned. One axe check
 in `SettingsDrawer.test.tsx` failed once under full-suite load and has never reproduced.
-`PreflightScreen.tsx` still ships three hardcoded English strings outside i18n.
+`PreflightScreen.tsx` still ships three hardcoded English strings outside i18n. Nothing asserts that
+a *rebuilt* stick has been re-assembled and re-baked; `npm run portable` silently discards `obs/`
+and `plans/`, and only this log says so.
