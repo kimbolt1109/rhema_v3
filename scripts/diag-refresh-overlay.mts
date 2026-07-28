@@ -23,6 +23,12 @@ const obs = new OBSWebSocket()
 await obs.connect(`ws://127.0.0.1:${String(cfg.server_port)}`, cfg.server_password)
 console.log('connected to OBS')
 
+const list = await obs.call('GetInputList')
+console.log('GetInputList:', JSON.stringify(list, null, 2))
+
+const settings = await obs.call('GetInputSettings', { inputName: 'Overlays' })
+console.log('Overlays settings:', JSON.stringify(settings, null, 2))
+
 await obs.call('PressInputPropertiesButton', {
   inputName: 'Overlays',
   propertyName: 'refreshnocache',

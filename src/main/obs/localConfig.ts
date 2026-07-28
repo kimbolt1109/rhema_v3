@@ -236,6 +236,66 @@ export const OBS_PROBE_TIMEOUT_MS = 400
  * from "nothing is", and the real client does the protocol. Resolves `false` on any error and can
  * never reject.
  */
+/** How long {@link waitForObsPort} keeps asking before giving up. */
+export const OBS_PORT_WAIT_MS = 90_000
+
+/** Gap between probes in {@link waitForObsPort}. */
+export const OBS_PORT_POLL_INTERVAL_MS = 1_000
+
+/**
+ * Wait for OBS's port to open, rather than asking once and giving up.
+ *
+ * ## Why once is not enough
+ *
+ * `START.bat` starts **Verger first and OBS second**, because an OBS Browser Source loads its URL
+ * when OBS creates it: if the overlay server is not listening by then, the page load is refused and
+ * — with `restart_when_active` deliberately off, so a camera cut never re-animates the overlay — it
+ * is never retried. The operator gets two green lights and a blank congregation screen.
+ *
+ * Starting Verger first fixes that, and costs this: OBS is not up yet when Verger reaches its
+ * launch-time connect. A single probe would find nothing and hand the operator a Connect button to
+ * press for no reason.
+ *
+ * So the probe repeats. What it does **not** do is dial: this is still the cheap TCP question, and
+ * `ObsClient.connect` is called only once the answer is yes — which preserves the whole reason
+ * {@link isObsPortListening} exists, namely that arming the reconnect backoff against an OBS that
+ * was never there produces a permanent amber "OBS went away" about something that never arrived.
+ *
+ * Ninety seconds because that is generous for OBS's own startup on a cold church PC, and because
+ * the cost of waiting is nothing — this runs detached from window creation, and pressing Connect by
+ * hand still works throughout. Resolves `false` if the deadline passes; can never reject.
+ */
+export async function waitForObsPort(
+  port: number,
+  options: {
+    host?: string
+    timeoutMs?: number
+    intervalMs?: number
+    probe?: (port: number, host: string) => Promise<boolean>
+    sleep?: (ms: number) => Promise<void>
+  } = {},
+): Promise<boolean> {
+  const host = options.host ?? '127.0.0.1'
+  const totalMs = Math.max(0, options.timeoutMs ?? OBS_PORT_WAIT_MS)
+  const intervalMs = Math.max(1, options.intervalMs ?? OBS_PORT_POLL_INTERVAL_MS)
+  const probe = options.probe ?? ((p, h): Promise<boolean> => isObsPortListening(p, h))
+  const sleep =
+    options.sleep ??
+    ((ms: number): Promise<void> =>
+      new Promise<void>((resolveSleep) => {
+        setTimeout(resolveSleep, ms)
+      }))
+
+  // Ceil so a sub-interval budget still gets one look: `waitForObsPort(p, {timeoutMs: 0})` asking
+  // nothing at all would be a surprising reading of "wait up to zero".
+  const attempts = Math.max(1, Math.ceil(totalMs / intervalMs))
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await probe(port, host)) return true
+    if (attempt < attempts - 1) await sleep(intervalMs)
+  }
+  return false
+}
+
 export async function isObsPortListening(
   port: number,
   host = '127.0.0.1',

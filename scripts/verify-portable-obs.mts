@@ -174,14 +174,35 @@ if (listening) {
     await obs.connect(`ws://127.0.0.1:${String(discovered.value.port)}`, discovered.value.password)
     connected = true
     check(true, 'the generated password authenticates')
-
-    const list = await obs.call('GetSceneList')
-    sceneNames = list.scenes.map((s) => String((s as { sceneName?: string }).sceneName ?? ''))
-    const settings = await obs.call('GetInputSettings', { inputName: 'Overlays' })
-    overlaySettings = settings.inputSettings as Record<string, unknown>
-    await obs.disconnect()
   } catch (error) {
     check(false, 'the generated password authenticates', String(error))
+  }
+
+  if (connected) {
+    try {
+      // OBS opens the WebSocket port BEFORE it has finished loading its scene collection, and
+      // answers anything asked in that window with "OBS is not ready to perform the request".
+      // Poll rather than sleep a constant: on a slower machine the collection takes longer than
+      // any number worth hard-coding, and a fixed sleep would make this pass or fail by luck —
+      // which is exactly how an earlier run of this script reported a false 16/16.
+      for (let i = 0; i < 30; i += 1) {
+        try {
+          await obs.call('GetVersion')
+          break
+        } catch {
+          await delay(1000)
+        }
+      }
+
+      const list = await obs.call('GetSceneList')
+      sceneNames = list.scenes.map((s) => String((s as { sceneName?: string }).sceneName ?? ''))
+      const settings = await obs.call('GetInputSettings', { inputName: 'Overlays' })
+      overlaySettings = settings.inputSettings as Record<string, unknown>
+    } catch (error) {
+      check(false, 'OBS answered the scene and source queries', String(error))
+      connected = false
+    }
+    await obs.disconnect()
   }
 }
 

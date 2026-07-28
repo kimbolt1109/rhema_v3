@@ -26,6 +26,7 @@ import {
   obsPortableWebsocketConfigPath,
   obsWebsocketConfigPath,
   readObsWebsocketConfig,
+  waitForObsPort,
 } from './localConfig'
 
 /** The shape a real OBS install writes, with a synthetic secret. */
@@ -349,5 +350,98 @@ describe('portable OBS discovery', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.sourcePath).toBe(obsPortableWebsocketConfigPath(portableDir))
+  })
+})
+
+/**
+ * `waitForObsPort` — the reason START.bat can start Verger BEFORE OBS.
+ *
+ * That ordering is what keeps the overlay alive (an OBS Browser Source loads its URL when OBS
+ * creates it, and a refused load is never retried), and it costs exactly this: OBS is not up when
+ * Verger reaches its launch-time connect. Both the probe and the sleep are injected, so these run
+ * with no sockets and no real timers.
+ */
+describe('waitForObsPort', () => {
+  it('returns true on the first probe when OBS is already listening', async () => {
+    const probed: number[] = []
+    const listening = await waitForObsPort(4455, {
+      probe: (port) => {
+        probed.push(port)
+        return Promise.resolve(true)
+      },
+      sleep: () => Promise.reject(new Error('must not sleep when the port answers immediately')),
+    })
+
+    expect(listening).toBe(true)
+    expect(probed).toEqual([4455])
+  })
+
+  it('keeps probing until OBS finally opens the port', async () => {
+    // The real case: START.bat launched OBS, and it takes a few seconds to bind.
+    let attempts = 0
+    let slept = 0
+    const listening = await waitForObsPort(4455, {
+      timeoutMs: 10_000,
+      intervalMs: 1_000,
+      probe: () => {
+        attempts += 1
+        return Promise.resolve(attempts >= 4)
+      },
+      sleep: () => {
+        slept += 1
+        return Promise.resolve()
+      },
+    })
+
+    expect(listening).toBe(true)
+    expect(attempts).toBe(4)
+    expect(slept).toBe(3) // no sleep after the successful probe
+  })
+
+  it('gives up and reports false when OBS never appears', async () => {
+    let attempts = 0
+    const listening = await waitForObsPort(4455, {
+      timeoutMs: 5_000,
+      intervalMs: 1_000,
+      probe: () => {
+        attempts += 1
+        return Promise.resolve(false)
+      },
+      sleep: () => Promise.resolve(),
+    })
+
+    expect(listening).toBe(false)
+    expect(attempts).toBe(5)
+  })
+
+  it('still asks once when given no time at all', async () => {
+    // "Wait up to zero" that never even looks would be a surprising reading, and would silently
+    // disable the launch-time connect on any machine where OBS was already running.
+    let attempts = 0
+    const listening = await waitForObsPort(4455, {
+      timeoutMs: 0,
+      probe: () => {
+        attempts += 1
+        return Promise.resolve(true)
+      },
+      sleep: () => Promise.resolve(),
+    })
+
+    expect(listening).toBe(true)
+    expect(attempts).toBe(1)
+  })
+
+  it('passes the host through to the probe', async () => {
+    const seen: string[] = []
+    await waitForObsPort(4455, {
+      host: '127.0.0.1',
+      probe: (_port, host) => {
+        seen.push(host)
+        return Promise.resolve(true)
+      },
+      sleep: () => Promise.resolve(),
+    })
+
+    expect(seen).toEqual(['127.0.0.1'])
   })
 })

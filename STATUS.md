@@ -1676,49 +1676,64 @@ and `plans/`, and only this log says so.
 
 ---
 
-## Cycle 21 — Verger refreshes the dead browser source itself
+## Cycle 21 — Start Verger first, and wait for OBS
 
-Cycle 20 ended by recording a defect and not fixing it: a browser source loads its URL when OBS
-starts, `START.bat` starts OBS eight seconds before Verger, so the page load is refused and — with
+Cycle 20 recorded a defect and did not fix it: a browser source loads its URL when OBS starts,
+`START.bat` started OBS eight seconds before Verger, so the overlay page load was refused and — with
 `restart_when_active` deliberately off — never retried. Two green lights, nothing on the
-congregation screen. This closes it.
+congregation screen. This closes it, but not by the route it set out on, and the wrong turn is the
+part worth recording.
 
-**Why it could not go in the watchdog.** `overlayWatchdog` looks like the natural home and is the
-wrong one. Its alarm is a *drop*: it needs a client to have attached and then vanished. In this
-failure nothing ever attaches, so `expected` stays 0 and `evaluate` correctly reports
-`not-configured` rather than crying wolf on a machine where OBS was never set up. That is the right
-behaviour for the watchdog and the reason it never fired here. Its seam is also deliberately unable
-to send anything — *"there is no `send`"* — so reaching through it would have dismantled the one
-structural guarantee it offers.
+**The abandoned approach, and what killed it.** The first attempt was `OverlaySourceRecovery`: watch
+for the overlay server listening with zero clients, then press OBS's own "Refresh cache of current
+page" on any browser source pointing at our port. It was written, unit-tested (12 tests, mostly
+about when it *declines* to fire) and shipped in `84c9f7d`. Against a real OBS it did exactly
+nothing, and the log said why:
 
-So `src/main/obs/OverlaySourceRecovery.ts` is a separate object holding the two things the watchdog
-must not: an OBS request verb and the overlay's client count.
+> `refused a non-read OBS request` — `requestType: PressInputPropertiesButton`
 
-**The interesting part is when it declines to act,** because this presses a button in OBS on its
-own. It fires only when the overlay server is listening, has **zero** clients, has held that state
-for four seconds, and OBS is reachable — and it only ever refreshes a browser source whose URL
-names our *actually bound* port, read from `getInfo()` rather than config, so a server that fell
-back from 7320 to 7999 still matches the right source. A countdown or chat widget in the same scene
-is not ours to reload. A healthy overlay is never touched, which is what keeps this from
-re-animating a lower-third in front of a congregation — the exact flicker
-`restart_when_active: false` exists to prevent.
+`ObsClient` gates every request through `isAllowedRequest`: `Get*` passes, and every other request
+must appear in `ALLOWED_WRITE_REQUESTS`, which is seven names long and whose comment states the
+property they share — *every one of them fires only because the operator physically pressed a
+button; nothing in Verger sends them on its own initiative.* An automatic refresh would have been
+the first exception to that, so the allowlist stayed at seven and the module was deleted rather than
+left dormant, because dormant it logged an error every thirty-two seconds through a service.
 
-**A real flaw the tests caught, not a test artifact.** The cooldown path originally returned before
-the `finally` that re-arms the grace timer. In a steady dark state nothing else would ever wake it,
-so one refresh that did not take would have disabled recovery for the rest of the service. It now
-re-arms on that path explicitly.
+Worth noting how close this came to passing review on the strength of green tests. Twelve unit tests
+passed against a fake `call()` that had no allowlist in it. The seam under test was real; the
+*policy* around it was not, and no amount of that kind of testing would have found this. It took
+running the thing.
 
-12 tests, and the ones that matter are the refusals: never while a client is attached, never while
-the server is not listening, cancelled if a source attaches inside the grace, suppressed by the
-cooldown, and survives an overlay server whose `getInfo` throws.
+**What actually fixes it is an ordering change.** `START.bat` now launches Verger first and hands
+the bundled OBS to `obs-launcher.bat`, which waits for port 7320 before starting it. The browser
+source then loads against a server that is already listening, which is the whole problem, solved
+without Verger ever writing to OBS.
 
-Verification: **2286 tests across 82 files**, `tsc` clean both projects, `npm run build` clean, i18n
-audit PASS, 11/11 e2e, and 17/17 portable-OBS pre-flight.
+That inverts the assumption `START.bat` was built on — OBS first, because Verger read OBS's settings
+at launch — so `index.ts` no longer probes OBS's port once and gives up. `waitForObsPort` repeats
+the cheap TCP question for ninety seconds. It deliberately does **not** dial: `ObsClient.connect` is
+still called only after the port answers, which preserves the reason `isObsPortListening` exists at
+all, namely that arming the reconnect backoff against an OBS that was never there paints a permanent
+amber "OBS went away" about something that never arrived.
 
-**Not yet proven at the time of this commit:** the fix has been verified by unit tests and type
-checking only. The stick still carries the pre-fix `app.asar`, and the behaviour has not been
-observed against a real OBS in `START.bat`'s own ordering. That rebuild and that observation follow
-immediately; until they are done this entry claims logic, not evidence.
+The launcher also keeps Cycle 19's rule: if anything already serves 4455, it starts nothing, because
+two OBS instances fight over the camera and the encoder and an OBS the operator opened themselves
+must win. If the overlay never appears it starts OBS anyway — a stale overlay beats no OBS at all.
+
+**What this does not cover, stated plainly.** An operator who opens their own OBS *before* starting
+Verger still gets a dead overlay, because that browser source loaded before anything was listening
+and nothing in Verger may refresh it. The remedy is one right-click → Refresh on the `Overlays`
+source, and it is written down in `HUMAN_TASKS.md` where an operator will find it.
+
+Verification: **2279 tests across 81 files**, `tsc` clean both projects, `npm run build` clean, i18n
+audit PASS, 11/11 e2e, 17/17 portable-OBS pre-flight, and the stick rebuilt in the mandatory order
+with the fix observed against a real OBS 32.1.2 — `obs-browser-page` holding an established socket
+to the overlay server, with no manual refresh.
+
+A pre-flight bug was fixed on the way: `obs:verify` queried OBS the moment its port opened, but OBS
+answers in that window with "OBS is not ready to perform the request" until the scene collection has
+loaded. It now polls `GetVersion` until OBS answers. That race is how an earlier run printed a false
+16/16, and it was luck, not correctness, that it had ever passed.
 
 **Still open:** real speech → captions, a real go-live with recording confirmed, and decoding a real
 video file remain unverified on the target machine; the build is unsigned; `PreflightScreen.tsx`

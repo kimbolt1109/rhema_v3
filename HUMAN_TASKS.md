@@ -209,23 +209,25 @@ afternoon.
   right-click → Refresh restoring the same content is unproven.
   **A defect was found while establishing this — see the item below.**
 
-- [ ] **[SETUP] Work around the launch-order defect until it is fixed in code.**
-  **The problem, measured on 2026-07-28, not inferred:** a browser source loads its URL when OBS
-  starts. `START.bat` starts OBS *first* and Verger eight seconds later, so the overlay server is
-  not listening yet, the page load is refused, and — because `restart_when_active` is deliberately
-  **off** so camera cuts do not re-animate the overlay — it never retries. OBS reports connected,
-  Verger reports connected, and **nothing ever reaches the stream**. Confirmed by netstat: no
-  `obs-browser-page` connection to 7320 at all, and one forced `refreshnocache` immediately produced
-  two ESTABLISHED sockets.
-  Reversing the order is not a fix either: `src/main/index.ts` does a **one-shot**
-  `isObsPortListening` check at launch and deliberately does not dial a closed port, so starting
-  Verger first gives a working overlay and no OBS connection.
-  **Until it is fixed, after `START.bat` has finished:** in OBS, right-click the **Overlays** source
-  → **Refresh**, once. Verger's overlay watchdog already detects the dead state and says exactly
-  this, so the console will tell you if you forget.
-  **The real fix** is for Verger to press the refresh itself when it is connected to OBS and its
-  overlay server has no client — precisely the watchdog's existing condition. That is a code task,
-  recorded here only because an operator carrying the stick before it lands needs the workaround.
+- [ ] **[SETUP] If you open your OWN OBS before starting Verger, refresh the Overlays source once.**
+  *Fixed for the bundled OBS on 2026-07-29; this is the case that remains.*
+  **Why:** a browser source loads its URL at the moment OBS creates it. If Verger's overlay server
+  is not listening yet the page load is refused, and because *Refresh browser when scene becomes
+  active* is deliberately **off** — so camera cuts never re-animate the overlay — it is never
+  retried. OBS reports connected, Verger reports connected, and **nothing reaches the stream**.
+  Measured with netstat, not inferred: no `obs-browser-page` connection to 7320 existed at all, and
+  one forced refresh produced two ESTABLISHED sockets immediately.
+  **`START.bat` now handles this for the bundled OBS** — it starts Verger first and only launches
+  OBS once port 7320 answers, so the page loads against a live server. Verger no longer needs OBS up
+  first: it waits up to 90 seconds for OBS's port instead of asking once.
+  **What is left is the OBS you started yourself.** `START.bat` deliberately will not touch an OBS
+  already serving 4455 — two instances fight over the camera and the encoder — so that OBS's browser
+  source loaded before Verger existed, and Verger may not refresh it: `ObsClient` refuses every
+  non-`Get*` request outside a seven-name allowlist, and `PressInputPropertiesButton` is not on it.
+  **The remedy is one action:** in OBS, right-click the **Overlays** source → **Refresh**.
+  **Do not rely on the watchdog to warn you here.** Its alarm is a *drop* — it needs a source to
+  have attached and then vanished. When nothing ever attaches it reports `not-configured`, which is
+  correct and quiet. Check the overlay is really on screen before the service starts.
 - [ ] **One real dry-run go-live**, unlisted, five minutes, with nobody watching. Confirm all five
   GO LIVE steps complete, the LIVE and RECORDING indicators are both on, and — afterwards — that
   **the local recording file exists and plays**. Then END and confirm the broadcast reads

@@ -34,11 +34,10 @@ import { getGoLiveService } from '@main/golive'
 import { getCheckpointStore, getHealthService, resetHealthService } from '@main/health'
 import { OverlayWatchdog } from '@main/health/overlayWatchdog'
 import { getObsClient } from '@main/obs'
-import { OverlaySourceRecovery } from '@main/obs/OverlaySourceRecovery'
 import {
   OBS_PORTABLE_DIR_NAME,
-  isObsPortListening,
   readObsWebsocketConfig,
+  waitForObsPort,
 } from '@main/obs/localConfig'
 import { getOverlayServer } from '@main/overlay'
 import { getPlanService } from '@main/plan'
@@ -314,13 +313,22 @@ function onReady(): void {
   // that reads like a network fault instead of "switch the server on in OBS".
   if (config.obs !== null && discovered.reachable && discovered.port !== null) {
     const obsConfig = { url: config.obs.url, password: config.obs.password }
-    void isObsPortListening(discovered.port)
+    // WAIT for the port rather than asking once, because START.bat now starts Verger FIRST and OBS
+    // second. That ordering is what keeps the overlay alive: an OBS Browser Source loads its URL
+    // when OBS creates it, so if the overlay server is not listening by then the page is refused
+    // and never retried — two green lights and a blank congregation screen. The cost of starting
+    // first is that OBS is not up yet at this moment, and one probe would find nothing.
+    //
+    // Still not a dial. `waitForObsPort` repeats the cheap TCP question and `connect` happens only
+    // once the answer is yes, so the reason the probe exists at all survives intact: arming the
+    // reconnect backoff against an OBS that was never there paints a permanent amber tally reading
+    // "OBS went away" about something that never arrived.
+    void waitForObsPort(discovered.port)
       .then(async (listening) => {
         if (!listening) {
-          // Quiet on purpose. Dialling here would arm the reconnect backoff and paint a permanent
-          // amber tally reading "OBS went away" about an OBS that was never there. The operator
-          // presses Connect when OBS is up, and that path still retries properly.
-          log.info('OBS is not listening yet; leaving the connection for the operator', {
+          // Quiet on purpose — see above. The operator presses Connect when OBS is up, and that
+          // path still retries properly.
+          log.info('OBS never opened its port; leaving the connection for the operator', {
             port: discovered.port
           })
           return
@@ -572,33 +580,6 @@ function composeServices(log: Logger, portable: PortableConfigResult): ComposedS
     })
   }
 
-  // The other half of the same problem, and the half the watchdog structurally cannot see.
-  //
-  // A browser source loads its URL when OBS creates it. START.bat starts the bundled OBS BEFORE
-  // Verger, so the overlay server is not listening yet, the page load is refused, and because
-  // `restart_when_active` is deliberately off — so a camera cut never re-animates the overlay — it
-  // is never retried. OBS reports connected, Verger reports connected, and nothing reaches the
-  // congregation screen. The watchdog stays quiet on purpose: its alarm is a *drop*, and here
-  // nothing ever attached, so `expected` is 0 and "not-configured" is the honest reading.
-  //
-  // This presses the same button the operator would, and only when the overlay is listening with
-  // zero clients — a healthy overlay is never touched, which is what keeps it from re-animating a
-  // lower-third mid-service.
-  const overlayRecovery = new OverlaySourceRecovery({
-    obs,
-    overlay,
-    // Always populated — `loadPortableConfig` defaults it to 7320 — and the live bound port from
-    // `getInfo()` wins over it anyway if the server had to fall back.
-    overlayPort: portable.overlayPort,
-    logger: log
-  })
-  const recoveryStarted = overlayRecovery.start()
-  if (!recoveryStarted.ok) {
-    log.warn(
-      'overlay source auto-refresh is off; a stale browser source must be refreshed by hand',
-      { code: recoveryStarted.error.code, detail: recoveryStarted.error.message }
-    )
-  }
 
   return {
     obs,
@@ -609,10 +590,9 @@ function composeServices(log: Logger, portable: PortableConfigResult): ComposedS
     checkpoints,
     overlayReload,
     dispose: () => {
-      // Listeners and timers only. Not one of these calls can stop an output — see
-      // `resetHealthService`, `OverlayWatchdog.dispose` and `OverlaySourceRecovery.dispose`.
+      // Listeners and timers only. Not one of these three calls can stop an output — see
+      // `resetHealthService` and `OverlayWatchdog.dispose`.
       overlayReload.dispose()
-      overlayRecovery.dispose()
       resetHealthService()
     }
   }

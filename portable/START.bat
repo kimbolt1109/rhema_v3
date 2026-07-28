@@ -20,25 +20,25 @@ if not exist "%~dp0Verger.exe" (
 )
 
 REM ============================================================
-REM  If a portable OBS was assembled into this folder, start it
-REM  FIRST — Verger reads OBS's settings at launch, so OBS has to
-REM  be up before Verger is, or the operator has to press Connect.
+REM  If a portable OBS was assembled into this folder, hand it to
+REM  a small launcher that starts it AFTER Verger's overlay server
+REM  is listening.
 REM
-REM  Only when nothing is already serving on 4455. Two OBS
-REM  instances fight over the camera and the encoder, so an OBS
-REM  the operator already opened must always win over this one.
+REM  The order matters and it is not the obvious one. An OBS
+REM  Browser Source loads its URL at the moment OBS creates it. If
+REM  OBS starts first, the overlay server is not up yet, the page
+REM  load is REFUSED, and because "Refresh browser when scene
+REM  becomes active" is deliberately OFF - so a camera cut never
+REM  re-animates the overlay - it is never retried. OBS says
+REM  connected, Verger says connected, and nothing reaches the
+REM  congregation screen. Measured, not guessed.
+REM
+REM  Verger no longer needs OBS up first: it WAITS for OBS's port
+REM  (waitForObsPort) instead of asking once.
 REM ============================================================
 if exist "%~dp0obs\bin\64bit\obs64.exe" (
-  netstat -an | findstr /C:":4455 " | findstr /C:"LISTENING" >nul 2>&1
-  if errorlevel 1 (
-    echo Starting OBS from this folder . . .
-    start "OBS" /D "%~dp0obs\bin\64bit" "%~dp0obs\bin\64bit\obs64.exe"
-    REM Give OBS time to open its WebSocket port before Verger looks for it.
-    REM Verger still works if this is too short - the operator presses Connect.
-    timeout /t 8 /nobreak >nul
-  ) else (
-    echo OBS is already running - leaving it alone.
-  )
+  echo Starting OBS as soon as Verger is ready . . .
+  start "Verger OBS launcher" /MIN "%~dp0obs-launcher.bat"
 )
 
 echo Starting Verger . . .
