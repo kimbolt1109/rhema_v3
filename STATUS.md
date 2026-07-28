@@ -1653,6 +1653,20 @@ Verification: **2274 tests across 81 files**, `tsc` clean both projects, `npm ru
 audit PASS, **11/11 e2e** against the packaged build, and 17/17 pre-flight against OBS 32.1.2 /
 obs-websocket 5.7.3, run three times consecutively with the folder byte-identical after each.
 
+**A launch-order defect, found by measuring rather than reasoning, and NOT yet fixed.** A browser
+source loads its URL when OBS starts. `START.bat` starts OBS first and Verger eight seconds later,
+so the overlay server is not listening when the page loads, the request is refused, and because
+`restart_when_active` is deliberately off — so camera cuts do not re-animate the overlay — it never
+retries. The result is the worst shape a fault can take: OBS reports connected, Verger reports
+connected, and nothing reaches the stream. Confirmed by `netstat` — no `obs-browser-page` connection
+to 7320 existed at all, and one forced `refreshnocache` produced two ESTABLISHED sockets
+immediately. Reversing the order is not a fix: `index.ts` does a one-shot `isObsPortListening` check
+at launch and deliberately declines to dial a closed port, so Verger-first yields a live overlay and
+no OBS connection. Each ordering breaks exactly one half, and both were measured. The workaround —
+right-click the `Overlays` source, Refresh, once — is in `HUMAN_TASKS.md`; the real fix is for
+Verger to press that refresh itself when it holds an OBS connection and its overlay server has no
+client, which is `overlayWatchdog`'s existing condition and currently only produces advice.
+
 **Still open:** real speech → captions, a real go-live with recording confirmed, and decoding a real
 video file remain unverified on the target machine, and the build is still unsigned. One axe check
 in `SettingsDrawer.test.tsx` failed once under full-suite load and has never reproduced.

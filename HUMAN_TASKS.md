@@ -19,6 +19,14 @@ Types: `[SETUP]` `[ACCOUNT]` `[KEY]` `[LEGAL]` `[HARDWARE]` `[DECISION]` `[PURCH
   **Unblocks:** everything video — cameras, GO LIVE, the local recording, stream health, and the
   surface the overlay is drawn on. This is the only item on this page without which Verger cannot
   run a service.
+
+  > **If the USB folder has an `obs` sub-folder, steps 1–5 are already done and you should not do
+  > them.** `npm run obs:assemble` ships a portable OBS with the WebSocket server enabled, a unique
+  > password, and a `Cam 1` scene already holding a correctly configured `Overlays` browser source.
+  > `START.bat` launches it, and Verger finds it without anything being typed — verified end to end
+  > on 2026-07-28 (see *Resolved*). **What is left is step 6, plus adding the room's camera to the
+  > `Cam 1` scene.** The steps below are for a machine using its own installed OBS instead.
+
   **Steps:**
   1. Install OBS Studio 30 or newer.
   2. `Tools → WebSocket Server Settings` → tick **Enable WebSocket server**.
@@ -186,13 +194,38 @@ These are not code tasks. They are the things **only a real environment can prov
 somebody does them this build's claims about the outside world rest on mocks. Each one is a single
 afternoon.
 
-- [ ] **One real OBS connection.** Connect, confirm the version and scene list, close OBS and watch
-  the reconnect succeed, then get the password wrong once and confirm it stops rather than
-  retrying. *Nothing in this repo has ever spoken to a live obs-websocket.*
-- [ ] **One real OBS Browser Source.** Load `http://127.0.0.1:7320/overlay` as a source over a live
-  camera and confirm: it is genuinely transparent, a lower-third survives a camera cut un-flickered,
-  and right-clicking → Refresh brings the same content back. *The page has been fetched over HTTP
-  and parsed, never composited over video.*
+- [ ] **OBS reconnect and wrong-password behaviour.** *The connection itself is no longer owed.* As
+  of **2026-07-28** Verger has spoken to a live obs-websocket many times (OBS 32.1.2 /
+  obs-websocket 5.7.3): version and scene list confirmed, the generated password accepted, and the
+  **packaged `Verger.exe` on the stick** observed holding an ESTABLISHED socket to the bundled OBS
+  on 4455 — discovery, password read and authentication, performed from its own directory.
+  **What is still owed are the two failure paths:** close OBS mid-service and watch the reconnect
+  succeed, and get the password wrong once to confirm it stops rather than retrying forever.
+- [ ] **One real OBS Browser Source over a live camera.** *Partly advanced 2026-07-28.* OBS's own
+  browser source has now loaded `http://127.0.0.1:7320/overlay` from a running Verger and held an
+  ESTABLISHED WebSocket to it — an `obs-browser-page` process connected to the overlay server, which
+  is more than "fetched and parsed". **Still owed:** it has never been composited over live video,
+  so transparency is unproven, a lower-third surviving a camera cut un-flickered is unproven, and
+  right-click → Refresh restoring the same content is unproven.
+  **A defect was found while establishing this — see the item below.**
+
+- [ ] **[SETUP] Work around the launch-order defect until it is fixed in code.**
+  **The problem, measured on 2026-07-28, not inferred:** a browser source loads its URL when OBS
+  starts. `START.bat` starts OBS *first* and Verger eight seconds later, so the overlay server is
+  not listening yet, the page load is refused, and — because `restart_when_active` is deliberately
+  **off** so camera cuts do not re-animate the overlay — it never retries. OBS reports connected,
+  Verger reports connected, and **nothing ever reaches the stream**. Confirmed by netstat: no
+  `obs-browser-page` connection to 7320 at all, and one forced `refreshnocache` immediately produced
+  two ESTABLISHED sockets.
+  Reversing the order is not a fix either: `src/main/index.ts` does a **one-shot**
+  `isObsPortListening` check at launch and deliberately does not dial a closed port, so starting
+  Verger first gives a working overlay and no OBS connection.
+  **Until it is fixed, after `START.bat` has finished:** in OBS, right-click the **Overlays** source
+  → **Refresh**, once. Verger's overlay watchdog already detects the dead state and says exactly
+  this, so the console will tell you if you forget.
+  **The real fix** is for Verger to press the refresh itself when it is connected to OBS and its
+  overlay server has no client — precisely the watchdog's existing condition. That is a code task,
+  recorded here only because an operator carrying the stick before it lands needs the workaround.
 - [ ] **One real dry-run go-live**, unlisted, five minutes, with nobody watching. Confirm all five
   GO LIVE steps complete, the LIVE and RECORDING indicators are both on, and — afterwards — that
   **the local recording file exists and plays**. Then END and confirm the broadcast reads
@@ -227,6 +260,23 @@ afternoon.
 ---
 
 ## Resolved
+
+- [x] **[SETUP] OBS setup on the stick — steps 1–5 of Group A.** *Resolved 2026-07-28 (Cycle 20).*
+  `npm run obs:assemble` wires a portable OBS into the USB folder: `portable_mode.txt` so it keeps
+  its settings inside its own folder, a generated scene collection with one `Cam 1` scene holding an
+  `Overlays` browser source already pointed at the overlay port with the five settings correct, a
+  profile stripped through an allowlist so no machine-specific value ships, and obs-websocket
+  enabled with a **freshly generated password per assembly** that the operator never sees or types —
+  Verger reads it from OBS's own config file, so it never enters Verger's `config.json` (Standing
+  Rule 5). `START.bat` launches that OBS, but only when nothing is already on 4455, so an OBS the
+  operator opened themselves always wins.
+  **Proven, not assumed:** `npm run obs:verify` scores 17/17 against the real assembled folder,
+  including that the generated password authenticates and that OBS itself reports `shutdown`,
+  `restart_when_active` and `reroute_audio` correct — the three values a mis-click gets wrong. The
+  packaged `Verger.exe` was then launched from the stick and observed connecting to the bundled OBS
+  on its own.
+  **What remains for the operator is step 6** (a recording path with room) **and adding the room's
+  camera to the `Cam 1` scene.** This item does not apply to a machine using its own installed OBS.
 
 - [x] **[HARDWARE] Confirm the local-ASR plan.** *Resolved during Phase 7.* The concern was that
   `faster-whisper` / `ctranslate2` might not publish wheels for Python 3.14, and that 4 GB of VRAM
